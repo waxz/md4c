@@ -12,20 +12,26 @@
 //                    FS_ROOT/FS_FOLDER default to dist/ and "public".
 //   --posts <dir>    upload the Markdown posts in <dir> (default blog/posts),
 //                    plus any images and other files next to them
-//   --no-posts       do not upload posts; only rebuild index.json
+//   --no-posts       do not upload posts; only rebuild index.json and pages
 //   --site           also upload the site itself (dist/blog; run the build first)
 //   --prune          delete published posts that are not in <dir>
 //   --config <file>  set index.json's "site" section (title, slogan, theme,
 //                    ...) from a JSON file. Without it the existing section
 //                    is kept; on first publish blog/site.json is used.
+//   --indexnow       after publishing, notify Bing, Yandex and other
+//                    IndexNow search engines of the pages (needs site.url
+//                    and site.indexNowKey in index.json)
 //   --dry-run        print what would change, change nothing
 //
 // Posts with `draft: true` in their front matter are not published (and are
 // removed from storage if they were published before).
 //
+// Every run then rebuilds, from the posts actually in storage:
+//   index.json, index.html, posts/<slug>.html, theme.css, robots.txt, and
+//   (when site.url is set) sitemap.xml and feed.xml — see scripts/pages.mjs.
+//
 // Writing files straight into the bucket (dashboard, rclone, the storagesdk
-// CLI, ...) works too; run with --no-posts afterwards to refresh index.json,
-// which is how visitors' browsers find the posts.
+// CLI, ...) works too; run with --no-posts afterwards to rebuild the above.
 
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -34,8 +40,11 @@ import { parseArgs } from 'node:util';
 import { Storage, StorageError } from '@storagesdk/core';
 import { ADAPTERS, buildAdapter, getAdapterEnvVars } from '@storagesdk/adapters';
 import { contentTypeFor } from '../js/md4c-fs.js';
-import { Dialect, loadMd4c } from '../js/md4c.js';
+import { loadMd4c } from '../js/md4c.js';
+import { linkPostsForStaticPage, PARSER_FLAGS } from '../js/blog-render.js';
 import { isDraft, parseFrontMatter, postMetadata, SLUG_RE } from '../js/post-format.js';
+import { normalizeSite } from '../blog/theme.js';
+import { atomFeed, homePage, postPage, robotsTxt, siteRelative, sitemap, themeCss } from './pages.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const INDEX = 'index.json';
@@ -52,6 +61,7 @@ const { values: args } = parseArgs({
     site: { type: 'boolean', default: false },
     prune: { type: 'boolean', default: false },
     config: { type: 'string' },
+    indexnow: { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -177,37 +187,107 @@ async function siteSection(storage) {
   }
 }
 
-/** Rebuild index.json from the posts that are actually in storage. */
-async function writeIndex(storage, md4c) {
-  const site = await siteSection(storage);
-  const render = (md) => md4c.toHtml(md, { parserFlags: Dialect.GITHUB });
+/** Validated site settings; site-own URLs kept relative to the site root. */
+function siteSettings(raw) {
+  const placeholder = 'https://site.invalid/';
+  const site = normalizeSite(raw, placeholder);
+  const base = site.url || placeholder;
+  const again = site.url ? normalizeSite(raw, base) : site;
+  again.backgroundImage = siteRelative(again.backgroundImage, base);
+  again.stylesheet = siteRelative(again.stylesheet, base);
+  return again;
+}
+
+/**
+ * Rebuild everything derived from the posts actually in storage:
+ * index.json, the static pages, feed, sitemap and robots.txt.
+ */
+async function build(storage, md4c) {
+  const rawSite = await siteSection(storage);
+  const site = siteSettings(rawSite);
+  if (!site.url) {
+    console.warn('note: set "url" in index.json\'s "site" section (e.g. "https://blog.example.com/")\n' +
+      '      to get canonical links, social previews, sitemap.xml and feed.xml.');
+  }
+  const render = (md) => md4c.toHtml(md, { parserFlags: PARSER_FLAGS });
+  const stored = await listAll(storage, 'posts/');
   const items = [];
-  for (const item of await listAll(storage, 'posts/')) {
+  const posts = [];
+  const htmlBySlug = new Map();
+
+  for (const item of stored) {
     const m = /^posts\/(.+)\.md$/.exec(item.path);
     if (!m || !SLUG_RE.test(m[1])) continue;
+    const slug = m[1];
     const full = await storage.download(item.path);
     const source = new TextDecoder().decode(full.body);
-    if (isDraft(parseFrontMatter(source).meta)) {
+    const { meta, body } = parseFrontMatter(source);
+    if (isDraft(meta)) {
       console.warn(`warning: ${item.path} is a draft but publicly readable in storage`);
       continue;
     }
+    const metadata = postMetadata(source, render, slug);
+    const page = `posts/${slug}.html`;
+    const html = linkPostsForStaticPage(render(body));
+    htmlBySlug.set(slug, html);
+    posts.push({ slug, page, ...metadata });
     items.push({
       path: item.path,
+      page,
       size: full.size,
       contentType: 'text/markdown; charset=utf-8',
       etag: full.etag,
       lastModified: full.lastModified.toISOString(),
-      metadata: postMetadata(source, render, m[1]),
+      metadata,
     });
+    await upload(storage, page, postPage(site, posts.at(-1), html), 'text/html; charset=utf-8');
   }
+
+  // Pages whose Markdown is gone (deleted, pruned or turned into a draft).
+  for (const item of stored) {
+    const m = /^posts\/(.+)\.html$/.exec(item.path);
+    if (m && !htmlBySlug.has(m[1])) await remove(storage, item.path);
+  }
+
+  posts.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.title.localeCompare(b.title)));
   const index = {
     version: 1,
     generated: new Date().toISOString(),
-    ...(site ? { site } : {}),
+    ...(rawSite ? { site: rawSite } : {}),
     items,
   };
   await upload(storage, INDEX, `${JSON.stringify(index, null, 2)}\n`, 'application/json', CACHE_INDEX);
-  return items.length;
+  await upload(storage, 'index.html', homePage(site, posts), 'text/html; charset=utf-8', CACHE_INDEX);
+  await upload(storage, 'theme.css', themeCss(site), 'text/css; charset=utf-8');
+  await upload(storage, 'robots.txt', robotsTxt(site), 'text/plain; charset=utf-8');
+  if (site.url) {
+    await upload(storage, 'sitemap.xml', sitemap(site, posts), 'application/xml', CACHE_INDEX);
+    await upload(storage, 'feed.xml', atomFeed(site, posts, htmlBySlug), 'application/atom+xml', CACHE_INDEX);
+  }
+  return { site, posts };
+}
+
+/** Tell IndexNow engines (Bing, Yandex, Seznam, Naver, ...) about our pages. */
+async function indexNow(storage, site, posts) {
+  if (!site.url || !site.indexNowKey) {
+    throw new Error('--indexnow needs "url" and "indexNowKey" in index.json\'s "site" section');
+  }
+  const keyFile = `${site.indexNowKey}.txt`;
+  await upload(storage, keyFile, site.indexNowKey, 'text/plain; charset=utf-8');
+  const urlList = [`${site.url}index.html`, ...posts.map((p) => new URL(p.page, site.url).href)];
+  log(`IndexNow: submit ${urlList.length} URL(s)`);
+  if (dry) return;
+  const res = await fetch('https://api.indexnow.org/indexnow', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({
+      host: new URL(site.url).host,
+      key: site.indexNowKey,
+      keyLocation: new URL(keyFile, site.url).href,
+      urlList,
+    }),
+  });
+  console.log(`IndexNow: HTTP ${res.status}${res.ok ? '' : ` ${await res.text()}`}`);
 }
 
 const storage = await openStorage(args.to);
@@ -216,5 +296,10 @@ console.log(`Publishing to ${args.to}${args.to === 'fs' ? ` (${resolve(process.e
 
 if (args.site) await uploadSite(storage);
 if (!args['no-posts']) await uploadPosts(storage, resolve(args.posts));
-const n = dry ? '?' : await writeIndex(storage, md4c);
-console.log(`Done: ${n} published post(s) in ${INDEX}.`);
+if (dry) {
+  console.log('Done (dry run): index.json and pages would be rebuilt.');
+} else {
+  const { site, posts } = await build(storage, md4c);
+  if (args.indexnow) await indexNow(storage, site, posts);
+  console.log(`Done: ${posts.length} published post(s) in ${INDEX}.`);
+}

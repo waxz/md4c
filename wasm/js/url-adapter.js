@@ -44,14 +44,30 @@ function checkPath(path) {
   return path;
 }
 
+// Hand-written entries may carry their details at the top level:
+//   { "path": "posts/a.md", "title": "A", "date": "2026-10-14", "tags": ["x", "y"] }
+const ENTRY_FIELDS = ['title', 'date', 'tags', 'excerpt', 'description', 'author', 'image', 'updated'];
+
+function entryMetadata(entry) {
+  if (entry.metadata) return entry.metadata;
+  const meta = {};
+  for (const k of ENTRY_FIELDS) {
+    const v = entry[k];
+    if (typeof v === 'string') meta[k] = v;
+    else if (k === 'tags' && Array.isArray(v)) meta.tags = v.filter((t) => typeof t === 'string').join(', ');
+  }
+  return Object.keys(meta).length ? meta : undefined;
+}
+
 function toMeta(entry) {
+  const metadata = entryMetadata(entry);
   return {
     path: entry.path,
     size: entry.size ?? 0,
     contentType: entry.contentType ?? 'application/octet-stream',
     etag: entry.etag ?? '',
     lastModified: new Date(entry.lastModified ?? 0),
-    ...(entry.metadata ? { metadata: entry.metadata } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 

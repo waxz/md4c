@@ -1,5 +1,7 @@
 {
   "title": "Notes on Computation",
+  "url": "",
+  "language": "en",
   "slogan": "Essays on parsing, compilers and the web platform",
   "author": "Your Name",
   "description": "A journal of essays on Markdown, parsing and WebAssembly.",

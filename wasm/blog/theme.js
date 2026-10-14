@@ -3,6 +3,9 @@
 //   {
 //     "site": {
 //       "title": "Notes on Computation",
+//       "url": "https://blog.example.com/",   // public address: needed for
+//                                             // canonical links and sitemap
+//       "language": "en",
 //       "slogan": "Essays on parsing, compilers and the web",
 //       "author": "Your Name",
 //       "description": "Shown to search engines and link previews.",
@@ -18,7 +21,9 @@
 //       "citation": true,             // "How to cite this post" box
 //       "math": true,                 // render $...$ / $$...$$ with KaTeX
 //       "footer": "© 2026 Your Name. CC BY 4.0.",
-//       "links": [ { "label": "About", "href": "#/post/about" } ]
+//       "links": [ { "label": "About", "href": "#/post/about" } ],
+//       "verification": { "google": "...", "bing": "..." },  // search consoles
+//       "indexNowKey": "0123456789abcdef0123456789abcdef"     // publish --indexnow
 //     },
 //     "items": [ ... ]
 //   }
@@ -28,6 +33,9 @@
 // resolve against the storage URL), and text is only ever set as text.
 // Settings are applied through CSS custom properties and data attributes,
 // never inline style markup, so the page's strict CSP stays intact.
+//
+// The publish script (Node) uses the same normalizeSite() when it
+// pre-renders pages, so this module must not touch the DOM at import time.
 
 const THEMES = ['academic', 'modern'];
 const SCHEMES = ['auto', 'light', 'dark'];
@@ -36,6 +44,8 @@ const BG_MODES = ['hero', 'page'];
 
 export const DEFAULT_SITE = Object.freeze({
   title: 'MD4C Blog',
+  url: '',
+  language: 'en',
   slogan: '',
   author: '',
   description: '',
@@ -52,6 +62,8 @@ export const DEFAULT_SITE = Object.freeze({
   math: true,
   footer: '',
   links: [],
+  verification: {},
+  indexNowKey: '',
 });
 
 function text(v, max = 300) {
@@ -77,16 +89,35 @@ export function safeUrl(v, base) {
   }
 }
 
+// Without CSS.supports (Node), accept only plain hex/rgb/hsl/named colors.
+const COLOR_RE = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\([\d\s.,%/+-]+\)|[a-z]{3,20})$/i;
+
 function color(v) {
-  return typeof v === 'string' && v.length < 64 && globalThis.CSS?.supports('color', v) ? v : '';
+  if (typeof v !== 'string' || v.length >= 64) return '';
+  if (globalThis.CSS?.supports) return CSS.supports('color', v) ? v : '';
+  return COLOR_RE.test(v.trim()) ? v.trim() : '';
+}
+
+const TOKEN_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** Where a site link points from a page at `root`: #/post/x -> posts/x.html. */
+export function siteLinkHref(href, root) {
+  const post = /^#\/post\/([a-z0-9][a-z0-9-]{0,79})$/.exec(href);
+  if (post) return `${root}posts/${post[1]}.html`;
+  if (href.startsWith('#/')) return `${root}index.html${href}`;
+  return href;
 }
 
 /** Validate a raw "site" object from index.json against the schema above. */
 export function normalizeSite(raw, base) {
   const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const links = Array.isArray(r.links) ? r.links : [];
+  const url = safeUrl(r.url, 'https://invalid.invalid/');
+  const verification = r.verification && typeof r.verification === 'object' ? r.verification : {};
   return {
     title: text(r.title, 120) || DEFAULT_SITE.title,
+    url: url && !url.startsWith('https://invalid.invalid/') ? url.replace(/[?#].*$/, '').replace(/\/?$/, '/') : '',
+    language: /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(r.language ?? '') ? r.language : DEFAULT_SITE.language,
     slogan: text(r.slogan, 200),
     author: text(r.author, 120),
     description: text(r.description, 300),
@@ -109,12 +140,20 @@ export function normalizeSite(raw, base) {
         href: typeof l?.href === 'string' && /^#\//.test(l.href) ? l.href : safeUrl(l?.href, base),
       }))
       .filter((l) => l.label && l.href),
+    verification: Object.fromEntries(
+      ['google', 'bing', 'yandex']
+        .filter((k) => TOKEN_RE.test(verification[k] ?? ''))
+        .map((k) => [k, verification[k]])
+    ),
+    indexNowKey: /^[A-Za-z0-9-]{8,128}$/.test(r.indexNowKey ?? '') ? r.indexNowKey : '',
   };
 }
 
 /** Apply a normalized site config to the page chrome. */
 export function applySite(site) {
+  const siteRoot = new URL('./', import.meta.url).href;
   const root = document.documentElement;
+  root.lang = site.language;
   root.dataset.theme = site.theme;
   root.dataset.scheme = site.colorScheme;
   root.dataset.font = site.font || (site.theme === 'modern' ? 'sans' : 'serif');
@@ -138,19 +177,21 @@ export function applySite(site) {
     document.querySelector('meta[name="description"]')?.setAttribute('content', site.description);
   }
 
-  document.querySelector('.site-title').textContent = site.title;
+  const title = document.querySelector('.site-title');
+  title.textContent = site.title;
+  title.href = `${siteRoot}index.html`;
   const slogan = document.querySelector('.site-slogan');
   slogan.textContent = site.slogan;
   slogan.hidden = !site.slogan;
 
   const nav = document.getElementById('nav');
   const home = document.createElement('a');
-  home.href = '#/';
+  home.href = `${siteRoot}index.html`;
   home.textContent = 'Articles';
   nav.replaceChildren(home);
   for (const l of site.links) {
     const a = document.createElement('a');
-    a.href = l.href;
+    a.href = siteLinkHref(l.href, siteRoot);
     a.textContent = l.label;
     if (!l.href.startsWith('#')) a.rel = 'noopener noreferrer';
     nav.append(a);

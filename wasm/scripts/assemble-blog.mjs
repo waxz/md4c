@@ -1,6 +1,8 @@
 // Assemble the static blog site into dist/blog/:
 //
-//   dist/blog/            <- blog/*            (pages, styles; not the posts)
+//   dist/blog/            <- blog/*            (scripts, styles; not the posts)
+//   dist/blog/index.html, theme.css <- scripts/pages.mjs with blog/site.json
+//                                      (publish.mjs regenerates them with posts)
 //   dist/blog/lib/        <- js/*.js + dist/md4c.wasm
 //   dist/blog/vendor/storagesdk-core/  <- @storagesdk/core ESM build
 //   dist/blog/vendor/dompurify/        <- DOMPurify ESM build
@@ -12,6 +14,8 @@
 // Upload the result with scripts/publish.mjs --site, or host it anywhere.
 
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { normalizeSite } from '../blog/theme.js';
+import { homePage, siteRelative, themeCss } from './pages.mjs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,5 +90,13 @@ await cp(join(katexDir, 'dist', 'fonts'), join(katexOut, 'fonts'), {
   recursive: true,
   filter: (src) => !/\.(ttf|woff)$/.test(src), // woff2 is enough for current browsers
 });
+
+// A starter home page and theme (no posts yet); publish.mjs rebuilds both.
+const rawSite = JSON.parse(await readFile(join(root, 'blog', 'site.json'), 'utf8'));
+const site = normalizeSite(rawSite, 'https://site.invalid/');
+site.backgroundImage = siteRelative(site.backgroundImage, 'https://site.invalid/');
+site.stylesheet = siteRelative(site.stylesheet, 'https://site.invalid/');
+await writeFile(join(out, 'index.html'), homePage(site, []));
+await writeFile(join(out, 'theme.css'), themeCss(site));
 
 console.log(`Blog assembled in ${out}`);

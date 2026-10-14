@@ -201,3 +201,101 @@ describe('publish + read-only URL access', () => {
     assert.deepEqual(index.items.map((i) => i.metadata.title), ['Direct']);
   });
 });
+
+describe('static pages for search engines', () => {
+  let dir;
+  const pub = () => join(dir, 'public');
+  const read = (p) => readFile(join(pub(), p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-seo-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({
+      title: 'Test Journal', url: 'https://blog.example.com', author: 'A. Author', language: 'en-GB',
+      verification: { google: 'g-token_1' }, accent: '#123456', backgroundImage: 'assets/bg.png',
+    }));
+    await writeFile(join(dir, 'posts', 'hello.md'),
+      '---\ntitle: Hello <World>\ndate: 2026-01-02\ntags: a, b\ndescription: A short summary.\nimage: cover.png\n---\n\n' +
+      'First **post**. See [the other one](other.md) and [[Other]].\n');
+    await writeFile(join(dir, 'posts', 'other.md'),
+      '---\ntitle: Other\ndate: 2025-06-01\ntags: b\nimage: javascript:alert(1)\n---\n\nSecond.\n');
+    await writeFile(join(dir, 'posts', 'secret.md'), '---\ntitle: Secret\ndraft: true\n---\n\nNo.\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('each post gets a real page with full metadata', async () => {
+    const html = await read('posts/hello.html');
+    assert.match(html, /<html lang="en-GB" data-theme="academic"/);
+    assert.match(html, /<title>Hello &lt;World&gt; · Test Journal<\/title>/);
+    assert.match(html, /<meta name="description" content="A short summary.">/);
+    assert.match(html, /<link rel="canonical" href="https:\/\/blog.example.com\/posts\/hello.html">/);
+    assert.match(html, /<meta property="og:image" content="https:\/\/blog.example.com\/posts\/cover.png">/);
+    assert.match(html, /<meta name="citation_publication_date" content="2026\/01\/02">/);
+    assert.match(html, /<meta name="google-site-verification" content="g-token_1">/);
+    assert.match(html, /First <strong>post<\/strong>/, 'content is in the HTML, no JS needed');
+    assert.match(html, /href="other.html">the other one/, '.md links point at pages');
+    assert.match(html, /<a href="other.html">Other<\/a>/, 'wiki links point at pages');
+    const ld = JSON.parse(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(html)[1]);
+    assert.equal(ld['@type'], 'ScholarlyArticle');
+    assert.equal(ld.headline, 'Hello <World>');
+    assert.equal(ld.datePublished, '2026-01-02');
+    assert.equal(ld.author.name, 'A. Author');
+    assert.equal(ld.url, 'https://blog.example.com/posts/hello.html');
+
+    const other = await read('posts/other.html');
+    assert.doesNotMatch(other, /javascript:/, 'unsafe image URL dropped');
+    await assert.rejects(read('posts/secret.html'), 'drafts get no page');
+  });
+
+  test('home page lists articles as plain links, grouped by year', async () => {
+    const html = await read('index.html');
+    assert.match(html, /<link rel="canonical" href="https:\/\/blog.example.com\/index.html">/);
+    assert.match(html, /<h2 class="year-heading sc">2026<\/h2>[\s\S]*href="posts\/hello.html"[\s\S]*<h2 class="year-heading sc">2025<\/h2>[\s\S]*href="posts\/other.html"/);
+    assert.doesNotMatch(html, /secret/i);
+    const index = JSON.parse(await read('index.json'));
+    assert.deepEqual(index.items.map((i) => i.page).sort(), ['posts/hello.html', 'posts/other.html']);
+    assert.equal(index.items.find((i) => i.page === 'posts/hello.html').metadata.description, 'A short summary.');
+  });
+
+  test('sitemap, feed, robots and theme.css', async () => {
+    const map = await read('sitemap.xml');
+    assert.match(map, /<loc>https:\/\/blog.example.com\/posts\/hello.html<\/loc><lastmod>2026-01-02<\/lastmod>/);
+    assert.doesNotMatch(map, /secret/);
+    const feed = await read('feed.xml');
+    assert.match(feed, /<title>Hello &lt;World&gt;<\/title>/);
+    assert.match(feed, /<link rel="self" href="https:\/\/blog.example.com\/feed.xml"\/>/);
+    assert.match(await read('robots.txt'), /Sitemap: https:\/\/blog.example.com\/sitemap.xml/);
+    const css = await read('theme.css');
+    assert.match(css, /--accent-base: #123456;/);
+    assert.match(css, /--bg-image: url\("assets\/bg.png"\);/);
+  });
+
+  test('pages of removed or re-drafted posts are deleted', async () => {
+    await writeFile(join(dir, 'posts', 'other.md'), '---\ntitle: Other\ndraft: true\n---\n\nBack to draft.\n');
+    await publish('--posts', join(dir, 'posts'));
+    await assert.rejects(read('posts/other.html'));
+    assert.doesNotMatch(await read('sitemap.xml'), /other.html/);
+    assert.equal(JSON.parse(await read('index.json')).site.title, 'Test Journal', 'site settings kept');
+  });
+
+  test('hand-written index entries can carry title, date and tags', async () => {
+    const { urlAdapter: make } = await import('../js/url-adapter.js');
+    const server = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify([{ path: 'posts/x.md', title: 'X', date: '2026-02-03', tags: ['p', 'q'] }]));
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const s = new Storage({ adapter: make({ baseUrl: `http://127.0.0.1:${server.address().port}/` }) });
+      const [item] = (await s.list()).items;
+      assert.deepEqual(item.metadata, { title: 'X', date: '2026-02-03', tags: 'p, q' });
+    } finally {
+      server.close();
+    }
+  });
+});

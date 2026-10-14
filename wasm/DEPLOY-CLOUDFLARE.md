@@ -13,7 +13,10 @@ https://blog.example.com/            (R2 bucket behind a custom domain)
 ├── lib/        md4c.js  md4c.wasm  md4c-fs.js  url-adapter.js  post-format.js
 ├── vendor/     storagesdk-core/  dompurify/  katex/  source-serif-4/
 ├── index.json  site settings (title, theme, ...) and the list of posts
-└── posts/      hello.md  trip.md  trip-photo.png ...
+├── index.html  home page, pre-rendered     ┐
+├── theme.css   accent / background image   │ written by publish.mjs from
+├── sitemap.xml  feed.xml  robots.txt       │ the posts in the bucket
+└── posts/      hello.md  hello.html  trip.md  trip.html  trip-photo.png ...
 ```
 
 The bucket's public URL serves GET requests only, so readers can't change
@@ -55,13 +58,15 @@ Run this again only when you change the blog's code.
 
 A post is a Markdown file at `posts/<slug>.md`. A slug uses lowercase
 letters, digits and dashes, and becomes the post's address,
-`#/post/<slug>`. The post starts with a front matter block:
+`posts/<slug>.html`. The post starts with a front matter block:
 
 ```markdown
 ---
 title: A weekend in Kyoto
 date: 2026-10-14
 tags: travel, japan
+description: Two days of temples, gardens and a very good bookshop.
+image: kyoto-temple.jpg
 ---
 
 Text in **Markdown**.
@@ -70,6 +75,11 @@ Text in **Markdown**.
 
 See also [my first post](hello.md).
 ```
+
+`title`, `date` (YYYY-MM-DD) and `tags` drive the home page's filters.
+`description` (optional) is what search engines show; otherwise the first
+paragraph is used. `image` (optional) is the picture shown when the post is
+shared on social media. `author` and `updated` are also understood.
 
 Put images and other files anywhere in the bucket. Relative paths in a post
 resolve against the post's own location, so `kyoto-temple.jpg` above loads
@@ -94,28 +104,58 @@ You can upload with any tool:
   `draft: true` posts and rebuilds the index:
   `node scripts/publish.mjs --to r2 --posts ~/blog-posts`.
 
-A new post works at `https://blog.example.com/index.html#/post/<slug>` as
-soon as it is uploaded.
+As soon as it is uploaded, a new post can be read at
+`https://blog.example.com/index.html#/post/<slug>`, rendered live in the
+reader's browser.
 
-## 4. Add the post to the home page list
+## 4. Build the home page and post pages
 
-A public bucket URL can't list its files, so the home page reads the list
-of posts from `index.json`. Update it after uploading a post, in either of
-two ways:
+A public bucket URL can't list its files, and search engines can't see a
+post that is only rendered by JavaScript behind a `#` address. After
+uploading posts, rebuild the generated files:
 
-- **By hand:** edit `index.json` and add the post's path. The simplest valid
-  file is a plain list:
-  ```json
-  ["posts/hello.md", "posts/kyoto.md"]
-  ```
-  The browser reads each post's title, date, tags and first paragraph from
-  the file itself.
-- **Automatically:** `node scripts/publish.mjs --to r2 --no-posts` lists the
-  bucket with your API token and writes a full `index.json`, including
-  titles and excerpts, so the home page loads faster.
+```sh
+node scripts/publish.mjs --to r2 --no-posts
+```
 
-To remove a post, delete its file and its line in `index.json`, or delete
-the file and rerun `--no-posts`.
+This lists the bucket with your API token, renders every post with md4c.wasm
+on your machine, and writes:
+- `posts/<slug>.html` for each post;
+- the home page and `index.json`;
+- `sitemap.xml`, `feed.xml`, `robots.txt` and `theme.css`.
+
+Pages of deleted or re-drafted posts are removed. Old `#/post/<slug>` links
+redirect to the post's page.
+
+If you'd rather not run the script, you can maintain `index.json` by hand.
+The home page then lists the posts and links them to the live
+`#/post/<slug>` view, but they get no page of their own for search engines.
+Each entry is either a path, or a path plus the details the filters need:
+
+```json
+{
+  "site": { "title": "…" },
+  "items": [
+    "posts/hello.md",
+    { "path": "posts/kyoto.md", "title": "A weekend in Kyoto",
+      "date": "2026-10-14", "tags": ["travel", "japan"] }
+  ]
+}
+```
+
+A plain path makes the browser read the title, date and tags from the post
+itself.
+
+### Filtering by tag and date
+
+The home page groups articles by year, newest first, and offers:
+- a search box over titles, abstracts and keywords;
+- a year menu;
+- a chip for every tag, with its article count.
+
+Clicking a keyword under any article filters by it. The filters live in the
+address, so they can be bookmarked and shared: `index.html?tag=japan`,
+`index.html?year=2025` or `index.html?tag=parsing&q=unicode`.
 
 ## 5. Customise the look
 
@@ -213,6 +253,57 @@ The publish script uploads with `Cache-Control: public, max-age=300` for
 files and `max-age=60` for `index.json`. New posts therefore appear within a
 few minutes. Set the same headers with `--cache-control` when uploading
 with wrangler.
+
+## 8. Get found by search engines
+
+The publish script pre-renders everything a crawler needs. Each post page
+contains the article's full text in plain HTML, so no JavaScript is
+required. It also carries:
+- a title, a meta description and a canonical URL;
+- Open Graph and Twitter card tags, for link previews;
+- `ScholarlyArticle` structured data (`BlogPosting` with the `modern`
+  theme);
+- Google Scholar `citation_*` tags.
+
+The home page lists every article as a plain link. `sitemap.xml`,
+`robots.txt` and an Atom feed (`feed.xml`) are generated too.
+
+1. **Set your public address.** Canonical links, social previews, the
+   sitemap and the feed all need absolute URLs. Add this to the `site`
+   section of `index.json`:
+   ```json
+   "url": "https://blog.example.com/",
+   "language": "en"
+   ```
+   Then rerun `node scripts/publish.mjs --to r2 --no-posts`.
+2. **Google:** open [Search Console](https://search.google.com/search-console)
+   and add a *URL-prefix* property for `https://blog.example.com/`.
+   - Choose the *HTML tag* verification method.
+   - Copy the `content` value into `index.json` as
+     `"verification": { "google": "…" }` and republish.
+   - Click *Verify*.
+   - Under *Sitemaps*, submit `sitemap.xml`.
+3. **Bing (which also feeds DuckDuckGo and others):** in
+   [Bing Webmaster Tools](https://www.bing.com/webmasters), either import
+   the site from Search Console, or verify with the meta tag
+   (`"verification": { "bing": "…" }`). Then submit `sitemap.xml`.
+4. **IndexNow (optional):** this tells Bing, Yandex and other participating
+   engines about new pages within minutes, instead of waiting for a crawl.
+   - Add a key of 32 hex characters to `site`, for example the output of
+     `openssl rand -hex 16`: `"indexNowKey": "…"`.
+   - Publish with `--indexnow`. The script uploads the key file the protocol
+     requires and submits your page URLs to `api.indexnow.org`.
+   - Google doesn't use IndexNow; it reads your sitemap.
+
+Tips:
+- Give every post a `description` of one or two sentences and a meaningful
+  `title`. Use `image` for posts you expect to be shared.
+- Keep slugs stable. A post's address is its file name, so renaming the file
+  breaks existing links and resets its search ranking.
+- The canonical home page is `index.html`, which works even without the
+  rewrite rule from step 6.
+- Pages are cached for 5 minutes and the sitemap for 1 minute (see step 7),
+  so crawlers see updates quickly.
 
 ## Reading posts from a bucket on another domain
 

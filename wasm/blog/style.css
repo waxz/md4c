@@ -375,3 +375,41 @@ main.page:focus { outline: none; }
   .prose h2, .prose h3 { break-after: avoid; }
   .prose figure, .prose pre, .prose table, .cite { break-inside: avoid; }
 }
+
+/* ---------- Home: filters and archive ---------- */
+
+.filters { margin: 0 0 1.25rem; font-family: var(--font-sans); }
+.filter-row { display: flex; gap: .6rem; }
+.filters input[type="search"], .filters select {
+  font: inherit; font-size: .92rem; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 4px;
+  padding: .5rem .7rem;
+}
+.filters input[type="search"] { flex: 1; min-width: 0; }
+.filters input:focus-visible, .filters select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tag-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .8rem; }
+.tag-chip {
+  font-family: var(--font-sans); font-size: .7rem; cursor: pointer;
+  color: var(--ink-soft); background: transparent;
+  border: 1px solid var(--rule); border-radius: 999px; padding: .3rem .7rem;
+}
+.tag-chip .count { color: var(--muted); margin-left: .2em; letter-spacing: 0; }
+.tag-chip:hover { border-color: var(--accent); color: var(--accent); }
+.tag-chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+.tag-chip[aria-pressed="true"] .count { color: inherit; opacity: .8; }
+.filter-status { margin: .9rem 0 0; color: var(--muted); }
+.filter-status a { color: var(--accent); }
+
+.year-heading {
+  margin: 2rem 0 0; padding-bottom: .4rem; border-bottom: 1px solid var(--rule-strong);
+  color: var(--ink-soft); font-weight: 600;
+}
+.year-group:first-child .year-heading { margin-top: .75rem; }
+.empty { margin-top: 1.5rem; }
+
+@media (max-width: 640px) {
+  .filter-row { flex-direction: column; }
+}
+@media print {
+  #filters { display: none; }
+}
