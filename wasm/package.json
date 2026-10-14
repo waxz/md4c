@@ -2,14 +2,13 @@
   "name": "md4c-wasm",
   "version": "0.6.0",
   "private": true,
-  "description": "MD4C compiled to WebAssembly, a storagesdk-backed file system, and a demo blog with an admin-only editor.",
+  "description": "MD4C compiled to WebAssembly, a storagesdk file system for the browser, and a read-only blog published to R2 or any storagesdk backend.",
   "type": "module",
   "license": "MIT",
   "scripts": {
     "build:wasm": "sh build.sh",
     "build": "sh build.sh && node scripts/assemble-blog.mjs",
-    "start": "node server/server.mjs",
-    "set-password": "node scripts/set-admin-password.mjs",
+    "deploy": "node scripts/publish.mjs --site",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
@@ -17,10 +16,13 @@
     "@storagesdk/core": "^0.5.0",
     "dompurify": "^3.4.17"
   },
-  "devDependencies": {
-    "fake-indexeddb": "^6.0.0"
-  },
   "engines": {
     "node": ">=20"
+  },
+  "optionalDependencies": {
+    "@aws-sdk/client-s3": "^3.1151.0",
+    "@aws-sdk/lib-storage": "^3.1151.0",
+    "@aws-sdk/s3-presigned-post": "^3.1151.0",
+    "@aws-sdk/s3-request-presigner": "^3.1151.0"
   }
 }

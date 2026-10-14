@@ -2,8 +2,9 @@
 
 This directory compiles MD4C to WebAssembly, adds a browser file system built
 on [storagesdk](https://github.com/storagesdk/storagesdk), and ships a small
-blog that renders Markdown in the browser. Anyone can read the blog; only
-its owner, logged in as admin, can write, publish and delete posts.
+blog that renders Markdown in the browser. The blog is fully static: posts
+are files in read-only public storage (for example a Cloudflare R2 bucket),
+and only the owner, who holds the storage credentials, can publish.
 
 ```
 wasm/
@@ -13,12 +14,10 @@ wasm/
 ├── js/
 │   ├── md4c.js         loads md4c.wasm, exposes toHtml() and the flag constants
 │   ├── md4c-fs.js      file API on storagesdk: readFile, writeFile, convertFile...
-│   ├── http-adapter.js storagesdk adapter for the blog server's API
-│   ├── idb-adapter.js  storagesdk adapter that stores files in IndexedDB
-│   └── post-format.js  front matter parsing shared by blog and server
-├── blog/               the blog front end (HTML/CSS/JS + sample posts)
-├── server/             blog server: access control, auth, security headers
-├── scripts/            assemble-blog.mjs, set-admin-password.mjs
+│   ├── url-adapter.js  read-only storagesdk adapter for a public URL (R2, ...)
+│   └── post-format.js  front matter parsing shared by blog and publish script
+├── blog/               the blog front end (HTML/CSS/JS) and sample posts
+├── scripts/            assemble-blog.mjs (build the site), publish.mjs (owner's tool)
 └── test/               Node tests + an md2html-compatible CLI for the test suites
 ```
 
@@ -29,14 +28,12 @@ and Node.js 20 or newer. You don't need Emscripten or a WASI SDK.
 
 ```sh
 cd wasm
-npm install             # storagesdk, DOMPurify (+ fake-indexeddb for tests)
+npm install
 npm run build           # dist/md4c.wasm and the site in dist/blog/
-npm run set-password    # choose the admin password (12+ characters)
-npm start               # http://127.0.0.1:8080/
+npm run deploy          # publish site + posts to dist/public/ (fs adapter)
+python3 -m http.server -d dist/public 8080   # any static server works
+# open http://localhost:8080/index.html
 ```
-
-On first start the server imports the sample posts from `blog/posts/`.
-Posts and the admin password hash live in `wasm/data/` (`BLOG_DATA_DIR`).
 
 To build just the wasm module, run `sh wasm/build.sh [out.wasm]`. You can
 override the compiler and optimisation flags with `CC` and `OPTFLAGS`.
@@ -64,23 +61,21 @@ small file API backed by a storagesdk `Storage`:
 ```js
 import { Md4cFs } from './md4c-fs.js';
 
-const fs = await Md4cFs.open({ name: 'my-site' });   // IndexedDB database
-await fs.writeFile('docs/intro.md', '# Intro');
-await fs.convertFile('docs/intro.md', { fullHtml: true });  // -> docs/intro.html
-const html = await fs.readFile('docs/intro.html');
-const files = await fs.readdir('docs/');
+// In the browser: read-only, over a public URL.
+const fs = await Md4cFs.open({ baseUrl: 'https://pub-xxxx.r2.dev/' });
+const html = await fs.renderFile('posts/hello.md');
+const files = await fs.readdir('posts/');
+
+// Anywhere with a writable storagesdk adapter (fs, R2, S3, ...):
+const rw = await Md4cFs.open({ storage: new Storage({ adapter: r2({...}) }) });
+await rw.writeFile('docs/intro.md', '# Intro');
+await rw.convertFile('docs/intro.md', { fullHtml: true });  // -> docs/intro.html
 ```
 
-Files go to IndexedDB through `idb-adapter.js`. That adapter implements the
-full storagesdk `Adapter` contract, including snapshots, forks,
-merge/rebase/diff. Any other storagesdk adapter works too, because
-`Md4cFs.open({ storage })` accepts any `Storage`:
-
-```js
-import { Storage } from '@storagesdk/core';
-import { s3 } from '@storagesdk/adapters/s3';
-const fs = await Md4cFs.open({ storage: new Storage({ adapter: s3({...}) }) });
-```
+`url-adapter.js` implements the storagesdk adapter interface over plain
+HTTP GETs. Every write method throws `NotSupported`. A public bucket URL
+can't list its contents, so `list()` and `head()` read an `index.json` that
+the publish script maintains.
 
 `@storagesdk/core` is plain ESM with no Node dependencies. The site build
 copies it into `vendor/` and rewrites the imports to relative paths, so you
@@ -88,68 +83,96 @@ don't need a bundler or an inline import map, which the CSP would block.
 
 ## The blog
 
-- The server stores posts through storagesdk's filesystem adapter:
-  published posts as `posts/<slug>.md`, drafts as `drafts/<slug>.md`. Each
-  post has a front matter block (`title`, `date`, `tags`). The title, date,
-  tags and excerpt are also kept as storagesdk object metadata, so the post
-  list needs no Markdown parsing.
-- The browser reads and writes posts through `Md4cFs` with the HTTP adapter
-  and renders them with md4c.wasm.
-- Guests can browse published posts and filter them by tag. The admin can
-  also write drafts in an editor with live preview, and publish, unpublish,
-  edit and delete posts. Wiki links such as `[[Other post]]` link to other
-  posts.
+Guests can only read. Nothing on the page can change the storage: there's
+no login, no editor and no server code. The owner publishes from their own
+machine.
 
-### Who can do what
+| Who            | How they reach the storage                  | Can do      |
+|----------------|---------------------------------------------|-------------|
+| Guest          | the bucket's public URL (plain HTTP GET)    | read        |
+| Owner (admin)  | storagesdk adapter with write credentials   | read, write |
 
-| Action                                   | Guest | Admin |
-|------------------------------------------|:-----:|:-----:|
-| Read and list published posts (`posts/`) |  yes  |  yes  |
-| Read and list drafts (`drafts/`)         |  no   |  yes  |
-| Create, edit, publish, unpublish, delete |  no   |  yes  |
+Storage layout:
 
-The server enforces these rules on every request (`server/app.mjs`). The UI
-only hides controls a visitor can't use. Hiding a button doesn't secure
-anything, so the tests in `test/server.test.mjs` call the API directly as a
-guest.
+| Path              | Contents                                               |
+|-------------------|--------------------------------------------------------|
+| `index.html`, ... | the site itself (`publish.mjs --site`)                 |
+| `index.json`      | published posts with title, date, tags, excerpt        |
+| `posts/<slug>.md` | Markdown with front matter (`title`, `date`, `tags`)   |
 
-### Security measures
+### Publishing
 
-- **One admin account.** Its password is stored as a salted scrypt hash in
-  `data/admin.json` (mode 600) and checked in constant time. Five failed
-  logins lock the client out for 15 minutes.
-- **Sessions.** A random 256-bit token is set as an `HttpOnly`,
-  `SameSite=Strict` cookie, valid for 12 hours. Set `COOKIE_SECURE=1` behind
-  HTTPS so the cookie also carries `Secure`. Sessions live in memory, so
-  restarting the server logs the admin out.
-- **CSRF.** Every write needs the session's CSRF token in an `x-csrf-token`
-  header, and cross-origin `Origin` headers are refused.
-- **Input limits.** Only `posts/<slug>.md` and `drafts/<slug>.md` can be
-  written, which rules out path traversal and arbitrary files. Bodies must be
-  UTF-8 text of at most 512 KB. Metadata keys are whitelisted. A slug can't
-  exist as a draft and a post at once. Guests get 404 for drafts, so they
-  can't tell which drafts exist.
-- **XSS.** Markdown may contain raw HTML, so every rendered post and preview
-  goes through DOMPurify. It removes scripts, event handlers, `javascript:`
-  URLs, iframes and forms, and adds `rel="noopener noreferrer nofollow"` to
-  external links.
-- **Headers.** Pages are served with a strict Content-Security-Policy
-  (`script-src 'self' 'wasm-unsafe-eval'`, no inline script or style,
-  `frame-ancestors 'none'`). API responses are sandboxed `text/plain`
-  with `nosniff`, so a stored file can never render as a page. Pages also get
-  `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`.
+Posts are Markdown files in a local folder (default `blog/posts/`).
+`scripts/publish.mjs` uploads them through any storagesdk adapter and then
+rebuilds `index.json`:
 
-### Deploying
+```sh
+node scripts/publish.mjs --to fs                 # local folder dist/public/
+node scripts/publish.mjs --to r2 --site          # R2: site + posts
+node scripts/publish.mjs --to r2 --posts ~/blog  # only posts, from ~/blog
+node scripts/publish.mjs --to r2 --prune         # also delete removed posts
+node scripts/publish.mjs --to r2 --no-posts      # only rebuild index.json
+node scripts/publish.mjs --help
+```
 
-Run the server behind an HTTPS reverse proxy with `COOKIE_SECURE=1`. Set
-`TRUST_PROXY=1` so the login rate limit sees real client addresses through
-`X-Forwarded-For`; enable it only when a proxy sets that header. The server
-listens on `127.0.0.1` by default; set `HOST` to change that.
+- Posts with `draft: true` in the front matter are never uploaded. If one
+  was published before, it is deleted from storage.
+- You can also write files into the bucket directly, with the Cloudflare
+  dashboard, `rclone`, the storagesdk CLI or anything else. Run
+  `--no-posts` afterwards so `index.json` lists them.
+- Adapters are chosen with `--to` or `STORAGE_ADAPTER` and configured with
+  storagesdk's env vars. For the `fs` adapter, `FS_ROOT`/`FS_FOLDER` default
+  to `dist/` and `public`.
+
+### Hosting on Cloudflare R2
+
+1. Create a bucket and an R2 API token with **Object Read & Write** on it.
+   Keep the token on your machine only.
+2. Turn on public access for the bucket (an `r2.dev` URL or a custom
+   domain). Public access is read-only: it serves GET requests and nothing
+   else.
+3. Publish:
+   ```sh
+   export R2_BUCKET=my-blog R2_ACCOUNT_ID=... \
+          R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+   npm run build && node scripts/publish.mjs --to r2 --site
+   ```
+4. Open `https://<public-url>/index.html`. R2 doesn't map `/` to
+   `index.html`, so link to `index.html` or add a redirect rule on a custom
+   domain.
+
+If you host the site somewhere else and read posts from the bucket, set
+`STORAGE_URL` in `blog/config.js` to the bucket URL. You also need to add
+that URL to `connect-src` in the CSP in `blog/index.html` and allow GET from
+the site's origin in the bucket's CORS policy.
+
+The R2 adapter needs the AWS S3 SDK packages, which are installed as
+optional dependencies. Other storagesdk backends, such as S3, GCS or Azure,
+need their own SDKs.
+
+### Security
+
+- **Writes:** guests have no write path at all. The public URL is read-only,
+  the page contains no credentials, and `url-adapter.js` refuses writes.
+  The only write credentials are the owner's API token.
+- **Drafts:** drafts stay on the owner's machine. Anything uploaded to the
+  bucket is readable by URL, so the publish script warns if a draft turns up
+  there.
+- **XSS:** posts may contain raw HTML, so all rendered HTML goes through
+  DOMPurify. It removes scripts, event handlers, `javascript:` URLs, iframes
+  and forms, and adds `rel="noopener noreferrer nofollow"` to external
+  links. This guards against a bad or compromised post.
+- **CSP:** a static bucket can't add response headers, so `index.html`
+  sets a Content-Security-Policy through a `<meta>` tag (`script-src 'self'
+  'wasm-unsafe-eval'`, no inline script or style, `form-action 'none'`).
+  It also sets `referrer` to `no-referrer`.
+- **Paths:** slugs are limited to lowercase letters, digits and dashes, and
+  `..` paths are rejected.
 
 ## Tests
 
 ```sh
-cd wasm && npm test    # renderer, adapters, Md4cFs, server access control
+cd wasm && npm test    # renderer, Md4cFs, URL adapter, publish script
 
 # The upstream spec suites, run against md4c.wasm instead of md2html:
 python3 test/run-testsuite.py -s test/spec.txt -p "$PWD/wasm/test/md2html-wasm.mjs"

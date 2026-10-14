@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Static hosts like R2 cannot add response headers, so the policy is set
+     here. 'wasm-unsafe-eval' only allows compiling md4c.wasm. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' https: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <title>MD4C Blog</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b6bcb'/%3E%3Cpath d='M3 12V4l2.5 3L8 4v8M10 9l2 3 2-3M12 4v8' stroke='white' fill='none' stroke-width='1.4'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
@@ -25,8 +29,7 @@
 <footer class="site-footer">
   <div class="wrap">
     Markdown rendered in your browser by <strong>MD4C</strong> compiled to WebAssembly.
-    Posts are stored on the server through <strong>storagesdk</strong>.
-    <span id="footer-auth"></span>
+    Posts are read through <strong>storagesdk</strong> from read-only storage.
   </div>
 </footer>
 </body>

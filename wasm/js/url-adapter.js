@@ -1,0 +1,162 @@
+// A read-only storagesdk adapter for files behind a plain public URL, such
+// as a Cloudflare R2 bucket with public access, an S3 static website or any
+// static file server.
+//
+// Guests get read access only: every write method throws `NotSupported`,
+// and the real protection is that the bucket's public URL is read-only.
+// Only the owner holds write credentials, on their own machine (see
+// scripts/publish.mjs).
+//
+// A public bucket URL cannot list its contents, so list() and head() use an
+// index file (default "index.json") that the publish script maintains:
+//
+//   { "version": 1, "generated": "...", "items": [
+//       { "path": "posts/hello.md", "size": 123, "contentType": "...",
+//         "etag": "...", "lastModified": "...", "metadata": { ... } } ] }
+//
+//   const storage = new Storage({ adapter: urlAdapter({ baseUrl: 'https://pub-xxxx.r2.dev/' }) });
+
+import { defineAdapter, StorageError } from '@storagesdk/core/adapter';
+
+function readOnly(what) {
+  return async () => {
+    throw new StorageError({
+      code: 'NotSupported',
+      message: `${what}: this storage is read-only`,
+    });
+  };
+}
+
+function checkPath(path) {
+  if (path.split('/').some((seg) => seg === '..' || seg === '.')) {
+    throw new StorageError({ code: 'InvalidArgument', message: `invalid path: ${path}` });
+  }
+  return path;
+}
+
+function toMeta(entry) {
+  return {
+    path: entry.path,
+    size: entry.size ?? 0,
+    contentType: entry.contentType ?? 'application/octet-stream',
+    etag: entry.etag ?? '',
+    lastModified: new Date(entry.lastModified ?? 0),
+    ...(entry.metadata ? { metadata: entry.metadata } : {}),
+  };
+}
+
+/**
+ * @param {{ baseUrl?: string|URL, indexPath?: string, fetch?: typeof fetch }} [opts]
+ *        `baseUrl` defaults to the directory of the current page.
+ */
+export function urlAdapter(opts = {}) {
+  const base = new URL(
+    opts.baseUrl ?? './',
+    globalThis.location?.href ?? 'http://localhost/'
+  );
+  if (!base.pathname.endsWith('/')) base.pathname += '/';
+  const indexPath = opts.indexPath ?? 'index.json';
+  const doFetch = opts.fetch ?? ((...a) => fetch(...a));
+  let indexPromise;
+
+  const fileUrl = (path) =>
+    new URL(checkPath(path).split('/').map(encodeURIComponent).join('/'), base).href;
+
+  async function get(path, signal) {
+    const res = await doFetch(fileUrl(path), { signal, cache: 'no-cache' });
+    if (res.status === 404 || res.status === 403) {
+      // Public buckets answer 403 or 404 for missing keys.
+      throw new StorageError({ code: 'NotFound', message: `${path} not found` });
+    }
+    if (!res.ok) {
+      throw new StorageError({ code: 'Provider', message: `${path}: HTTP ${res.status}` });
+    }
+    return res;
+  }
+
+  /** The published index, fetched once per adapter (call refresh() to reload). */
+  function loadIndex(signal) {
+    indexPromise ??= get(indexPath, signal)
+      .then((res) => res.json())
+      .then((idx) => new Map((idx.items ?? []).map((e) => [e.path, e])))
+      .catch((err) => {
+        indexPromise = undefined;
+        throw err;
+      });
+    return indexPromise;
+  }
+
+  const adapter = defineAdapter({
+    name: 'url',
+    raw: { baseUrl: base.href, refresh: () => { indexPromise = undefined; } },
+
+    async download(path, o) {
+      const res = await get(path, o?.signal);
+      let body = new Uint8Array(await res.arrayBuffer());
+      if (o?.range) body = body.slice(o.range.offset, o.range.offset + o.range.length);
+      const entry = (await loadIndex(o?.signal).catch(() => new Map())).get(path);
+      return {
+        ...toMeta({
+          path,
+          contentType: res.headers.get('content-type') ?? undefined,
+          etag: (res.headers.get('etag') ?? '').replace(/"/g, ''),
+          lastModified: res.headers.get('last-modified') ?? undefined,
+          ...entry,
+        }),
+        size: body.byteLength,
+        body,
+      };
+    },
+
+    async head(path, o) {
+      const entry = (await loadIndex(o?.signal)).get(checkPath(path));
+      if (!entry) throw new StorageError({ code: 'NotFound', message: `${path} not found` });
+      return toMeta(entry);
+    },
+
+    async list(o) {
+      const prefix = o?.prefix ?? '';
+      const limit = o?.limit ?? 1000;
+      const all = [...(await loadIndex(o?.signal)).values()]
+        .filter((e) => e.path.startsWith(prefix) && (o?.cursor === undefined || e.path > o.cursor))
+        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+      const items = all.slice(0, limit).map(toMeta);
+      return all.length > limit ? { items, cursor: items[items.length - 1].path } : { items };
+    },
+
+    async url(path) {
+      return fileUrl(path);
+    },
+
+    upload: readOnly('upload'),
+    delete: readOnly('delete'),
+    copy: readOnly('copy'),
+    move: readOnly('move'),
+    uploadUrl: readOnly('uploadUrl'),
+    snapshots: {
+      create: readOnly('snapshots'),
+      list: async () => [],
+      head: readOnly('snapshots'),
+      delete: readOnly('snapshots'),
+      get: () => ({
+        download: readOnly('snapshots'),
+        head: readOnly('snapshots'),
+        list: readOnly('snapshots'),
+        url: readOnly('snapshots'),
+      }),
+    },
+    forks: {
+      create: readOnly('forks'),
+      list: async () => [],
+      head: readOnly('forks'),
+      delete: readOnly('forks'),
+      get: () => {
+        throw new StorageError({ code: 'NotSupported', message: 'forks: this storage is read-only' });
+      },
+      merge: readOnly('forks'),
+      rebase: readOnly('forks'),
+      diff: readOnly('forks'),
+    },
+  });
+  return adapter;
+}

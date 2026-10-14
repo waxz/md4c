@@ -1,13 +1,13 @@
 // Assemble the static blog site into dist/blog/:
 //
-//   dist/blog/            <- blog/*            (pages, styles, sample posts)
+//   dist/blog/            <- blog/*            (pages, styles; not the posts)
 //   dist/blog/lib/        <- js/*.js + dist/md4c.wasm
 //   dist/blog/vendor/storagesdk-core/  <- @storagesdk/core ESM build
 //   dist/blog/vendor/dompurify/        <- DOMPurify ESM build
 //
 // Bare imports ("@storagesdk/core") are rewritten to relative paths so the
 // page needs no inline import map, which a strict CSP would block.
-// Serve the result with server/server.mjs.
+// Upload the result with scripts/publish.mjs --site, or host it anywhere.
 
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -37,7 +37,11 @@ const BARE_IMPORTS = {
 
 await rm(out, { recursive: true, force: true });
 await mkdir(join(out, 'lib'), { recursive: true });
-await cp(join(root, 'blog'), out, { recursive: true });
+// Posts are published separately by scripts/publish.mjs (drafts skipped).
+await cp(join(root, 'blog'), out, {
+  recursive: true,
+  filter: (src) => src !== join(root, 'blog', 'posts'),
+});
 
 for (const f of await readdir(join(root, 'js'))) {
   if (!f.endsWith('.js')) continue;

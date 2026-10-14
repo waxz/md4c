@@ -5,9 +5,17 @@
 //   title: Hello
 //   date: 2026-10-14
 //   tags: a, b
+//   draft: true        (optional: the publish script skips drafts)
 //   ---
 //
 //   Markdown body...
+
+/** Post file names: posts/<slug>.md, lowercase letters, digits and dashes. */
+export const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
+
+export function isDraft(meta) {
+  return /^(true|yes|1)$/i.test(meta.draft ?? '');
+}
 
 /** Split "---\nkey: value\n---\nbody" into { meta, body }. */
 export function parseFrontMatter(text) {
@@ -19,11 +27,6 @@ export function parseFrontMatter(text) {
     if (kv) meta[kv[1].toLowerCase()] = kv[2].trim().replace(/^["']|["']$/g, '');
   }
   return { meta, body: text.slice(m[0].length) };
-}
-
-export function serializePost({ title, date, tags }, body) {
-  const clean = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').trim();
-  return `---\ntitle: ${clean(title)}\ndate: ${clean(date)}\ntags: ${clean(tags)}\n---\n\n${body.replace(/^\s+/, '')}`;
 }
 
 export function parseTags(s) {

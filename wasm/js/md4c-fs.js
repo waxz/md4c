@@ -5,17 +5,20 @@
 // I/O at all (see md4c_wasm.c), so this module supplies the missing piece: a
 // small file API built on storagesdk (https://github.com/storagesdk/storagesdk).
 //
-// Any storagesdk adapter works. By default files live in IndexedDB through
-// ./idb-adapter.js, so they survive page reloads; pass your own `Storage` to
-// keep them in S3, R2, WebDAV, etc. instead.
+// Any storagesdk adapter works. In the browser the default is the read-only
+// ./url-adapter.js, which reads files from a public URL (an R2 bucket, any
+// static host). With a writable adapter (fs, R2, S3, ...; e.g. in Node) the
+// write methods work too:
 //
-//   const fs = await Md4cFs.open({ name: 'my-site' });
+//   const fs = await Md4cFs.open({ baseUrl: 'https://pub-xxxx.r2.dev/' });
+//   const html = await fs.renderFile('posts/hello.md');
+//
+//   const fs = await Md4cFs.open({ storage: new Storage({ adapter: r2({...}) }) });
 //   await fs.writeFile('docs/readme.md', '# Hi');
 //   await fs.convertFile('docs/readme.md');           // -> docs/readme.html
-//   const html = await fs.readFile('docs/readme.html');
 
 import { Storage, StorageError } from '@storagesdk/core';
-import { indexedDbAdapter } from './idb-adapter.js';
+import { urlAdapter } from './url-adapter.js';
 import { Dialect, HtmlFlags, loadMd4c } from './md4c.js';
 
 const CONTENT_TYPES = {
@@ -25,9 +28,19 @@ const CONTENT_TYPES = {
   json: 'application/json',
   txt: 'text/plain; charset=utf-8',
   css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  wasm: 'application/wasm',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  ico: 'image/x-icon',
 };
 
-function contentTypeFor(path) {
+export function contentTypeFor(path) {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
   return CONTENT_TYPES[ext] ?? 'application/octet-stream';
 }
@@ -48,20 +61,15 @@ export class Md4cFs {
   }
 
   /**
-   * Load md4c.wasm and open (or create) a storage-backed file system.
+   * Load md4c.wasm and open a storage-backed file system: `storage` if
+   * given, else a read-only one over the public URL `baseUrl`.
    *
-   * @param {{ name?: string, storage?: Storage, wasmUrl?: URL|string,
-   *           indexedDB?: IDBFactory }} [opts]
+   * @param {{ storage?: Storage, baseUrl?: string|URL,
+   *           wasmUrl?: URL|string }} [opts]
    */
   static async open(opts = {}) {
     const storage =
-      opts.storage ??
-      new Storage({
-        adapter: indexedDbAdapter({
-          name: opts.name ?? 'md4c-fs',
-          indexedDB: opts.indexedDB,
-        }),
-      });
+      opts.storage ?? new Storage({ adapter: urlAdapter({ baseUrl: opts.baseUrl }) });
     const md4c = await loadMd4c(opts.wasmUrl);
     return new Md4cFs({ storage, md4c });
   }
