@@ -308,9 +308,11 @@ Tips:
 ## 9. Edit from your phone (optional)
 
 `admin/` holds a small admin app for writing, editing and publishing from any
-device, with a folder explorer, editor, live preview and photo upload. It
-runs as a Cloudflare Worker on `admin.blog.example.com`, protected by
-Cloudflare Access, and keeps drafts in a private second bucket. Readers keep
+device, with a posts list, folder explorer, editor, live preview and photo
+upload. It runs as a Cloudflare Worker on `admin.blog.example.com`,
+protected by Cloudflare Access. Drafts and their photos stay in private
+draft stores, either R2 buckets or WebDAV shares such as Nextcloud or a
+NAS, and are copied to the public bucket on publish. Readers keep
 reading the public bucket directly. Setup takes about ten minutes; see
 [admin/README.md](admin/README.md).
 

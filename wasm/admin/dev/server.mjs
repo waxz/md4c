@@ -6,7 +6,8 @@
 //   blog:   http://127.0.0.1:8788/index.html  (dist/public, the "bucket")
 //
 // It stands in for Cloudflare: R2 buckets are folders (dist/public for the
-// site, dist/drafts for drafts) and Cloudflare Access is simulated by signing
+// site, dist/drafts for drafts), a second draft store is an embedded WebDAV
+// server (files in dist/webdav), and Cloudflare Access is simulated by signing
 // an Access-style JWT for every request, so the Worker's real token check
 // runs. Because of that, anyone who can reach the port is "signed in": the
 // server only listens on 127.0.0.1.
@@ -17,6 +18,7 @@ import { createServer } from 'node:http';
 import { dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { v2 as webdav } from 'webdav-server';
 import worker from '../src/worker.js';
 import { r2Bucket } from './r2-shim.mjs';
 
@@ -27,6 +29,7 @@ const BLOG_PORT = Number(process.env.BLOG_PORT ?? 8788);
 const HOST = '127.0.0.1';
 const team = `http://${HOST}:${ADMIN_PORT}`;
 const EMAIL = process.env.ADMIN_EMAIL ?? 'owner@example.com';
+const DAV_PORT = Number(process.env.DAV_PORT ?? 8789);
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -49,11 +52,30 @@ async function fileResponse(dir, pathname) {
 
 await mkdir(join(dist, 'public'), { recursive: true });
 await mkdir(join(dist, 'drafts'), { recursive: true });
+await mkdir(join(dist, 'webdav', 'blog-drafts'), { recursive: true });
+
+// A WebDAV share standing in for a NAS / Nextcloud draft store.
+const davUsers = new webdav.SimpleUserManager();
+const davUser = davUsers.addUser('dev', 'dev-password', false);
+const davRights = new webdav.SimplePathPrivilegeManager();
+davRights.setRights(davUser, '/', ['all']);
+const dav = new webdav.WebDAVServer({
+  port: DAV_PORT, hostname: HOST, privilegeManager: davRights,
+  httpAuthentication: new webdav.HTTPBasicAuthentication(davUsers, 'dev'),
+});
+await new Promise((r) => dav.setFileSystem('/', new webdav.PhysicalFileSystem(join(dist, 'webdav')), () => r()));
+await new Promise((r) => dav.start(r));
 const keys = await generateKeyPair('RS256');
 const jwk = { ...(await exportJWK(keys.publicKey)), kid: 'dev', alg: 'RS256', use: 'sig' };
 const env = {
   SITE: r2Bucket(dist, 'public'),
   DRAFTS: r2Bucket(dist, 'drafts'),
+  DRAFT_STORES: JSON.stringify([
+    { id: 'drafts', label: 'Drafts (R2)', type: 'r2', binding: 'DRAFTS' },
+    { id: 'nas', label: 'NAS (WebDAV)', type: 'webdav', baseUrl: `http://${HOST}:${DAV_PORT}`,
+      root: '/', folder: 'blog-drafts', username: 'dev', passwordSecret: 'NAS_PASSWORD' },
+  ]),
+  NAS_PASSWORD: 'dev-password',
   ASSETS: { fetch: (req) => fileResponse(join(dist, 'admin'), new URL(req.url).pathname) },
   ACCESS_TEAM_DOMAIN: team,
   ACCESS_AUD: 'local-dev',

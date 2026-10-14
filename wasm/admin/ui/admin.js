@@ -2,15 +2,17 @@
 // the site settings. Runs behind Cloudflare Access on the admin hostname;
 // everything it changes goes through the Worker's checked file API.
 //
-// Routes:
-//   #/files/<bucket>/<prefix>   folder explorer (bucket: site | drafts)
-//   #/edit/<bucket>/<key>       post editor;  #/new  a new post
-//   #/view/<bucket>/<key>       file details; #/text/<bucket>/<key> text editor
+// Routes (<store> = "site" or a draft store id):
+//   #/posts                     drafts and published posts (home)
+//   #/files/<store>/<prefix>    folder explorer
+//   #/edit/<store>/<key>        post editor;  #/new[/<store>]  a new post
+//   #/view/<store>/<key>        file details; #/text/<store>/<key> text editor
 //   #/settings                  site settings and rebuild
 
 import { api } from './client.js';
 import { hasUnsavedChanges, showEditor, showTextEditor } from './editor.js';
-import { filesHref, showFile, showFiles } from './explorer.js';
+import { showFile, showFiles } from './explorer.js';
+import { showPosts } from './posts.js';
 import { DEFAULT_SITE, normalizeSite } from './lib/site-config.js';
 import { dialog, esc, init, publicUrl, rebuildSite, reportError, state, toast } from './shared.js';
 
@@ -18,22 +20,24 @@ const view = document.getElementById('view');
 let lastHash = location.hash;
 
 function parseRoute() {
-  const [, name = 'files', bucket = 'site', ...rest] = location.hash.replace(/^#/, '').split('/');
-  return { name, bucket: bucket || 'site', path: decodeURIComponent(rest.join('/')) };
+  const [, name = 'posts', store = 'site', ...rest] = location.hash.replace(/^#/, '').split('/');
+  return { name, store: store || 'site', path: decodeURIComponent(rest.join('/')) };
 }
 
 async function route() {
   const r = parseRoute();
+  const section = { edit: 'posts', new: 'new', view: 'files', text: 'files' }[r.name] ?? r.name;
   document.querySelectorAll('.app-nav a').forEach((a) => {
-    a.setAttribute('aria-current', String(a.dataset.route === r.name || (a.dataset.route === 'files' && ['view', 'text'].includes(r.name))));
+    a.setAttribute('aria-current', String(a.dataset.route === section));
   });
   try {
-    if (r.name === 'new') await showEditor(view);
-    else if (r.name === 'edit') await showEditor(view, r.bucket, r.path);
-    else if (r.name === 'view') await showFile(view, r.bucket, r.path);
-    else if (r.name === 'text') await showTextEditor(view, r.bucket, r.path);
+    if (r.name === 'new') await showEditor(view, null, null, location.hash.split('/')[2]);
+    else if (r.name === 'edit') await showEditor(view, r.store, r.path);
+    else if (r.name === 'view') await showFile(view, r.store, r.path);
+    else if (r.name === 'text') await showTextEditor(view, r.store, r.path);
     else if (r.name === 'settings') await showSettings();
-    else await showFiles(view, r.bucket === 'drafts' ? 'drafts' : 'site', r.path);
+    else if (r.name === 'files') await showFiles(view, r.store, r.path);
+    else await showPosts(view);
     lastHash = location.hash;
     view.focus({ preventScroll: true });
     window.scrollTo(0, 0);
@@ -132,7 +136,7 @@ async function main() {
   else site.hidden = true;
   document.querySelector('.app-title').textContent = `${state.site.title} · Admin`;
   document.title = `Admin · ${state.site.title}`;
-  if (!location.hash) history.replaceState(null, '', filesHref('site', 'posts/'));
+  if (!location.hash) history.replaceState(null, '', '#/posts');
   route();
 }
 

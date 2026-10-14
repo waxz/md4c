@@ -10,6 +10,7 @@ export class ApiError extends Error {
     this.status = status;
     this.code = data?.code;
     this.current = data?.current;
+    this.assets = data?.assets;
   }
 }
 
@@ -37,11 +38,14 @@ const q = (o) => new URLSearchParams(o).toString();
 export const api = {
   session: () => request('GET', 'session'),
 
-  async listAll(bucket, prefix = '') {
+  /** Every post in every store: { posts: [{ store, key, status, title, date, tags, … }] }. */
+  posts: () => request('GET', 'posts'),
+
+  async listAll(store, prefix = '') {
     const items = [];
     let cursor;
     do {
-      const page = await request('GET', `list?${q({ bucket, prefix, ...(cursor ? { cursor } : {}) })}`);
+      const page = await request('GET', `list?${q({ store, prefix, ...(cursor ? { cursor } : {}) })}`);
       items.push(...page.items);
       cursor = page.cursor;
     } while (cursor);
@@ -49,31 +53,42 @@ export const api = {
   },
 
   /** { text|bytes, etag } of an object. */
-  async read(bucket, key, as = 'text') {
-    const res = await request('GET', `file?${q({ bucket, key })}`, { raw: true });
+  async read(store, key, as = 'text') {
+    const res = await request('GET', `file?${q({ store, key })}`, { raw: true });
     const etag = res.headers.get('x-object-etag') ?? '';
     return as === 'bytes'
       ? { bytes: new Uint8Array(await res.arrayBuffer()), etag }
       : { text: await res.text(), etag };
   },
 
-  fileUrl: (bucket, key) => `api/file?${q({ bucket, key })}`,
+  fileUrl: (store, key) => `api/file?${q({ store, key })}`,
+
+  /** Path-style URL: relative links inside a post resolve against it. */
+  rawUrl: (store, key) => new URL(`api/raw/${store}/${key.split('/').map(encodeURIComponent).join('/')}`, location.href).href,
 
   /** Create (etag null) or update (etag of the version being replaced). */
-  write(bucket, key, body, etag) {
-    return request('PUT', `file?${q({ bucket, key })}`, {
+  write(store, key, body, etag) {
+    return request('PUT', `file?${q({ store, key })}`, {
       body,
       headers: etag === undefined ? {} : etag === null ? { 'if-none-match': '*' } : { 'if-match': `"${etag}"` },
     });
   },
 
-  remove(bucket, key, etag) {
-    return request('DELETE', `file?${q({ bucket, key })}`, { headers: etag ? { 'if-match': `"${etag}"` } : {} });
+  remove(store, key, etag) {
+    return request('DELETE', `file?${q({ store, key })}`, { headers: etag ? { 'if-match': `"${etag}"` } : {} });
   },
 
   move(from, to, etag) {
     return request('POST', 'move', {
       body: JSON.stringify({ from, to, ...(etag ? { ifMatch: etag } : {}) }),
+      headers: { 'content-type': 'application/json' },
+    });
+  },
+
+  /** Publish a draft with the files it uses; `overwrite` lists public files to replace. */
+  publish(from, etag, overwrite = []) {
+    return request('POST', 'publish', {
+      body: JSON.stringify({ from, ...(etag ? { ifMatch: etag } : {}), overwrite }),
       headers: { 'content-type': 'application/json' },
     });
   },
@@ -103,35 +118,35 @@ const notSupported = (what) => async () => {
   throw new StorageError({ code: 'NotSupported', message: `${what} is not available in the admin` });
 };
 
-/** A storagesdk Storage over one bucket of the admin API (used by the site build). */
-export function adminStorage(bucket) {
+/** A storagesdk Storage over one store of the admin API (used by the site build). */
+export function adminStorage(store) {
   const meta = (i) => ({
     path: i.key, size: i.size, contentType: i.contentType, etag: i.etag, lastModified: new Date(i.uploaded),
   });
   return new Storage({
     adapter: defineAdapter({
       name: 'admin-api',
-      raw: { bucket },
+      raw: { store },
       download: wrap(async (path) => {
-        const { bytes, etag } = await api.read(bucket, path, 'bytes');
+        const { bytes, etag } = await api.read(store, path, 'bytes');
         return { path, size: bytes.byteLength, contentType: '', etag, lastModified: new Date(), body: bytes };
       }),
       head: wrap(async (path) => {
-        const found = (await api.listAll(bucket, path)).find((i) => i.key === path);
+        const found = (await api.listAll(store, path)).find((i) => i.key === path);
         if (!found) throw new ApiError(404, { error: `${path} not found` });
         return meta(found);
       }),
       list: wrap(async (o) => {
-        const items = (await api.listAll(bucket, o?.prefix ?? '')).map(meta);
+        const items = (await api.listAll(store, o?.prefix ?? '')).map(meta);
         return { items };
       }),
-      url: async (path) => api.fileUrl(bucket, path),
+      url: async (path) => api.fileUrl(store, path),
       upload: wrap(async (path, body) => {
-        const info = await api.write(bucket, path, body);
+        const info = await api.write(store, path, body);
         return meta(info);
       }),
       delete: wrap(async (path) => {
-        await api.remove(bucket, path);
+        await api.remove(store, path);
       }),
       copy: notSupported('copy'),
       move: notSupported('move'),

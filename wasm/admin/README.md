@@ -1,8 +1,11 @@
 # Blog admin: edit and publish from any device
 
 A small admin app for the blog, usable from a phone. You can browse the
-bucket's folders, write and edit posts with a live preview in the blog's own
+storage folders, write and edit posts with a live preview in the blog's own
 theme, upload photos, and save drafts, publish, update or unpublish posts.
+Drafts and their photos stay private in one or more draft stores (R2
+buckets, or WebDAV shares such as Nextcloud or a NAS), and are copied to
+the public bucket when you publish.
 It runs as a Cloudflare Worker on its own hostname (for example
 `admin.blog.example.com`), behind Cloudflare Access.
 
@@ -11,7 +14,8 @@ never touch the Worker.
 
 ```
 phone/laptop browser ──(Cloudflare Access login)──▶ admin Worker ──R2 binding──▶ my-blog         (public)
-  admin app + md4c.wasm: renders pages locally        checks every write          my-blog-drafts  (private)
+  admin app + md4c.wasm: renders pages locally        checks every write ─R2───▶ my-blog-drafts  (private)
+                                                                         └WebDAV▶ NAS / Nextcloud (private)
 readers ───────────────────────────────────────────────────────────────────────▶ my-blog public URL
 ```
 
@@ -33,12 +37,54 @@ All of these checks happen on the server, whatever the browser sends.
 | Content types | Set by the server from the file extension. The client's claim is ignored. |
 | Create vs update | Creating needs `If-None-Match: *`, and fails with `409 exists` if the file is there. Updating needs `If-Match: <etag>`, and fails with `412 changed` if the file was changed elsewhere, for example from your laptop, since you opened it. A post or asset written without either gets `428`. |
 | Path conflicts | `409 file-in-path`: a parent "folder" is actually a file. `409 folder-exists`: a folder already has that name. |
-| Slug conflicts | A slug is either a draft or a published post, never both. `409 published-exists` and `409 draft-exists` are returned on create, rename, publish and unpublish. |
+| Slug conflicts | A slug lives in exactly one store: it is either published or a draft in a single draft store. `409 published-exists` and `409 draft-exists` are returned on create, rename, publish and unpublish. |
+| Publishing | Drafts go live only through `/api/publish`; a plain move into the site is refused with `use-publish`. Publishing works out which local files the post uses, from its Markdown links and images, HTML `src`/`href`, and front-matter `image:`, and copies them from the draft store to the site before the post itself. A public file with the same name is kept if identical. If it differs, publishing stops with `409 asset-conflict` and lists the files, and nothing is written until you choose to replace them. Afterwards the draft store keeps only files that other drafts still use. |
 | Size | Uploads are limited to `MAX_UPLOAD_MB` (25 MB by default). The editor shrinks photos to 2400 px first. |
 | Reading | Files are served to the admin with a sandboxing CSP, and HTML is served as text, so stored content can never run in the admin's origin. |
 
-Drafts live in a separate, private bucket. Anything in the public bucket
-can be read by URL, so drafts stay out of it until you publish.
+Drafts and their photos live in private draft stores. Anything in the
+public bucket can be read by URL, so drafts stay out of it until you publish.
+
+## Draft stores
+
+By default the `DRAFTS` R2 bucket is the only draft store. Set
+`DRAFT_STORES` in `wrangler.toml` to use several, for example R2 plus a
+WebDAV share on a NAS, Nextcloud or ownCloud:
+
+```toml
+DRAFT_STORES = """[
+  { "id": "drafts", "label": "Drafts",   "type": "r2", "binding": "DRAFTS" },
+  { "id": "nas",    "label": "Home NAS", "type": "webdav",
+    "baseUrl": "https://dav.example.com/remote.php/dav/files/me",
+    "root": "/blog", "folder": "drafts",
+    "username": "me", "passwordSecret": "NAS_PASSWORD" }
+]"""
+```
+
+```sh
+npx wrangler secret put NAS_PASSWORD --config admin/wrangler.toml
+```
+
+- `id`: lowercase letters, digits and dashes, not `site`.
+- `label`: what the admin shows.
+- `type`: `r2` (with a `binding`) or `webdav`.
+- WebDAV settings: `baseUrl`, `root` and `folder` (files live in
+  `<root>/<folder>`), plus `username` and `passwordSecret`, or `tokenSecret`
+  for a bearer token.
+- Credentials are always Worker secrets, referred to by name, never values
+  in the config.
+
+WebDAV stores use storagesdk's WebDAV adapter, which needs the
+`nodejs_compat` flag (already set). The server must be reachable from
+Cloudflare: for a home NAS, that usually means a public HTTPS address or a
+Cloudflare Tunnel. WebDAV has no conditional writes, so for these stores
+"changed elsewhere" is checked just before writing. That is safe for one
+admin, but not a lock between two simultaneous writers.
+
+A new post asks which draft store to use, and photos you add while
+drafting are uploaded to that store. Unpublishing asks which store to keep
+the post in. Files the post used stay public, because other posts may use
+them too.
 
 ## One-time setup
 
@@ -80,12 +126,14 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
 
 ## Using it
 
-- **Files:** the explorer covers both buckets. Tabs switch between *Site* and
-  *Drafts*, with breadcrumbs for folders.
-  - Upload into `posts/` or a folder under `assets/`, and rename, move or
-    delete files there.
-  - Badges mark files that are generated by the build or part of the site's
-    code. You can view those but not change them.
+- **Posts** (the home screen) lists drafts, labelled by their store, and
+  published posts in separate sections, with search.
+- **Files** browses one store at a time; choose it from the menu at the top.
+  - Each folder lists sub-folders, posts, and images & files separately.
+    Generated pages and site code are folded away and can only be viewed.
+  - Upload into `posts/` or a folder under `assets/`.
+  - The ⋯ button on a row offers open, copy Markdown, open on the blog,
+    rename or move, and delete.
   - A folder appears once something is uploaded into it.
 - **New post:** fill in the title (the address is derived from it), date,
   tags, and optionally a search description and social image. Then write.
@@ -94,8 +142,8 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
   - *Preview* shows the post in the blog's theme, with contents box, figures
     and maths.
   - What you type is also kept on the device until it's saved.
-- **Save draft** stores the post privately. **Publish** moves it to the
-  public bucket and updates the site. **Update** republishes edits.
+- **Save draft** stores the post privately. **Publish** copies the files it
+  uses to the public bucket, moves the post there and updates the site. **Update** republishes edits.
   **Unpublish** moves the post back to drafts and removes its page.
   **Delete** removes it.
 - **Changed elsewhere:** if a post was saved from another device while you
@@ -119,10 +167,13 @@ npm run build && npm run admin:dev
   Access is simulated by signing a token for every request, so it listens on
   127.0.0.1 only.
 - **Blog:** <http://127.0.0.1:8788/index.html>, served from `dist/public/`,
-  which stands in for the public bucket. Drafts go to `dist/drafts/`.
+  which stands in for the public bucket.
+- **Draft stores:** an R2 stand-in in `dist/drafts/`, and an embedded WebDAV
+  server on port 8789 with files in `dist/webdav/`.
 
-`npm test` covers the Worker's authentication, path and conflict rules
-(`test/admin-worker.test.mjs`). `npx wrangler dev --config admin/wrangler.toml`
+`npm test` covers the Worker's authentication, path and conflict rules,
+both kinds of draft store, and publishing with files
+(`test/admin-worker.test.mjs`, which runs a WebDAV server). `npx wrangler dev --config admin/wrangler.toml`
 runs it in Cloudflare's own runtime with local R2 buckets.
 
 ## Costs and limits

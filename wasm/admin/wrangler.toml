@@ -4,6 +4,8 @@
 name = "blog-admin"
 main = "src/worker.js"
 compatibility_date = "2025-09-01"
+# The WebDAV client used for WebDAV draft stores needs Node built-ins.
+compatibility_flags = ["nodejs_compat"]
 
 # Serve only on the custom domain protected by Cloudflare Access; a
 # *.workers.dev address would bypass the Access login page (the Worker still
@@ -26,8 +28,8 @@ run_worker_first = true
 binding = "SITE"
 bucket_name = "my-blog"
 
-# A private bucket for drafts: no public access, only this Worker reads it.
-# Remove this block to work without drafts (posts are published directly).
+# A private bucket for drafts and their images: no public access, only this
+# Worker reads it. Remove it (and DRAFT_STORES below) to publish directly.
 [[r2_buckets]]
 binding = "DRAFTS"
 bucket_name = "my-blog-drafts"
@@ -38,3 +40,19 @@ ACCESS_AUD = "paste the Access application's Audience (AUD) tag here"
 ADMIN_EMAILS = "you@example.com"
 PUBLIC_URL = "https://blog.example.com/"
 MAX_UPLOAD_MB = "25"
+
+# Draft stores. Without this, the DRAFTS bucket above is the only one. Each
+# entry is an R2 binding ("r2") or a WebDAV share ("webdav": Nextcloud,
+# ownCloud, a NAS, ...). Passwords/tokens are Worker secrets named here:
+#   npx wrangler secret put NAS_PASSWORD --config admin/wrangler.toml
+DRAFT_STORES = """[
+  { "id": "drafts", "label": "Drafts", "type": "r2", "binding": "DRAFTS" }
+]"""
+# Example with a second, WebDAV store:
+# DRAFT_STORES = """[
+#   { "id": "drafts", "label": "Drafts", "type": "r2", "binding": "DRAFTS" },
+#   { "id": "nas", "label": "Home NAS", "type": "webdav",
+#     "baseUrl": "https://dav.example.com/remote.php/dav/files/me",
+#     "root": "/blog", "folder": "drafts",
+#     "username": "me", "passwordSecret": "NAS_PASSWORD" }
+# ]"""

@@ -19,7 +19,8 @@
     "@storagesdk/core": "^0.5.0",
     "dompurify": "^3.4.17",
     "jose": "^6.2.12",
-    "katex": "^0.19.0"
+    "katex": "^0.19.0",
+    "webdav": "^5.11.0"
   },
   "engines": {
     "node": ">=20"
@@ -29,5 +30,8 @@
     "@aws-sdk/lib-storage": "^3.1151.0",
     "@aws-sdk/s3-presigned-post": "^3.1151.0",
     "@aws-sdk/s3-request-presigner": "^3.1151.0"
+  },
+  "devDependencies": {
+    "webdav-server": "^2.6.3"
   }
 }

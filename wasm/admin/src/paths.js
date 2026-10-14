@@ -1,8 +1,8 @@
 // What the admin may write where, and with which content type.
 //
-// Two buckets:
+// Two roles of store (see stores.js):
 //   site    the public blog bucket (readers' URL)
-//   drafts  a private bucket, never publicly exposed (optional)
+//   drafts  private draft stores (R2, WebDAV, ...): posts and their files
 //
 // Every key falls into one class:
 //   content    posts/<slug>.md — the source of a post
@@ -80,14 +80,18 @@ export function keyProblem(key) {
   return '';
 }
 
-/** The class of `key` in `bucket`: content | asset | generated | locked. */
-export function classify(bucket, key) {
+/**
+ * The class of `key` in a store with `role` ("site" or "drafts"):
+ * content | asset | generated | locked. Draft stores hold posts and their
+ * files (posts/<file>, assets/**), never generated files or site code.
+ */
+export function classify(role, key) {
   if (keyProblem(key)) return 'locked';
   const parts = key.split('/');
   const ext = extension(key);
-  if (bucket === 'drafts') {
-    return parts.length === 2 && parts[0] === 'posts' && ext === 'md' && SLUG_RE.test(parts[1].slice(0, -3))
-      ? 'content' : 'locked';
+  if (role !== 'site') {
+    const kind = classify('site', key);
+    return kind === 'content' || kind === 'asset' ? kind : 'locked';
   }
   if (parts.length === 1) {
     if (GENERATED_ROOT.has(key) || INDEXNOW_KEY_FILE.test(key)) return 'generated';
@@ -107,4 +111,44 @@ export function classify(bucket, key) {
 export function postSlug(key) {
   const m = /^posts\/([a-z0-9][a-z0-9-]{0,79})\.md$/.exec(key);
   return m ? m[1] : null;
+}
+
+/**
+ * Keys of the local files a post refers to: Markdown links and images,
+ * reference definitions, HTML src/href/poster attributes and the front
+ * matter `image:`. Relative paths resolve against the post's folder
+ * (posts/); "/x" is the store root. External URLs and anchors are ignored.
+ */
+export function referencedKeys(markdown, postKey) {
+  const found = new Set();
+  const refs = [];
+  const add = (v) => refs.push(String(v).trim().replace(/^<|>$/g, ''));
+  for (const m of markdown.matchAll(/!?\[[^\]]*\]\(\s*(<[^>]*>|[^)\s]+)/g)) add(m[1]);
+  for (const m of markdown.matchAll(/^ {0,3}\[[^\]]+\]:\s*(<[^>]*>|\S+)/gm)) add(m[1]);
+  for (const m of markdown.matchAll(/\b(?:src|href|poster)\s*=\s*["']([^"']+)["']/gi)) add(m[1]);
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
+  const img = fm && /^image\s*:\s*["']?([^"'\r\n]+?)["']?\s*$/m.exec(fm[1]);
+  if (img) add(img[1]);
+
+  const base = postKey.slice(0, postKey.lastIndexOf('/') + 1);
+  for (let ref of refs) {
+    if (!ref || ref.startsWith('#') || ref.startsWith('?') || ref.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(ref)) continue;
+    ref = ref.replace(/[?#].*$/, '');
+    try {
+      ref = decodeURIComponent(ref);
+    } catch {
+      continue;
+    }
+    const parts = [];
+    for (const seg of (ref.startsWith('/') ? ref.slice(1) : base + ref).split('/')) {
+      if (seg === '' || seg === '.') continue;
+      if (seg === '..') {
+        if (!parts.length) { parts.length = 0; parts.push('\u0000'); break; }
+        parts.pop();
+      } else parts.push(seg);
+    }
+    const key = parts.join('/');
+    if (key && !key.includes('\u0000') && !keyProblem(key)) found.add(key);
+  }
+  return [...found];
 }

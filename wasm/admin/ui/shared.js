@@ -24,6 +24,10 @@ export async function refreshSite() {
   state.site = normalizeSite(state.rawSite, state.session.publicUrl || location.href);
 }
 
+export const draftStores = () => state.session.stores.filter((s) => s.role === 'drafts');
+export const storeLabel = (id) => state.session.stores.find((s) => s.id === id)?.label ?? id;
+export const isDraftStore = (id) => draftStores().some((s) => s.id === id);
+
 export function publicUrl(key) {
   return state.session.publicUrl ? new URL(key, state.session.publicUrl).href : '';
 }
@@ -73,7 +77,7 @@ export function toast(message, kind = 'info') {
  * A modal dialog. `buttons` = [{ label, value, kind }]; resolves with the
  * chosen value (or null when dismissed). `body` may be a string or a Node.
  */
-export function dialog({ title, body, buttons = [{ label: 'OK', value: true, kind: 'primary' }] }) {
+export function dialog({ title, body, buttons = [{ label: 'OK', value: true, kind: 'primary' }], stacked = false }) {
   return new Promise((resolve) => {
     const dlg = document.createElement('dialog');
     dlg.className = 'dialog';
@@ -83,6 +87,7 @@ export function dialog({ title, body, buttons = [{ label: 'OK', value: true, kin
     if (typeof body === 'string') content.textContent = body;
     else if (body) content.append(body);
     const actions = dlg.querySelector('.dialog-actions');
+    if (stacked) actions.classList.add('stacked');
     for (const b of buttons) {
       const btn = document.createElement('button');
       btn.type = 'button';
