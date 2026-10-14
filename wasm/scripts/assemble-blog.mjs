@@ -58,7 +58,9 @@ await cp(coreDist, join(out, 'vendor', 'storagesdk-core'), {
 });
 
 await mkdir(join(out, 'vendor', 'dompurify'), { recursive: true });
-await cp(join(purifyDir, 'dist', 'purify.es.mjs'), join(out, 'vendor', 'dompurify', 'purify.es.mjs'));
+// Saved as .js, not .mjs: upload tools and the R2 dashboard reliably give .js
+// the JavaScript MIME type that module scripts require.
+await cp(join(purifyDir, 'dist', 'purify.es.mjs'), join(out, 'vendor', 'dompurify', 'purify.es.js'));
 await cp(join(purifyDir, 'LICENSE'), join(out, 'vendor', 'dompurify', 'LICENSE'));
 
 console.log(`Blog assembled in ${out}`);

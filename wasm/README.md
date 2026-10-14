@@ -74,8 +74,9 @@ await rw.convertFile('docs/intro.md', { fullHtml: true });  // -> docs/intro.htm
 
 `url-adapter.js` implements the storagesdk adapter interface over plain
 HTTP GETs. Every write method throws `NotSupported`. A public bucket URL
-can't list its contents, so `list()` and `head()` read an `index.json` that
-the publish script maintains.
+can't list its contents, so `list()` and `head()` read an `index.json`.
+The publish script can generate it, or you can write a plain list of paths
+by hand. `download()` doesn't need the index.
 
 `@storagesdk/core` is plain ESM with no Node dependencies. The site build
 copies it into `vendor/` and rewrites the imports to relative paths, so you
@@ -97,8 +98,9 @@ Storage layout:
 | Path              | Contents                                               |
 |-------------------|--------------------------------------------------------|
 | `index.html`, ... | the site itself (`publish.mjs --site`)                 |
-| `index.json`      | published posts with title, date, tags, excerpt        |
+| `index.json`      | the post list: full entries, or just `["posts/a.md"]`  |
 | `posts/<slug>.md` | Markdown with front matter (`title`, `date`, `tags`)   |
+| anything else     | images and assets; relative links resolve per post     |
 
 ### Publishing
 
@@ -126,25 +128,12 @@ node scripts/publish.mjs --help
 
 ### Hosting on Cloudflare R2
 
-1. Create a bucket and an R2 API token with **Object Read & Write** on it.
-   Keep the token on your machine only.
-2. Turn on public access for the bucket (an `r2.dev` URL or a custom
-   domain). Public access is read-only: it serves GET requests and nothing
-   else.
-3. Publish:
-   ```sh
-   export R2_BUCKET=my-blog R2_ACCOUNT_ID=... \
-          R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
-   npm run build && node scripts/publish.mjs --to r2 --site
-   ```
-4. Open `https://<public-url>/index.html`. R2 doesn't map `/` to
-   `index.html`, so link to `index.html` or add a redirect rule on a custom
-   domain.
-
-If you host the site somewhere else and read posts from the bucket, set
-`STORAGE_URL` in `blog/config.js` to the bucket URL. You also need to add
-that URL to `connect-src` in the CSP in `blog/index.html` and allow GET from
-the site's origin in the bucket's CORS policy.
+See [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md). In short, the site and the
+posts sit in one R2 bucket behind a custom domain, and readers fetch them
+over R2's free-egress public URL. You add posts by uploading Markdown and
+images to the bucket with the dashboard, wrangler, rclone or
+`publish.mjs`, then list them in `index.json`. A hand-written
+`["posts/a.md", ...]` is enough.
 
 The R2 adapter needs the AWS S3 SDK packages, which are installed as
 optional dependencies. Other storagesdk backends, such as S3, GCS or Azure,

@@ -35,7 +35,10 @@ import { isDraft, parseFrontMatter, postMetadata, SLUG_RE } from '../js/post-for
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const INDEX = 'index.json';
-const NO_CACHE = 'no-cache';
+// Short lifetimes let Cloudflare's edge serve repeat reads (fewer R2
+// operations) while new posts still show up within minutes.
+const CACHE_FILES = 'public, max-age=300';
+const CACHE_INDEX = 'public, max-age=60';
 
 const { values: args } = parseArgs({
   options: {
@@ -88,9 +91,9 @@ async function* walk(dir) {
   }
 }
 
-async function upload(storage, path, body, contentType) {
+async function upload(storage, path, body, contentType, cacheControl = CACHE_FILES) {
   log(`upload ${path}`);
-  if (!dry) await storage.upload(path, body, { contentType, cacheControl: NO_CACHE });
+  if (!dry) await storage.upload(path, body, { contentType, cacheControl });
 }
 
 async function remove(storage, path) {
@@ -165,7 +168,7 @@ async function writeIndex(storage, md4c) {
     });
   }
   const index = { version: 1, generated: new Date().toISOString(), items };
-  await upload(storage, INDEX, `${JSON.stringify(index, null, 2)}\n`, 'application/json');
+  await upload(storage, INDEX, `${JSON.stringify(index, null, 2)}\n`, 'application/json', CACHE_INDEX);
   return items.length;
 }
 

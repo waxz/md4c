@@ -144,6 +144,31 @@ describe('publish + read-only URL access', () => {
     assert.deepEqual(index.items, []);
   });
 
+  test('a hand-written index of plain paths works, and posts load without it', async () => {
+    const pub = join(dir, 'public');
+    await mkdir(join(pub, 'posts'), { recursive: true });
+    await writeFile(join(pub, 'posts', 'by-hand.md'), '---\ntitle: By hand\n---\n\nUploaded directly.\n');
+    const saved = await readFile(join(pub, 'index.json'), 'utf8');
+    try {
+      // Not in index.json yet: listing skips it, reading it by path works.
+      let storage = new Storage({ adapter: urlAdapter({ baseUrl }) });
+      assert.match(await storage.download('posts/by-hand.md', { as: 'text' }), /Uploaded directly/);
+
+      await writeFile(join(pub, 'index.json'), '["posts/by-hand.md", "/posts/not-uploaded.md"]');
+      storage = new Storage({ adapter: urlAdapter({ baseUrl }) });
+      const list = await storage.list({ prefix: 'posts/' });
+      assert.deepEqual(list.items.map((i) => i.path), ['posts/by-hand.md', 'posts/not-uploaded.md']);
+      assert.equal(list.items[0].metadata, undefined);
+
+      await rm(join(pub, 'index.json'));
+      storage = new Storage({ adapter: urlAdapter({ baseUrl }) });
+      assert.deepEqual((await storage.list()).items, [], 'missing index lists nothing');
+    } finally {
+      await writeFile(join(pub, 'index.json'), saved);
+      await rm(join(pub, 'posts', 'by-hand.md'));
+    }
+  });
+
   test('files written directly to storage appear after --no-posts reindex', async () => {
     const owner = new Storage({ adapter: fsAdapter({ root: dir, folder: 'public' }) });
     await owner.upload('posts/direct.md', '---\ntitle: Direct\n---\n\nWritten straight to the bucket.\n');

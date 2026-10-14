@@ -9,16 +9,19 @@
 // script in a reader's browser.
 //
 // Storage layout:
-//   index.json         list of published posts with their metadata
+//   index.json         list of posts: full entries from the publish script,
+//                      or just ["posts/a.md", ...] written by hand
 //   posts/<slug>.md    Markdown source with a small front matter block
+//   anything else      images and other assets; relative links in a post
+//                      resolve against the post's own location
 //
 // Routes: #/  #/tag/<tag>  #/post/<slug>
 
-import DOMPurify from './vendor/dompurify/purify.es.mjs';
+import DOMPurify from './vendor/dompurify/purify.es.js';
 import { STORAGE_URL } from './config.js';
 import { Md4cFs } from './lib/md4c-fs.js';
 import { Dialect, Flags } from './lib/md4c.js';
-import { parseFrontMatter, parseTags, SLUG_RE } from './lib/post-format.js';
+import { isDraft, parseFrontMatter, parseTags, postMetadata, SLUG_RE } from './lib/post-format.js';
 
 const PARSER_FLAGS =
   Dialect.GITHUB | Flags.WIKILINKS | Flags.HIGHLIGHT | Flags.LATEXMATHSPANS;
@@ -66,10 +69,32 @@ const PURIFY_CONFIG = {
   FORBID_ATTR: ['style'],
 };
 
+/**
+ * Make relative URLs in a post point where the author meant: next to the
+ * post in storage. `![](photo.png)` in posts/trip.md loads posts/photo.png,
+ * and a link to another post's .md file opens that post in the blog.
+ */
+function resolveUrls(frag, postUrl) {
+  const postsRoot = new URL('posts/', fs.baseUrl).href;
+  const isRelative = (v) => v && !v.startsWith('#') && !/^[a-z][a-z0-9+.-]*:|^\/\//i.test(v);
+  for (const [sel, attr] of [['a', 'href'], ['img', 'src'], ['video', 'src'], ['audio', 'src'],
+                             ['source', 'src'], ['video', 'poster']]) {
+    for (const el of frag.querySelectorAll(`${sel}[${attr}]`)) {
+      const value = el.getAttribute(attr);
+      if (!isRelative(value)) continue;
+      const url = new URL(value, postUrl);
+      const slug = url.href.startsWith(postsRoot) && /^([^/]+)\.md$/.exec(url.pathname.slice(new URL(postsRoot).pathname.length));
+      if (sel === 'a' && slug && SLUG_RE.test(slug[1])) el.setAttribute(attr, `#/post/${slug[1]}`);
+      else el.setAttribute(attr, url.href);
+    }
+  }
+}
+
 /** Markdown -> sanitized DOM fragment, with [[wiki links]] turned into links. */
-function renderSafe(markdown) {
+function renderSafe(markdown, postUrl) {
   const html = fs.render(markdown, { parserFlags: PARSER_FLAGS });
   const frag = DOMPurify.sanitize(html, { ...PURIFY_CONFIG, RETURN_DOM_FRAGMENT: true });
+  resolveUrls(frag, postUrl);
   for (const el of frag.querySelectorAll('x-wikilink')) {
     const a = document.createElement('a');
     a.href = `#/post/${encodeURIComponent(slugify(el.dataset.target ?? ''))}`;
@@ -87,15 +112,34 @@ function tagLinks(tags) {
     .join('');
 }
 
+/** Title, date, tags, excerpt: from the index, or read from the post itself. */
+async function postInfo(file) {
+  const slug = file.path.slice('posts/'.length, -'.md'.length);
+  let meta = file.metadata;
+  if (!meta?.title) {
+    // Hand-written index entry: just a path. Fetch the post for its details.
+    try {
+      const source = await fs.readFile(file.path);
+      if (isDraft(parseFrontMatter(source).meta)) return null;
+      meta = postMetadata(source, (md) => fs.render(md, { parserFlags: PARSER_FLAGS }), slug);
+    } catch {
+      return null; // listed in index.json but not uploaded (yet)
+    }
+  }
+  return {
+    slug,
+    title: meta.title ?? slug,
+    date: meta.date ?? '',
+    tags: parseTags(meta.tags),
+    excerpt: meta.excerpt ?? '',
+  };
+}
+
 async function listPosts() {
-  return (await fs.readdir('posts/'))
-    .map((f) => ({
-      slug: f.path.slice('posts/'.length, -'.md'.length),
-      title: f.metadata?.title ?? f.path,
-      date: f.metadata?.date ?? '',
-      tags: parseTags(f.metadata?.tags),
-      excerpt: f.metadata?.excerpt ?? '',
-    }))
+  const files = (await fs.readdir('posts/')).filter((f) =>
+    /^posts\/[^/]+\.md$/.test(f.path) && SLUG_RE.test(f.path.slice(6, -3)));
+  return (await Promise.all(files.map(postInfo)))
+    .filter(Boolean)
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
@@ -124,11 +168,21 @@ async function showList(tag) {
 
 async function showPost(slug) {
   const path = `posts/${slug}.md`;
-  if (!SLUG_RE.test(slug ?? '') || !(await fs.exists(path))) {
+  const missing = () => {
     app.innerHTML = `<p>No post called <code>${esc(slug ?? '')}</code>. <a href="#/">All posts</a></p>`;
-    return;
+  };
+  if (!SLUG_RE.test(slug ?? '')) return missing();
+  // Read the file directly, so a post uploaded to the bucket opens by its
+  // URL even before it is added to index.json.
+  let source;
+  try {
+    source = await fs.readFile(path);
+  } catch (err) {
+    if (err.code === 'NotFound') return missing();
+    throw err;
   }
-  const { meta, body } = parseFrontMatter(await fs.readFile(path));
+  const { meta, body } = parseFrontMatter(source);
+  if (isDraft(meta)) return missing();
   const title = meta.title || slug;
   document.title = `${title} · MD4C Blog`;
   app.innerHTML = `<article>
@@ -138,7 +192,7 @@ async function showPost(slug) {
     </header>
     <div class="prose"></div>
   </article>`;
-  app.querySelector('.prose').append(renderSafe(body));
+  app.querySelector('.prose').append(renderSafe(body, await fs.storage.url(path)));
 }
 
 /* ---------- Router ---------- */
@@ -166,10 +220,9 @@ document.addEventListener('click', (e) => {
 
 async function main() {
   try {
-    fs = await Md4cFs.open({
-      baseUrl: new URL(STORAGE_URL, location.href),
-      wasmUrl: new URL('./lib/md4c.wasm', import.meta.url),
-    });
+    const baseUrl = new URL(STORAGE_URL, location.href);
+    fs = await Md4cFs.open({ baseUrl, wasmUrl: new URL('./lib/md4c.wasm', import.meta.url) });
+    fs.baseUrl = baseUrl.href.endsWith('/') ? baseUrl.href : `${baseUrl.href}/`;
   } catch (err) {
     console.error(err);
     app.innerHTML = `<p class="error">Could not start the blog: ${esc(err.message ?? err)}</p>`;

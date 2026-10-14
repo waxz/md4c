@@ -8,11 +8,18 @@
 // scripts/publish.mjs).
 //
 // A public bucket URL cannot list its contents, so list() and head() use an
-// index file (default "index.json") that the publish script maintains:
+// index file (default "index.json"). scripts/publish.mjs writes a full one:
 //
 //   { "version": 1, "generated": "...", "items": [
 //       { "path": "posts/hello.md", "size": 123, "contentType": "...",
 //         "etag": "...", "lastModified": "...", "metadata": { ... } } ] }
+//
+// but a hand-written list of paths is enough, so files uploaded straight to
+// the bucket can be listed by editing index.json alone:
+//
+//   ["posts/hello.md", "posts/second-post.md"]
+//
+// A missing index.json just lists nothing; download() works without it.
 //
 //   const storage = new Storage({ adapter: urlAdapter({ baseUrl: 'https://pub-xxxx.r2.dev/' }) });
 
@@ -78,7 +85,18 @@ export function urlAdapter(opts = {}) {
   function loadIndex(signal) {
     indexPromise ??= get(indexPath, signal)
       .then((res) => res.json())
-      .then((idx) => new Map((idx.items ?? []).map((e) => [e.path, e])))
+      .then((idx) => {
+        const items = Array.isArray(idx) ? idx : (idx.items ?? []);
+        const entries = items
+          .map((e) => (typeof e === 'string' ? { path: e } : e))
+          .filter((e) => typeof e?.path === 'string')
+          .map((e) => ({ ...e, path: e.path.replace(/^\/+/, '') }));
+        return new Map(entries.map((e) => [e.path, e]));
+      })
+      .catch((err) => {
+        if (err instanceof StorageError && err.code === 'NotFound') return new Map();
+        throw err;
+      })
       .catch((err) => {
         indexPromise = undefined;
         throw err;
