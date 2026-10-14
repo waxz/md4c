@@ -128,3 +128,10 @@ textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
   textarea, .preview { min-height: 280px; }
   .post-head h1 { font-size: 1.6rem; }
 }
+
+/* Admin */
+.badge { font-size: .75rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--warning); color: var(--bg); }
+.login { max-width: 360px; display: grid; gap: 12px; }
+.login label { display: grid; gap: 4px; font-size: .85rem; color: var(--muted); }
+input[type=password] { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; width: 100%; }
+nav button.link { font-size: 1rem; text-decoration: none; }

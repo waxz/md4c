@@ -4,7 +4,7 @@ date: 2026-10-13
 tags: meta, wasm, storage
 ---
 
-This blog has three layers.
+This blog has four layers.
 
 ## 1. MD4C as WebAssembly
 
@@ -23,15 +23,22 @@ int md4c_wasm_to_html(const char* input, unsigned input_size,
 The native `md2html` reads and writes files with stdio. A browser has no
 files, so `wasm/js/md4c-fs.js` provides `readFile`, `writeFile`, `readdir`
 and `convertFile` on top of [storagesdk](https://github.com/storagesdk/storagesdk).
-The bundled IndexedDB adapter keeps everything local, but any storagesdk
-adapter (S3, R2, WebDAV, …) can be swapped in.
+Here it talks to the blog server through an HTTP adapter; the server keeps
+the files on disk with storagesdk's filesystem adapter.
 
-| Path               | Contents                         |
-|--------------------|----------------------------------|
-| `posts/<slug>.md`  | Markdown source with front matter |
-| `html/<slug>.html` | Rendered HTML, refreshed on save  |
+| Path               | Who can read it       |
+|--------------------|-----------------------|
+| `posts/<slug>.md`  | everyone              |
+| `drafts/<slug>.md` | the admin only        |
 
-## 3. The blog itself
+## 3. Access control
+
+The server checks every request: guests can read published posts and
+nothing else, while writes need the admin's session cookie and a CSRF
+token. Rendered HTML is cleaned by DOMPurify and the page runs under a
+strict Content-Security-Policy, so a post cannot run script.
+
+## 4. The blog itself
 
 A few hundred lines of plain JavaScript: a hash router, a post list,
 a post view and an editor with live preview.[^speed]
