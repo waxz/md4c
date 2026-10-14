@@ -283,6 +283,19 @@ describe('static pages for search engines', () => {
     assert.equal(JSON.parse(await read('index.json')).site.title, 'Test Journal', 'site settings kept');
   });
 
+  test('builds are incremental: only changed posts are re-rendered', async () => {
+    let { stdout } = await publish('--no-posts');
+    assert.match(stdout, /Incremental build: 0 page\(s\) rendered/);
+    await writeFile(join(pub(), 'posts', 'hello.md'),
+      '---\ntitle: Hello again\ndate: 2026-01-02\ntags: a\n---\n\nEdited.\n');
+    ({ stdout } = await publish('--no-posts'));
+    assert.match(stdout, /Incremental build: 1 page\(s\) rendered/);
+    assert.match(await read('posts/hello.html'), /<title>Hello again/);
+    assert.match(await read('index.html'), /Hello again/);
+    ({ stdout } = await publish('--no-posts', '--full'));
+    assert.match(stdout, /Full build: 1 page\(s\) rendered/);
+  });
+
   test('hand-written index entries can carry title, date and tags', async () => {
     const { urlAdapter: make } = await import('../js/url-adapter.js');
     const server = createServer((req, res) => {

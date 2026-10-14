@@ -1,0 +1,95 @@
+#!/usr/bin/env node
+// Local development server for the admin. NOT for production.
+//
+//   npm run build && npm run admin:dev
+//   admin:  http://127.0.0.1:8787/   (the real Worker, running in Node)
+//   blog:   http://127.0.0.1:8788/index.html  (dist/public, the "bucket")
+//
+// It stands in for Cloudflare: R2 buckets are folders (dist/public for the
+// site, dist/drafts for drafts) and Cloudflare Access is simulated by signing
+// an Access-style JWT for every request, so the Worker's real token check
+// runs. Because of that, anyone who can reach the port is "signed in": the
+// server only listens on 127.0.0.1.
+
+import { createReadStream } from 'node:fs';
+import { mkdir, readFile, stat } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { dirname, extname, join, normalize, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
+import worker from '../src/worker.js';
+import { r2Bucket } from './r2-shim.mjs';
+
+const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const dist = join(root, 'dist');
+const ADMIN_PORT = Number(process.env.ADMIN_PORT ?? 8787);
+const BLOG_PORT = Number(process.env.BLOG_PORT ?? 8788);
+const HOST = '127.0.0.1';
+const team = `http://${HOST}:${ADMIN_PORT}`;
+const EMAIL = process.env.ADMIN_EMAIL ?? 'owner@example.com';
+
+const TYPES = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif',
+  '.woff2': 'font/woff2', '.xml': 'application/xml', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
+};
+
+async function fileResponse(dir, pathname) {
+  const file = normalize(join(dir, decodeURIComponent(pathname)));
+  if (!file.startsWith(dir + sep) && file !== dir) return new Response('Forbidden', { status: 403 });
+  try {
+    let path = file;
+    if ((await stat(path)).isDirectory()) path = join(path, 'index.html');
+    return new Response(await readFile(path), { headers: { 'content-type': TYPES[extname(path)] ?? 'application/octet-stream' } });
+  } catch {
+    return new Response('Not found', { status: 404 });
+  }
+}
+
+await mkdir(join(dist, 'public'), { recursive: true });
+await mkdir(join(dist, 'drafts'), { recursive: true });
+const keys = await generateKeyPair('RS256');
+const jwk = { ...(await exportJWK(keys.publicKey)), kid: 'dev', alg: 'RS256', use: 'sig' };
+const env = {
+  SITE: r2Bucket(dist, 'public'),
+  DRAFTS: r2Bucket(dist, 'drafts'),
+  ASSETS: { fetch: (req) => fileResponse(join(dist, 'admin'), new URL(req.url).pathname) },
+  ACCESS_TEAM_DOMAIN: team,
+  ACCESS_AUD: 'local-dev',
+  ADMIN_EMAILS: EMAIL,
+  PUBLIC_URL: `http://${HOST}:${BLOG_PORT}/`,
+  MAX_UPLOAD_MB: '25',
+};
+
+async function readBody(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  return chunks.length ? Buffer.concat(chunks) : undefined;
+}
+
+createServer(async (req, res) => {
+  if (req.url === '/cdn-cgi/access/certs') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ keys: [jwk] }));
+    return;
+  }
+  // What Cloudflare Access would add after the owner signs in.
+  const token = await new SignJWT({ email: EMAIL })
+    .setProtectedHeader({ alg: 'RS256', kid: 'dev' })
+    .setIssuer(team).setAudience('local-dev').setIssuedAt().setExpirationTime('10m')
+    .sign(keys.privateKey);
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
+  headers.set('cf-access-jwt-assertion', token);
+  const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req);
+  const response = await worker.fetch(new Request(`${team}${req.url}`, { method: req.method, headers, body }), env);
+  res.writeHead(response.status, Object.fromEntries(response.headers));
+  res.end(Buffer.from(await response.arrayBuffer()));
+}).listen(ADMIN_PORT, HOST, () => console.log(`Admin (dev, auto sign-in as ${EMAIL}): http://${HOST}:${ADMIN_PORT}/`));
+
+createServer(async (req, res) => {
+  const response = await fileResponse(join(dist, 'public'), new URL(req.url, 'http://x').pathname);
+  res.writeHead(response.status, Object.fromEntries(response.headers));
+  res.end(Buffer.from(await response.arrayBuffer()));
+}).listen(BLOG_PORT, HOST, () => console.log(`Blog (dist/public): http://${HOST}:${BLOG_PORT}/index.html`));

@@ -21,6 +21,7 @@
 //   --indexnow       after publishing, notify Bing, Yandex and other
 //                    IndexNow search engines of the pages (needs site.url
 //                    and site.indexNowKey in index.json)
+//   --full           re-render every page (normally only changed posts are)
 //   --dry-run        print what would change, change nothing
 //
 // Posts with `draft: true` in their front matter are not published (and are
@@ -28,7 +29,7 @@
 //
 // Every run then rebuilds, from the posts actually in storage:
 //   index.json, index.html, posts/<slug>.html, theme.css, robots.txt, and
-//   (when site.url is set) sitemap.xml and feed.xml — see scripts/pages.mjs.
+//   (when site.url is set) sitemap.xml and feed.xml — see js/site-build.js and js/pages.js.
 //
 // Writing files straight into the bucket (dashboard, rclone, the storagesdk
 // CLI, ...) works too; run with --no-posts afterwards to rebuild the above.
@@ -41,17 +42,10 @@ import { Storage, StorageError } from '@storagesdk/core';
 import { ADAPTERS, buildAdapter, getAdapterEnvVars } from '@storagesdk/adapters';
 import { contentTypeFor } from '../js/md4c-fs.js';
 import { loadMd4c } from '../js/md4c.js';
-import { linkPostsForStaticPage, PARSER_FLAGS } from '../js/blog-render.js';
-import { isDraft, parseFrontMatter, postMetadata, SLUG_RE } from '../js/post-format.js';
-import { normalizeSite } from '../blog/theme.js';
-import { atomFeed, homePage, postPage, robotsTxt, siteRelative, sitemap, themeCss } from './pages.mjs';
+import { isDraft, parseFrontMatter, SLUG_RE } from '../js/post-format.js';
+import { build, CACHE_FILES, listAll } from '../js/site-build.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const INDEX = 'index.json';
-// Short lifetimes let Cloudflare's edge serve repeat reads (fewer R2
-// operations) while new posts still show up within minutes.
-const CACHE_FILES = 'public, max-age=300';
-const CACHE_INDEX = 'public, max-age=60';
 
 const { values: args } = parseArgs({
   options: {
@@ -62,6 +56,7 @@ const { values: args } = parseArgs({
     prune: { type: 'boolean', default: false },
     config: { type: 'string' },
     indexnow: { type: 'boolean', default: false },
+    full: { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -87,16 +82,6 @@ async function openStorage(name) {
   return new Storage({ adapter: await buildAdapter(name) });
 }
 
-async function listAll(storage, prefix) {
-  const out = [];
-  let cursor;
-  do {
-    const page = await storage.list({ prefix, ...(cursor ? { cursor } : {}) });
-    out.push(...page.items);
-    cursor = page.cursor;
-  } while (cursor);
-  return out;
-}
 
 async function* walk(dir) {
   for (const ent of await readdir(dir, { withFileTypes: true })) {
@@ -171,100 +156,14 @@ async function readJsonObject(text, what) {
   return value;
 }
 
-/** The "site" section: --config file, else what index.json has, else the sample. */
-async function siteSection(storage) {
-  if (args.config) return readJsonObject(await readFile(resolve(args.config), 'utf8'), args.config);
+/** --config replaces the "site" section; blog/site.json seeds it on first publish. */
+async function siteOptions() {
+  if (args.config) return { site: await readJsonObject(await readFile(resolve(args.config), 'utf8'), args.config) };
   try {
-    const current = JSON.parse(await storage.download(INDEX, { as: 'text' }));
-    if (current && !Array.isArray(current) && current.site) return current.site;
-  } catch (err) {
-    if (!(err instanceof StorageError && err.code === 'NotFound') && !(err instanceof SyntaxError)) throw err;
-  }
-  try {
-    return await readJsonObject(await readFile(join(root, 'blog', 'site.json'), 'utf8'), 'blog/site.json');
+    return { defaultSite: await readJsonObject(await readFile(join(root, 'blog', 'site.json'), 'utf8'), 'blog/site.json') };
   } catch {
-    return undefined;
+    return {};
   }
-}
-
-/** Validated site settings; site-own URLs kept relative to the site root. */
-function siteSettings(raw) {
-  const placeholder = 'https://site.invalid/';
-  const site = normalizeSite(raw, placeholder);
-  const base = site.url || placeholder;
-  const again = site.url ? normalizeSite(raw, base) : site;
-  again.backgroundImage = siteRelative(again.backgroundImage, base);
-  again.stylesheet = siteRelative(again.stylesheet, base);
-  return again;
-}
-
-/**
- * Rebuild everything derived from the posts actually in storage:
- * index.json, the static pages, feed, sitemap and robots.txt.
- */
-async function build(storage, md4c) {
-  const rawSite = await siteSection(storage);
-  const site = siteSettings(rawSite);
-  if (!site.url) {
-    console.warn('note: set "url" in index.json\'s "site" section (e.g. "https://blog.example.com/")\n' +
-      '      to get canonical links, social previews, sitemap.xml and feed.xml.');
-  }
-  const render = (md) => md4c.toHtml(md, { parserFlags: PARSER_FLAGS });
-  const stored = await listAll(storage, 'posts/');
-  const items = [];
-  const posts = [];
-  const htmlBySlug = new Map();
-
-  for (const item of stored) {
-    const m = /^posts\/(.+)\.md$/.exec(item.path);
-    if (!m || !SLUG_RE.test(m[1])) continue;
-    const slug = m[1];
-    const full = await storage.download(item.path);
-    const source = new TextDecoder().decode(full.body);
-    const { meta, body } = parseFrontMatter(source);
-    if (isDraft(meta)) {
-      console.warn(`warning: ${item.path} is a draft but publicly readable in storage`);
-      continue;
-    }
-    const metadata = postMetadata(source, render, slug);
-    const page = `posts/${slug}.html`;
-    const html = linkPostsForStaticPage(render(body));
-    htmlBySlug.set(slug, html);
-    posts.push({ slug, page, ...metadata });
-    items.push({
-      path: item.path,
-      page,
-      size: full.size,
-      contentType: 'text/markdown; charset=utf-8',
-      etag: full.etag,
-      lastModified: full.lastModified.toISOString(),
-      metadata,
-    });
-    await upload(storage, page, postPage(site, posts.at(-1), html), 'text/html; charset=utf-8');
-  }
-
-  // Pages whose Markdown is gone (deleted, pruned or turned into a draft).
-  for (const item of stored) {
-    const m = /^posts\/(.+)\.html$/.exec(item.path);
-    if (m && !htmlBySlug.has(m[1])) await remove(storage, item.path);
-  }
-
-  posts.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.title.localeCompare(b.title)));
-  const index = {
-    version: 1,
-    generated: new Date().toISOString(),
-    ...(rawSite ? { site: rawSite } : {}),
-    items,
-  };
-  await upload(storage, INDEX, `${JSON.stringify(index, null, 2)}\n`, 'application/json', CACHE_INDEX);
-  await upload(storage, 'index.html', homePage(site, posts), 'text/html; charset=utf-8', CACHE_INDEX);
-  await upload(storage, 'theme.css', themeCss(site), 'text/css; charset=utf-8');
-  await upload(storage, 'robots.txt', robotsTxt(site), 'text/plain; charset=utf-8');
-  if (site.url) {
-    await upload(storage, 'sitemap.xml', sitemap(site, posts), 'application/xml', CACHE_INDEX);
-    await upload(storage, 'feed.xml', atomFeed(site, posts, htmlBySlug), 'application/atom+xml', CACHE_INDEX);
-  }
-  return { site, posts };
 }
 
 /** Tell IndexNow engines (Bing, Yandex, Seznam, Naver, ...) about our pages. */
@@ -299,7 +198,12 @@ if (!args['no-posts']) await uploadPosts(storage, resolve(args.posts));
 if (dry) {
   console.log('Done (dry run): index.json and pages would be rebuilt.');
 } else {
-  const { site, posts } = await build(storage, md4c);
+  const { site, posts, rendered, removed, full } = await build(storage, md4c, {
+    ...(await siteOptions()),
+    full: args.full,
+    log: (msg) => (msg.startsWith('upload') || msg.startsWith('delete') ? log(msg) : console.warn(msg)),
+  });
+  console.log(`${full ? 'Full' : 'Incremental'} build: ${rendered.length} page(s) rendered, ${removed.length} removed.`);
   if (args.indexnow) await indexNow(storage, site, posts);
-  console.log(`Done: ${posts.length} published post(s) in ${INDEX}.`);
+  console.log(`Done: ${posts.length} published post(s) in index.json.`);
 }

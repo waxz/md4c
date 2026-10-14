@@ -17,8 +17,8 @@
 // The same app.js then upgrades each page in the browser (filters on the
 // home page; contents, figures, math and citation on articles).
 
-import { parseTags } from '../js/post-format.js';
-import { siteLinkHref } from '../blog/theme.js';
+import { parseTags } from './post-format.js';
+import { siteLinkHref } from './site-config.js';
 
 export const CSP =
   "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; font-src 'self'; " +

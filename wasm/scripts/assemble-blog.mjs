@@ -1,7 +1,7 @@
 // Assemble the static blog site into dist/blog/:
 //
 //   dist/blog/            <- blog/*            (scripts, styles; not the posts)
-//   dist/blog/index.html, theme.css <- scripts/pages.mjs with blog/site.json
+//   dist/blog/index.html, theme.css <- js/pages.js with blog/site.json
 //                                      (publish.mjs regenerates them with posts)
 //   dist/blog/lib/        <- js/*.js + dist/md4c.wasm
 //   dist/blog/vendor/storagesdk-core/  <- @storagesdk/core ESM build
@@ -12,10 +12,11 @@
 // Bare imports ("@storagesdk/core") are rewritten to relative paths so the
 // page needs no inline import map, which a strict CSP would block.
 // Upload the result with scripts/publish.mjs --site, or host it anywhere.
+// Also assembles the admin app into dist/admin/ (see admin/README.md).
 
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { normalizeSite } from '../blog/theme.js';
-import { homePage, siteRelative, themeCss } from './pages.mjs';
+import { homePage, themeCss } from '../js/pages.js';
+import { siteSettings } from '../js/site-build.js';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,10 +94,20 @@ await cp(join(katexDir, 'dist', 'fonts'), join(katexOut, 'fonts'), {
 
 // A starter home page and theme (no posts yet); publish.mjs rebuilds both.
 const rawSite = JSON.parse(await readFile(join(root, 'blog', 'site.json'), 'utf8'));
-const site = normalizeSite(rawSite, 'https://site.invalid/');
-site.backgroundImage = siteRelative(site.backgroundImage, 'https://site.invalid/');
-site.stylesheet = siteRelative(site.stylesheet, 'https://site.invalid/');
+const site = siteSettings(rawSite);
 await writeFile(join(out, 'index.html'), homePage(site, []));
 await writeFile(join(out, 'theme.css'), themeCss(site));
 
 console.log(`Blog assembled in ${out}`);
+
+// The admin app (admin/ui) served by the admin Worker: shares the blog's
+// lib/, vendor/, renderer and stylesheet (for previews in the blog's theme)
+// and the Worker's path rules.
+const adminOut = join(root, 'dist', 'admin');
+await rm(adminOut, { recursive: true, force: true });
+await cp(join(root, 'admin', 'ui'), adminOut, { recursive: true });
+await cp(join(out, 'lib'), join(adminOut, 'lib'), { recursive: true });
+await cp(join(out, 'vendor'), join(adminOut, 'vendor'), { recursive: true });
+for (const f of ['render.js', 'style.css']) await cp(join(root, 'blog', f), join(adminOut, f));
+await cp(join(root, 'admin', 'src', 'paths.js'), join(adminOut, 'paths.js'));
+console.log(`Admin app assembled in ${adminOut}`);

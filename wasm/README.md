@@ -19,8 +19,9 @@ wasm/
 │   └── post-format.js  front matter parsing shared by blog and publish script
 ├── blog/               the blog front end (app.js, render.js, theme.js, style.css),
 │                       site.json, sample posts
+├── admin/              admin Worker + app: edit and publish from a phone (admin/README.md)
 ├── scripts/            assemble-blog.mjs (build the site), publish.mjs (owner's tool),
-│                       pages.mjs (pre-rendered pages, sitemap, feed)
+│                       (the build itself: js/site-build.js + js/pages.js)
 └── test/               Node tests + an md2html-compatible CLI for the test suites
 ```
 
@@ -231,6 +232,15 @@ machine. They rely on the CSP rather than DOMPurify: no inline script,
 event handlers or `javascript:` URLs, and no frames from other origins.
 Posts rendered live in the browser (`#/post/<slug>`, before a rebuild)
 still go through DOMPurify.
+
+### Editing from a phone
+
+`admin/` adds an admin app on its own hostname, behind Cloudflare Access.
+It has a folder explorer, a Markdown editor with live preview in the blog's
+theme, photo upload, drafts in a private bucket, and publishing. It runs the
+same site build in the browser, while a small Worker checks every write: the
+Access identity, allowed paths, create-or-update preconditions, and file,
+folder and slug conflicts. See [admin/README.md](admin/README.md).
 
 ### Hosting on Cloudflare R2
 

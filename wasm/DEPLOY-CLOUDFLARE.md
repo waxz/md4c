@@ -305,6 +305,15 @@ Tips:
 - Pages are cached for 5 minutes and the sitemap for 1 minute (see step 7),
   so crawlers see updates quickly.
 
+## 9. Edit from your phone (optional)
+
+`admin/` holds a small admin app for writing, editing and publishing from any
+device, with a folder explorer, editor, live preview and photo upload. It
+runs as a Cloudflare Worker on `admin.blog.example.com`, protected by
+Cloudflare Access, and keeps drafts in a private second bucket. Readers keep
+reading the public bucket directly. Setup takes about ten minutes; see
+[admin/README.md](admin/README.md).
+
 ## Reading posts from a bucket on another domain
 
 The setup above serves the site and the posts from the same bucket and
