@@ -10,10 +10,14 @@
 //                    adapter's env vars, e.g. R2_BUCKET, R2_ACCOUNT_ID,
 //                    R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY. For "fs",
 //                    FS_ROOT/FS_FOLDER default to dist/ and "public".
-//   --posts <dir>    upload the Markdown posts in <dir> (default blog/posts)
+//   --posts <dir>    upload the Markdown posts in <dir> (default blog/posts),
+//                    plus any images and other files next to them
 //   --no-posts       do not upload posts; only rebuild index.json
 //   --site           also upload the site itself (dist/blog; run the build first)
 //   --prune          delete published posts that are not in <dir>
+//   --config <file>  set index.json's "site" section (title, slogan, theme,
+//                    ...) from a JSON file. Without it the existing section
+//                    is kept; on first publish blog/site.json is used.
 //   --dry-run        print what would change, change nothing
 //
 // Posts with `draft: true` in their front matter are not published (and are
@@ -47,6 +51,7 @@ const { values: args } = parseArgs({
     'no-posts': { type: 'boolean', default: false },
     site: { type: 'boolean', default: false },
     prune: { type: 'boolean', default: false },
+    config: { type: 'string' },
     'dry-run': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -112,7 +117,12 @@ async function uploadSite(storage) {
 async function uploadPosts(storage, dir) {
   const published = new Set();
   for (const name of (await readdir(dir)).sort()) {
-    if (!name.endsWith('.md')) continue;
+    if (name.startsWith('.')) continue;
+    if (!name.endsWith('.md')) {
+      // Images and other assets live next to the posts that use them.
+      await upload(storage, `posts/${name}`, await readFile(join(dir, name)), contentTypeFor(name));
+      continue;
+    }
     const slug = name.slice(0, -3);
     if (!SLUG_RE.test(slug)) {
       console.warn(`skip ${name}: file names must be lowercase letters, digits and dashes`);
@@ -130,7 +140,7 @@ async function uploadPosts(storage, dir) {
   }
   if (args.prune) {
     for (const item of await listAll(storage, 'posts/')) {
-      if (!published.has(item.path)) await remove(storage, item.path);
+      if (item.path.endsWith('.md') && !published.has(item.path)) await remove(storage, item.path);
     }
   }
 }
@@ -145,8 +155,31 @@ async function exists(storage, path) {
   }
 }
 
+async function readJsonObject(text, what) {
+  const value = JSON.parse(text);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${what} must be a JSON object`);
+  return value;
+}
+
+/** The "site" section: --config file, else what index.json has, else the sample. */
+async function siteSection(storage) {
+  if (args.config) return readJsonObject(await readFile(resolve(args.config), 'utf8'), args.config);
+  try {
+    const current = JSON.parse(await storage.download(INDEX, { as: 'text' }));
+    if (current && !Array.isArray(current) && current.site) return current.site;
+  } catch (err) {
+    if (!(err instanceof StorageError && err.code === 'NotFound') && !(err instanceof SyntaxError)) throw err;
+  }
+  try {
+    return await readJsonObject(await readFile(join(root, 'blog', 'site.json'), 'utf8'), 'blog/site.json');
+  } catch {
+    return undefined;
+  }
+}
+
 /** Rebuild index.json from the posts that are actually in storage. */
 async function writeIndex(storage, md4c) {
+  const site = await siteSection(storage);
   const render = (md) => md4c.toHtml(md, { parserFlags: Dialect.GITHUB });
   const items = [];
   for (const item of await listAll(storage, 'posts/')) {
@@ -167,7 +200,12 @@ async function writeIndex(storage, md4c) {
       metadata: postMetadata(source, render, m[1]),
     });
   }
-  const index = { version: 1, generated: new Date().toISOString(), items };
+  const index = {
+    version: 1,
+    generated: new Date().toISOString(),
+    ...(site ? { site } : {}),
+    items,
+  };
   await upload(storage, INDEX, `${JSON.stringify(index, null, 2)}\n`, 'application/json', CACHE_INDEX);
   return items.length;
 }

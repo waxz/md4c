@@ -1,0 +1,20 @@
+{
+  "title": "Notes on Computation",
+  "slogan": "Essays on parsing, compilers and the web platform",
+  "author": "Your Name",
+  "description": "A journal of essays on Markdown, parsing and WebAssembly.",
+  "theme": "academic",
+  "colorScheme": "auto",
+  "accent": "#8b1e2d",
+  "backgroundImage": "",
+  "backgroundMode": "hero",
+  "numberedHeadings": true,
+  "toc": true,
+  "citation": true,
+  "math": true,
+  "footer": "© 2026 Your Name · Text licensed under CC BY 4.0",
+  "links": [
+    { "label": "About", "href": "#/post/welcome" },
+    { "label": "Colophon", "href": "#/post/how-it-works" }
+  ]
+}

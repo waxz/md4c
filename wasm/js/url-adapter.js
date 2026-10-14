@@ -21,6 +21,9 @@
 //
 // A missing index.json just lists nothing; download() works without it.
 //
+// Other top-level fields (such as the blog's "site" settings) are kept and
+// available through `adapter.raw.document()`.
+//
 //   const storage = new Storage({ adapter: urlAdapter({ baseUrl: 'https://pub-xxxx.r2.dev/' }) });
 
 import { defineAdapter, StorageError } from '@storagesdk/core/adapter';
@@ -65,6 +68,7 @@ export function urlAdapter(opts = {}) {
   const indexPath = opts.indexPath ?? 'index.json';
   const doFetch = opts.fetch ?? ((...a) => fetch(...a));
   let indexPromise;
+  let indexDocument = {};
 
   const fileUrl = (path) =>
     new URL(checkPath(path).split('/').map(encodeURIComponent).join('/'), base).href;
@@ -86,6 +90,7 @@ export function urlAdapter(opts = {}) {
     indexPromise ??= get(indexPath, signal)
       .then((res) => res.json())
       .then((idx) => {
+        indexDocument = Array.isArray(idx) ? { items: idx } : (idx ?? {});
         const items = Array.isArray(idx) ? idx : (idx.items ?? []);
         const entries = items
           .map((e) => (typeof e === 'string' ? { path: e } : e))
@@ -106,7 +111,15 @@ export function urlAdapter(opts = {}) {
 
   const adapter = defineAdapter({
     name: 'url',
-    raw: { baseUrl: base.href, refresh: () => { indexPromise = undefined; } },
+    raw: {
+      baseUrl: base.href,
+      refresh: () => { indexPromise = undefined; },
+      /** The whole parsed index.json ({} when there is none). */
+      document: async (signal) => {
+        await loadIndex(signal);
+        return indexDocument;
+      },
+    },
 
     async download(path, o) {
       const res = await get(path, o?.signal);

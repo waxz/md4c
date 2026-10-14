@@ -11,8 +11,8 @@ operations. The free tier includes 10 million reads a month.
 https://blog.example.com/            (R2 bucket behind a custom domain)
 ├── index.html  app.js  config.js  style.css
 ├── lib/        md4c.js  md4c.wasm  md4c-fs.js  url-adapter.js  post-format.js
-├── vendor/     storagesdk-core/  dompurify/
-├── index.json  the list of posts
+├── vendor/     storagesdk-core/  dompurify/  katex/  source-serif-4/
+├── index.json  site settings (title, theme, ...) and the list of posts
 └── posts/      hello.md  trip.md  trip-photo.png ...
 ```
 
@@ -117,7 +117,77 @@ two ways:
 To remove a post, delete its file and its line in `index.json`, or delete
 the file and rerun `--no-posts`.
 
-## 5. Make `/` open the blog (optional)
+## 5. Customise the look
+
+The `site` section of `index.json` sets the blog's appearance. Edit it in
+the bucket like any other file; readers see the change on their next visit.
+Every field is optional:
+
+```json
+{
+  "site": {
+    "title": "Notes on Computation",
+    "slogan": "Essays on parsing, compilers and the web platform",
+    "author": "Your Name",
+    "description": "Shown to search engines and link previews.",
+    "theme": "academic",
+    "colorScheme": "auto",
+    "accent": "#8b1e2d",
+    "font": "serif",
+    "backgroundImage": "assets/header.jpg",
+    "backgroundMode": "hero",
+    "stylesheet": "assets/custom.css",
+    "numberedHeadings": true,
+    "toc": true,
+    "citation": true,
+    "math": true,
+    "footer": "© 2026 Your Name · Text licensed under CC BY 4.0",
+    "links": [ { "label": "About", "href": "#/post/about" } ]
+  },
+  "items": ["posts/hello.md", "posts/kyoto.md"]
+}
+```
+
+| Field | Values |
+|---|---|
+| `theme` | `academic` (default): journal-style serif typography. `modern`: plain sans-serif. |
+| `colorScheme` | `auto` (follow the reader's system), `light` or `dark` |
+| `accent` | any CSS colour, used for links and highlights |
+| `font` | `serif` or `sans`; the default depends on the theme |
+| `backgroundImage` | image URL, relative to the bucket. `backgroundMode` is `hero` (a banner behind the title) or `page` (the whole page, with the text on a paper card). |
+| `stylesheet` | your own CSS file in the bucket, loaded after the built-in styles |
+| `numberedHeadings` | number sections 1, 1.1, … (posts that number their own headings keep their numbers) |
+| `toc` | show a "Contents" box on posts with three or more sections |
+| `citation` | show a "How to cite" box with a reference and BibTeX |
+| `math` | typeset `$…$` and `$$…$$` with KaTeX, loaded only on posts that use them |
+| `links` | extra navigation links: `#/post/<slug>` or an http(s) URL |
+
+Values are validated in the browser. Unknown or malformed values fall back
+to the defaults, and text is never treated as HTML. Only http(s) URLs are
+used. Nothing is applied as inline style markup, so the strict
+Content-Security-Policy stays in force.
+
+The `academic` theme is laid out like a journal:
+- small-caps masthead;
+- article list with dates, abstracts and keywords;
+- centred titles with author, date and reading time;
+- numbered sections and a contents box;
+- an image on its own line becomes a numbered figure, with its alt text as
+  the caption;
+- tables with rules above, below and under the header only (booktabs
+  style);
+- footnotes collected as notes;
+- a citation box;
+- clean print styles.
+
+It uses Source Serif 4. The font and KaTeX are served from the same bucket,
+so readers never contact a third-party CDN.
+
+`publish.mjs` keeps the `site` section when it rebuilds `index.json`. Use
+`--config site.json` to replace it from a local file. On the first publish
+it starts from `blog/site.json`.
+
+## 6. Make `/` open the blog (optional)
 
 R2 doesn't serve `index.html` for `/`, so the blog lives at
 `https://blog.example.com/index.html`. To make the bare domain work, add a
@@ -128,7 +198,7 @@ Cloudflare's configuration, not as code you deploy.
   match requests where *URI Path* equals `/`.
 - Set the path to rewrite statically to `/index.html`.
 
-## 6. Cache at the edge (optional)
+## 7. Cache at the edge (optional)
 
 Cloudflare caches `.js`, `.css` and images from your custom domain
 automatically. It doesn't cache `.html`, `.json`, `.md` or `.wasm` by

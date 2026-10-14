@@ -169,6 +169,30 @@ describe('publish + read-only URL access', () => {
     }
   });
 
+  test('index.json "site" settings survive reindexing; --config replaces them', async () => {
+    const indexFile = join(dir, 'public', 'index.json');
+    let index = JSON.parse(await readFile(indexFile, 'utf8'));
+    assert.equal(typeof index.site?.title, 'string', 'seeded from blog/site.json');
+
+    // The owner edits the theme directly in the bucket ...
+    index.site = { title: 'My Journal', theme: 'modern', accent: '#123456' };
+    await writeFile(indexFile, JSON.stringify(index));
+    await publish('--no-posts');
+    index = JSON.parse(await readFile(indexFile, 'utf8'));
+    assert.deepEqual(index.site, { title: 'My Journal', theme: 'modern', accent: '#123456' });
+
+    // ... or sets it from a local file.
+    const cfg = join(dir, 'site.json');
+    await writeFile(cfg, JSON.stringify({ title: 'From file', slogan: 'Hello' }));
+    await publish('--no-posts', '--config', cfg);
+    index = JSON.parse(await readFile(indexFile, 'utf8'));
+    assert.deepEqual(index.site, { title: 'From file', slogan: 'Hello' });
+
+    // The URL adapter exposes it to the page.
+    const adapter = urlAdapter({ baseUrl });
+    assert.equal((await adapter.raw.document()).site.title, 'From file');
+  });
+
   test('files written directly to storage appear after --no-posts reindex', async () => {
     const owner = new Storage({ adapter: fsAdapter({ root: dir, folder: 'public' }) });
     await owner.upload('posts/direct.md', '---\ntitle: Direct\n---\n\nWritten straight to the bucket.\n');

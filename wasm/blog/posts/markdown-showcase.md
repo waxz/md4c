@@ -49,11 +49,19 @@ console.log(md4c.toHtml('# Hello'));
 > Admonitions use GitHub's `> [!NOTE]` syntax.
 
 > [!WARNING]
-> Posts live only in this browser unless you copy them somewhere.
+> Anything uploaded to the public bucket can be read by anyone with its URL,
+> so keep drafts on your own machine.
 
-## Math spans
+## Mathematics
 
-Inline math is passed through for a client-side renderer: $e^{i\pi} + 1 = 0$.
+Inline mathematics such as $e^{i\pi} + 1 = 0$ and display equations are
+typeset with KaTeX, which is loaded only for posts that contain math:
+
+$$
+\hat{f}(\xi) = \int_{-\infty}^{\infty} f(x)\, e^{-2\pi i x \xi}\, dx
+$$
+
+The cost of parsing a document of $n$ bytes is $O(n)$ for typical input.
 
 ## Footnotes
 
