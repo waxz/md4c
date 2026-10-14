@@ -5,6 +5,33 @@ on:
   - push
 
 jobs:
+  # WebAssembly build (wasm/), tested with the same test suites as md2html.
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get install -y clang lld
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build
+        run: OPTFLAGS='-O2 -Werror' sh wasm/build.sh
+      - name: Test spec suites
+        run: |
+          for suite in test/*.txt; do
+            python3 test/run-testsuite.py -s "$suite" -p "$PWD/wasm/test/md2html-wasm.mjs" || exit 1
+          done
+          python3 test/pathological-tests.py -p "$PWD/wasm/test/md2html-wasm.mjs"
+      - name: Test JavaScript wrappers
+        working-directory: wasm
+        run: |
+          npm ci
+          npm test
+          node scripts/assemble-blog.mjs
+
   # Linux builds.
   #
   # gcc sometimes warns (e.g. about potentially uninitialized variables) only

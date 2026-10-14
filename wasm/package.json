@@ -1,0 +1,23 @@
+{
+  "name": "md4c-wasm",
+  "version": "0.6.0",
+  "private": true,
+  "description": "MD4C compiled to WebAssembly, a storagesdk-backed browser file system, and a demo blog.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build:wasm": "sh build.sh",
+    "build": "sh build.sh && node scripts/assemble-blog.mjs",
+    "serve": "node scripts/serve.mjs dist/blog",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@storagesdk/core": "^0.5.0"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
