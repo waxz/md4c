@@ -40,7 +40,7 @@ bucket_name = "my-blog-drafts"
 #   npx wrangler kv namespace create blog-admin-settings
 [[kv_namespaces]]
 binding = "SETTINGS"
-id = "paste the namespace id here"
+id = "1a556bd21fac431f9aacd78a046b0b3d"
 
 [vars]
 ACCESS_TEAM_DOMAIN = "https://your-team.cloudflareaccess.com"
