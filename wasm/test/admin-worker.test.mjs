@@ -519,6 +519,26 @@ describe('publishing with files', () => {
     assert.equal((await postJson('/api/copy', { from: { store: 'site', key: 'assets/handout.html' } })).status, 400);
   });
 
+  test('a post with a password goes public only encrypted', async () => {
+    const { decryptText, protectPost, readProtected } = await import('../js/protect.js');
+    const draft = '---\ntitle: Locked\ndate: 2026-10-14\npassword: pw1\n---\n\nSecret body.\n';
+    await create('drafts', 'posts/locked.md', draft);
+    const plan = await publish('drafts', 'posts/locked.md', { dryRun: true });
+    assert.equal(plan.data.protected, true);
+    assert.equal((await publish('drafts', 'posts/locked.md')).data.code, 'needs-encryption');
+    assert.equal((await publish('drafts', 'posts/locked.md', { postBody: draft })).data.code, 'needs-encryption');
+    const envelope = await protectPost(draft, (md) => `<p>${md.trim()}</p>`);
+    const r = await publish('drafts', 'posts/locked.md', { postBody: envelope });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    const live = await read('site', 'posts/locked.md');
+    assert.ok(!live.includes('Secret') && !live.includes('pw1'));
+    assert.equal(await decryptText(readProtected(live).envelope, 'pw1'), '<p>Secret body.</p>');
+    assert.match(await read('drafts', 'posts/locked.md'), /password: pw1/, 'the draft keeps the password');
+    // Plain text with a password can't be written to the site any other way.
+    assert.equal((await create('site', 'posts/sneaky.md', draft)).data.code, 'needs-encryption');
+    assert.equal((await publish('nas', 'posts/d1x.md', { postBody: envelope })).data.code, 'bad-envelope', 'postBody only for posts with a password');
+  });
+
   test('previews read draft files, falling back to the public copy', async () => {
     const r = await call('GET', '/api/raw/nas/posts/photo.png');
     assert.equal(r.status, 200);

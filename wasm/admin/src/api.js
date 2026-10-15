@@ -17,10 +17,12 @@
 //                                               starts the draft of a published post
 //   DELETE /api/file?store=&key=                delete; If-Match optional
 //   POST   /api/move    {from, to, ifMatch}     rename, move, unpublish
-//   POST   /api/publish {from, ifMatch, siteIfMatch, overwrite, skip, dryRun}
+//   POST   /api/publish {from, ifMatch, siteIfMatch, overwrite, skip, dryRun, postBody}
 //                                               copy a draft to the site, with the files
 //                                               it uses (except `skip`); the draft stays
-//                                               (working copy). dryRun: only the plan
+//                                               (working copy). dryRun: only the plan.
+//                                               postBody: the encrypted form of a post
+//                                               with a password (made in the browser)
 //   POST   /api/copy {from, overwrite, ifMatch} copy a draft store's attachment to the
 //                                               site (same path); ifMatch = public copy
 //   POST   /api/indexnow {urls}                 notify IndexNow search engines
@@ -52,6 +54,8 @@ import {
   normalizeStore, openStore, openStores, publicStore, readSaved, STORE_TYPES,
   StoreAccessError, StoreConfigError, writeSaved,
 } from './stores.js';
+import { parseFrontMatter } from '../../js/post-format.js';
+import { PROTECTED_MARK, readProtected, wantsPassword } from '../../js/protect.js';
 
 export class ApiError extends Error {
   constructor(status, message, extra = {}) {
@@ -212,11 +216,27 @@ function storeOf(stores, id) {
   return entry;
 }
 
+/**
+ * A post with a password may only reach the site encrypted: refuse its
+ * plain text (it would be public), and anything posing as an envelope that
+ * still carries the password.
+ */
+function checkNotPlainProtected(text) {
+  const { meta } = parseFrontMatter(text);
+  if (wantsPassword(meta)) {
+    throw new ApiError(400, 'This post has a password: it must be published encrypted (publish it from the editor)', { code: 'needs-encryption' });
+  }
+  if (/^(true|yes|1)$/i.test(meta.protected ?? '') && !readProtected(text)) {
+    throw new ApiError(400, 'Not a valid encrypted post', { code: 'bad-envelope' });
+  }
+}
+
 async function writeFile(request, env, stores, entry, key, ofPublished) {
   const kind = requireWritable(entry, key);
   const ifMatch = request.headers.get('if-match');
   const ifNoneMatch = request.headers.get('if-none-match');
   const body = await readBody(request, env);
+  if (entry.role === 'site' && kind === 'content') checkNotPlainProtected(new TextDecoder().decode(body));
 
   if (ifNoneMatch === '*') {
     // The draft of a published post shares its slug with the public copy.
@@ -323,6 +343,21 @@ async function publish(request, stores) {
 
   const post = await src.store.get(from.key);
   if (!post) throw new ApiError(404, `${from.key} not found`, { code: 'not-found' });
+  // A post with a password goes public only in the encrypted form the
+  // editor made from this very draft (postBody); anything else as is.
+  let publicBody = post.body;
+  const protectedPost = wantsPassword(parseFrontMatter(new TextDecoder().decode(post.body)).meta);
+  if (body.dryRun) {
+    // Only planning: nothing is written, so no encrypted form is needed yet.
+  } else if (protectedPost) {
+    if (typeof body.postBody !== 'string' || !body.postBody.includes(PROTECTED_MARK)) {
+      throw new ApiError(400, 'This post has a password: send its encrypted form (postBody)', { code: 'needs-encryption' });
+    }
+    publicBody = new TextEncoder().encode(body.postBody).buffer;
+  } else if (body.postBody !== undefined) {
+    throw new ApiError(400, 'postBody is only for posts with a password', { code: 'bad-envelope' });
+  }
+  if (!body.dryRun) checkNotPlainProtected(new TextDecoder().decode(publicBody));
   if (body.ifMatch && stripQuotes(body.ifMatch) !== post.meta.etag) {
     throw new ApiError(412, `${from.key} was changed elsewhere since you opened it`,
       { code: 'changed', current: info(src, post.meta) });
@@ -368,6 +403,7 @@ async function publish(request, stores) {
     return json({
       dryRun: true,
       updated: Boolean(live),
+      protected: protectedPost,
       files: [
         ...plan.map(({ key, action, size }) => ({ key, action, size })),
         ...conflicts.map(({ key, size, reason }) => ({ key, action: 'conflict', size, reason })),
@@ -385,7 +421,7 @@ async function publish(request, stores) {
     const written = await site.store.put(step.key, step.body, putOpts(step.key, step.ifMatch));
     if (!written) throw new ApiError(412, `${step.key} changed on the site during publishing; try again`, { code: 'changed' });
   }
-  const published = await site.store.put(from.key, post.body, putOpts(from.key, live && body.siteIfMatch ? live.etag : undefined));
+  const published = await site.store.put(from.key, publicBody, putOpts(from.key, live && body.siteIfMatch ? live.etag : undefined));
   if (!published) throw new ApiError(412, `The published ${from.key} changed during publishing; try again`, { code: 'changed', published: true });
   return json({
     post: info(site, published),

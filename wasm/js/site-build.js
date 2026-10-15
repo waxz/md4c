@@ -13,11 +13,12 @@
 import { StorageError } from '@storagesdk/core';
 import { linkPostsForStaticPage, PARSER_FLAGS } from './blog-render.js';
 import { isDraft, parseFrontMatter, postMetadata, SLUG_RE } from './post-format.js';
-import { atomFeed, homePage, postPage, robotsTxt, siteRelative, sitemap, themeCss } from './pages.js';
+import { atomFeed, homePage, postPage, protectedArticle, robotsTxt, siteRelative, sitemap, themeCss } from './pages.js';
+import { readProtected, wantsPassword } from './protect.js';
 import { normalizeSite } from './site-config.js';
 
 /** Bump when js/pages.js output changes, so the next build redoes every page. */
-export const BUILD_VERSION = 3;
+export const BUILD_VERSION = 4;
 export const INDEX = 'index.json';
 export const CACHE_FILES = 'public, max-age=300';
 export const CACHE_INDEX = 'public, max-age=60';
@@ -117,17 +118,34 @@ export async function build(storage, md4c, opts = {}) {
     } else {
       const fileItem = await storage.download(item.path);
       const source = new TextDecoder().decode(fileItem.body);
-      if (isDraft(parseFrontMatter(source).meta)) {
+      const { meta } = parseFrontMatter(source);
+      if (isDraft(meta)) {
         log(`warning: ${item.path} is a draft but publicly readable in storage`);
+        continue;
+      }
+      if (wantsPassword(meta)) {
+        // Plain text with its password: never render or list it.
+        log(`warning: ${item.path} has a password but is NOT encrypted, and is publicly readable in storage. Delete it, then publish it with the admin or publish.mjs, which encrypt it.`);
         continue;
       }
       // Keep the etag `list` reports: later builds compare against list output.
       ({ size, lastModified } = fileItem);
-      metadata = postMetadata(source, render, slug);
-      const html = linkPostsForStaticPage(render(parseFrontMatter(source).body));
-      htmlBySlug.set(slug, html);
-      sources.set(slug, source);
-      await put(page, postPage(site, { slug, page, ...metadata }, html), 'text/html; charset=utf-8');
+      const locked = readProtected(source);
+      if (locked) {
+        // Only the clear fields go into index.json and the page; the text
+        // stays encrypted until a reader types the password.
+        metadata = postMetadata(source, () => '', slug);
+        delete metadata.description;
+        delete metadata.image;
+        metadata.protected = 'true';
+        await put(page, postPage(site, { slug, page, ...metadata }, protectedArticle(locked.envelope)), 'text/html; charset=utf-8');
+      } else {
+        metadata = postMetadata(source, render, slug);
+        const html = linkPostsForStaticPage(render(parseFrontMatter(source).body));
+        htmlBySlug.set(slug, html);
+        sources.set(slug, source);
+        await put(page, postPage(site, { slug, page, ...metadata }, html), 'text/html; charset=utf-8');
+      }
       rendered.push(slug);
     }
     posts.push({ slug, page, ...metadata });
@@ -157,7 +175,7 @@ export async function build(storage, md4c, opts = {}) {
 
   // The feed carries full text for the newest posts; render any not done above.
   for (const p of posts.slice(0, FEED_ENTRIES)) {
-    if (htmlBySlug.has(p.slug)) continue;
+    if (htmlBySlug.has(p.slug) || p.protected) continue;
     const source = sources.get(p.slug) ?? await storage.download(`posts/${p.slug}.md`, { as: 'text' });
     htmlBySlug.set(p.slug, linkPostsForStaticPage(render(parseFrontMatter(source).body)));
   }

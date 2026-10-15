@@ -326,3 +326,71 @@ describe('static pages for search engines', () => {
     }
   });
 });
+
+describe('password-protected posts', () => {
+  let dir;
+  const pub = () => join(dir, 'public');
+  const read = (p) => readFile(join(pub(), p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+  const SECRET = 'The launch code is 4242';
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-protected-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({ title: 'Locked Journal', url: 'https://blog.example.com' }));
+    await writeFile(join(dir, 'posts', 'vault.md'),
+      `---\ntitle: The Vault\ndate: 2026-03-04\ntags: private\ndescription: ${SECRET} (summary)\npassword: open sesame\n---\n\n${SECRET}, see **notes**.\n`);
+    await writeFile(join(dir, 'posts', 'open.md'), '---\ntitle: Open\ndate: 2026-03-01\n---\n\nPublic text.\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('encryption round-trips, and a wrong password fails', async () => {
+    const { decryptText, encryptText, WrongPasswordError } = await import('../js/protect.js');
+    const env = await encryptText('héllo <b>world</b>', 'pässword');
+    assert.equal(env.iter, 600000);
+    assert.equal(await decryptText(env, 'pässword'), 'héllo <b>world</b>');
+    await assert.rejects(decryptText(env, 'wrong'), WrongPasswordError);
+    const again = await encryptText('héllo <b>world</b>', 'pässword');
+    assert.notEqual(again.ct, env.ct, 'fresh salt and IV each time');
+  });
+
+  test('nothing secret reaches the public bucket', async () => {
+    for (const f of ['posts/vault.md', 'posts/vault.html', 'index.json', 'index.html', 'feed.xml', 'sitemap.xml']) {
+      const text = await read(f);
+      assert.ok(!text.includes('4242'), `${f} leaks the text`);
+      assert.ok(!text.includes('open sesame'), `${f} leaks the password`);
+    }
+    const md = await read('posts/vault.md');
+    assert.match(md, /title: The Vault/);
+    assert.match(md, /protected: true/);
+    assert.doesNotMatch(md, /description:/, 'the description could tell too much');
+    const entry = JSON.parse(await read('index.json')).items.find((e) => e.path === 'posts/vault.md');
+    assert.equal(entry.metadata.protected, 'true');
+    assert.equal(entry.metadata.excerpt, '');
+    assert.doesNotMatch(await read('sitemap.xml'), /vault/);
+    assert.match(await read('index.html'), /Password-protected/);
+  });
+
+  test('the page carries the encrypted article and unlocks with the password', async () => {
+    const { decryptText } = await import('../js/protect.js');
+    const html = await read('posts/vault.html');
+    assert.match(html, /<meta name="robots" content="noindex">/);
+    assert.match(html, /class="unlock"/);
+    const attr = /data-envelope="([^"]+)"/.exec(html)[1]
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const article = await decryptText(JSON.parse(attr), 'open sesame');
+    assert.match(article, /The launch code is 4242, see <strong>notes<\/strong>/);
+  });
+
+  test('a post with a password found in plain text is never rendered', async () => {
+    await writeFile(join(pub(), 'posts', 'leak.md'), '---\ntitle: Leak\ndate: 2026-03-05\npassword: x\n---\n\nOops 4242.\n');
+    const { stderr } = await publish('--no-posts');
+    assert.match(stderr, /leak\.md has a password but is NOT encrypted/);
+    await assert.rejects(read('posts/leak.html'));
+    assert.ok(!(await read('index.json')).includes('Oops'));
+  });
+});

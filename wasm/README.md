@@ -126,6 +126,9 @@ node scripts/publish.mjs --help
 
 - Posts with `draft: true` in the front matter are never uploaded. If one
   was published before, it is deleted from storage.
+- Posts with `password: …` in the front matter are uploaded encrypted
+  (`js/protect.js`). Readers type the password on the post's page to read
+  it; see "Password-protected posts" in DEPLOY-CLOUDFLARE.md.
 - You can also write files into the bucket directly, with the Cloudflare
   dashboard, `rclone`, the storagesdk CLI or anything else. Run
   `--no-posts` afterwards so `index.json` lists them.

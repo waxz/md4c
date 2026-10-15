@@ -9,6 +9,8 @@
 
 import { api, ApiError } from './client.js';
 import { parseFrontMatter, SLUG_RE } from './lib/post-format.js';
+import { linkPostsForStaticPage, PARSER_FLAGS } from './lib/blog-render.js';
+import { digest, protectPost, readProtected } from './lib/protect.js';
 import { slugify } from './lib/blog-render.js';
 import { finishArticle, renderLive } from './render.js';
 import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
@@ -17,7 +19,7 @@ import {
   storeLabel, toast,
 } from './shared.js';
 
-const KNOWN = ['title', 'date', 'tags', 'description', 'image'];
+const KNOWN = ['title', 'date', 'tags', 'description', 'image', 'password'];
 let current = null; // the open editor, for the leave-page guard
 
 export function hasUnsavedChanges() {
@@ -36,6 +38,7 @@ function compose(fields, extra, body) {
   const lines = ['---', `title: ${clean(fields.title)}`, `date: ${clean(fields.date)}`, `tags: ${clean(fields.tags)}`];
   if (clean(fields.description)) lines.push(`description: ${clean(fields.description)}`);
   if (clean(fields.image)) lines.push(`image: ${clean(fields.image)}`);
+  if (clean(fields.password)) lines.push(`password: ${clean(fields.password)}`);
   for (const [k, v] of Object.entries(extra)) if (k !== 'draft') lines.push(`${k}: ${clean(v)}`);
   lines.push('---', '', body.replace(/^\s+/, ''));
   return lines.join('\n');
@@ -111,6 +114,10 @@ export async function showEditor(view, store, key, newStore) {
       }
       ({ text: source, etag } = await api.read(store, key));
       if (!direct) published = store === 'site' ? { key, etag, text: source } : await readPublished(key);
+      // A protected post's public copy is encrypted; it records a digest of
+      // the draft it was made from, so "changes not live" still works.
+      const locked = published && store !== 'site' ? readProtected(published.text) : null;
+      if (locked) published.text = locked.meta.source === await digest(source) ? source : '';
     } catch (err) {
       view.innerHTML = `<p class="error">${esc(err.message)}</p><p><a href="#/posts">Back to posts</a></p>`;
       return;
@@ -157,6 +164,7 @@ export async function showEditor(view, store, key, newStore) {
         <label class="field span-2"><span>Tags (comma separated)</span><input name="tags" autocapitalize="off"></label>
         <label class="field span-2"><span>Description for search results (optional)</span><input name="description" maxlength="300"></label>
         <label class="field span-2"><span>Social preview image (optional, e.g. photo.jpg)</span><input name="image" autocapitalize="off" spellcheck="false"></label>
+        <label class="field span-2"><span>🔒 Password (optional): readers must type it to read the post</span><input name="password" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="200"><small class="password-note"></small></label>
         ${noDraftYet && stores.length > 1 ? `<label class="field span-2"><span>Keep the draft in</span><select name="target">${stores.map((s) =>
           `<option value="${esc(s.id)}"${s.id === ed.target ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select></label>` : ''}
       </div>
@@ -194,6 +202,7 @@ export async function showEditor(view, store, key, newStore) {
   f.tags.value = meta.tags ?? '';
   f.description.value = meta.description ?? meta.summary ?? '';
   f.image.value = meta.image ?? '';
+  f.password.value = meta.password ?? '';
   f.body.value = body;
   f.target?.addEventListener('change', () => {
     ed.target = f.target.value;
@@ -202,7 +211,7 @@ export async function showEditor(view, store, key, newStore) {
   });
 
   const text = () => compose(
-    { title: f.title.value, date: f.date.value, tags: f.tags.value, description: f.description.value, image: f.image.value },
+    { title: f.title.value, date: f.date.value, tags: f.tags.value, description: f.description.value, image: f.image.value, password: f.password.value },
     extra, f.body.value
   );
   const slug = () => f.slug.value.trim();
@@ -214,8 +223,11 @@ export async function showEditor(view, store, key, newStore) {
     const badge = form.querySelector('.status-badge');
     badge.textContent = status();
     badge.dataset.status = ed.published || (direct && ed.store) ? 'published' : ed.store ? 'draft' : 'new';
-    form.querySelector('.where').textContent = direct ? ''
-      : ed.store ? `draft in ${storeLabel(ed.store)}` : `the draft will be kept in ${storeLabel(home())}`;
+    form.querySelector('.where').textContent = (f.password.value.trim() ? '🔒 ' : '') + (direct ? ''
+      : ed.store ? `draft in ${storeLabel(ed.store)}` : `the draft will be kept in ${storeLabel(home())}`);
+    form.querySelector('.password-note').textContent = direct && f.password.value.trim()
+      ? 'Password protection needs a draft store.'
+      : f.password.value.trim() ? 'Published encrypted. Only the title, date and tags stay readable; attachments are not encrypted.' : '';
   }
   function renderActions() {
     renderStatus();
@@ -414,14 +426,15 @@ export async function showEditor(view, store, key, newStore) {
    * (new files ticked; different public files unticked, ticking replaces
    * them). Returns { skip, overwrite }, or null when cancelled.
    */
-  async function chooseFiles(files) {
+  async function chooseFiles(files, locked) {
     const open = files.filter((x) => x.action === 'copy' || x.action === 'conflict');
     if (!open.length) return { skip: [], overwrite: [] };
     const body = document.createElement('div');
     body.innerHTML = `<p>This post uses these files from ${esc(storeLabel(ed.store))}. Tick the ones to copy to the public site;
       unticked files stay private (their links won't work on the blog).</p>
+      ${locked ? '<p class="warn">The post is password-protected, but its files are not encrypted: anyone with a file\'s address can open it. They are unticked.</p>' : ''}
       <ul class="file-choices">${open.map((x) => `<li><label class="check">
-        <input type="checkbox" value="${esc(x.key)}" ${x.action === 'copy' ? 'checked' : ''}>
+        <input type="checkbox" value="${esc(x.key)}" ${x.action === 'copy' && !locked ? 'checked' : ''}>
         <span><code>${esc(x.key)}</code> <span class="muted">${esc(formatSize(x.size ?? 0))}${x.action === 'conflict'
           ? ' · <b>replaces</b> a different public file' : ''}</span></span></label></li>`).join('')}</ul>`;
     const ok = await dialog({ title: 'Files to publish', body, buttons: [
@@ -440,12 +453,16 @@ export async function showEditor(view, store, key, newStore) {
     const from = { store: ed.store, key: ed.key };
     const siteEtag = () => (ed.published?.key === ed.key ? ed.published.etag : undefined);
     const plan = await api.publish(from, ed.etag, [], siteEtag(), { dryRun: true });
-    const choice = await chooseFiles(plan.files);
+    const choice = await chooseFiles(plan.files, plan.protected);
     if (!choice) return null;
+    // Encrypted here, in the browser: the password never leaves the draft.
+    const postBody = plan.protected
+      ? await protectPost(ed.saved, (md) => linkPostsForStaticPage(state.md4c.toHtml(md, { parserFlags: PARSER_FLAGS })))
+      : undefined;
     let overwrite = choice.overwrite;
     for (;;) {
       try {
-        return await api.publish(from, ed.etag, overwrite, siteEtag(), { skip: choice.skip });
+        return await api.publish(from, ed.etag, overwrite, siteEtag(), { skip: choice.skip, postBody });
       } catch (err) {
         if (!(err instanceof ApiError && err.code === 'asset-conflict')) throw err;
         const ul = document.createElement('div');
@@ -477,6 +494,10 @@ export async function showEditor(view, store, key, newStore) {
       try {
         actions.querySelectorAll('button').forEach((b) => { b.disabled = true; });
         if (direct) {
+          if (f.password.value.trim()) {
+            toast('Password protection needs a draft store (the password is kept in the draft).', 'error');
+            return;
+          }
           // No draft stores: the site copy is the only copy.
           if (!ed.store) {
             const created = await api.write('site', newKey, content, null);

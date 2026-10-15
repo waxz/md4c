@@ -175,6 +175,13 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
       figures.
     - *File* attaches anything else. Audio and video become players, and
       other files become links.
+  - **🔒 Password** (in *Title, date, tags…*): the post is published
+    encrypted, and readers type the password to read it.
+    - The password is kept only in the private draft.
+    - The editor encrypts the post in your browser before it is sent, and
+      the Worker refuses a post with a password unless it is encrypted.
+    - Attachments are not encrypted, so they are unticked when you publish.
+    - See *Password-protected posts* in `DEPLOY-CLOUDFLARE.md`.
   - **Publish** lists the files the post uses. Untick any that should stay
     private.
   - *Preview* shows the post in the blog's theme, with contents box, figures

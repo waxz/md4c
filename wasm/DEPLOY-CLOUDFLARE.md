@@ -101,8 +101,43 @@ You can upload with any tool:
   `https://<account id>.r2.cloudflarestorage.com`. rclone sets content types
   from file extensions.
 - **The publish script**, which uploads a whole folder of posts, skips
-  `draft: true` posts and rebuilds the index:
-  `node scripts/publish.mjs --to r2 --posts ~/blog-posts`.
+  `draft: true` posts, encrypts posts with a `password:` and rebuilds the
+  index: `node scripts/publish.mjs --to r2 --posts ~/blog-posts`.
+
+### Password-protected posts
+
+Add `password: <something>` to a post's front matter, and the post is
+published encrypted. This happens in the admin editor's 🔒 Password field,
+or with the publish script, which encrypts the post before uploading it.
+
+**What is public:**
+- The bucket gets only an envelope: the title, date, tags and author in
+  the clear, and the rendered article encrypted with AES-256-GCM. The key
+  comes from the password through PBKDF2-SHA256 with 600,000 iterations
+  and a random salt.
+- The post's page shows an unlock form. The reader's browser decrypts the
+  article, and remembers the password for that tab so other posts with the
+  same password open straight away.
+- The home page and the feed list the post as 🔒 Password-protected, with
+  no excerpt. The sitemap leaves it out, and the page asks search engines
+  not to index it.
+
+**What it does and doesn't protect:**
+- **No password hash is stored, on purpose.** A wrong password simply
+  fails to decrypt. A public hash would only give guessers a faster
+  target.
+- **Where the password lives.** The password stays in your private draft
+  (or your local file). To change it, edit it and publish again.
+- **It is as strong as the password.** Anyone can download the encrypted
+  page and try passwords offline, so use a long passphrase rather than a
+  short word.
+- **Attachments are not encrypted.** Images or files the post links to are
+  public if you copy them to the bucket. The admin unticks them by default
+  for protected posts.
+- **Never upload a protected post's Markdown as is**, for example with
+  rclone or the dashboard: it would be public plain text. The build refuses
+  to list such a file and warns you, but the file itself is still readable
+  until you delete it.
 
 As soon as it is uploaded, a new post can be read at
 `https://blog.example.com/index.html#/post/<slug>`, rendered live in the

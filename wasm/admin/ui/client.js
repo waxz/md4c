@@ -153,9 +153,12 @@ export const api = {
 
   /** Copy a draft to the site with the files it uses (the draft stays).
    *  `overwrite` lists public files to replace; `siteEtag` = the public copy last seen. */
-  publish(from, etag, overwrite = [], siteEtag, { skip = [], dryRun = false } = {}) {
+  publish(from, etag, overwrite = [], siteEtag, { skip = [], dryRun = false, postBody } = {}) {
     return request('POST', 'publish', {
-      body: JSON.stringify({ from, ...(etag ? { ifMatch: etag } : {}), ...(siteEtag ? { siteIfMatch: siteEtag } : {}), overwrite, skip, dryRun }),
+      body: JSON.stringify({
+        from, ...(etag ? { ifMatch: etag } : {}), ...(siteEtag ? { siteIfMatch: siteEtag } : {}), overwrite, skip, dryRun,
+        ...(postBody !== undefined ? { postBody } : {}),
+      }),
       headers: { 'content-type': 'application/json' },
     });
   },

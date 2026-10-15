@@ -11,6 +11,8 @@
 //   image: cover.jpg        (optional; social-media preview image)
 //   updated: 2026-11-02     (optional; last substantial revision)
 //   draft: true             (optional: the publish script skips drafts)
+//   password: …             (optional: published encrypted; readers need
+//                            this password, see protect.js)
 //   ---
 //
 //   Markdown body...

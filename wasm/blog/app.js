@@ -4,7 +4,8 @@
 //
 //   index.html          search, year and tag filters over index.json
 //                       (state in the URL: ?tag=…&year=…&q=…)
-//   posts/<slug>.html   contents box, figures, citation, math
+//   posts/<slug>.html   contents box, figures, citation, math; for a
+//                       password-protected post, the unlock form first
 //   index.html#/post/x  old links: go to posts/x.html, or render x.md live
 //                       if it was uploaded but not built yet
 //
@@ -16,6 +17,7 @@ import { STORAGE_URL } from './config.js';
 import { Md4cFs } from './lib/md4c-fs.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
 import { isDraft, parseFrontMatter, parseTags, postMetadata, SLUG_RE } from './lib/post-format.js';
+import { decryptText, readProtected, WrongPasswordError } from './lib/protect.js';
 import { esc, finishArticle, formatDate, renderLive } from './render.js';
 import { applySite, normalizeSite } from './theme.js';
 
@@ -36,7 +38,10 @@ async function postInfo(file) {
     try {
       const source = await fs.readFile(file.path);
       if (isDraft(parseFrontMatter(source).meta)) return null;
-      meta = { ...postMetadata(source, (md) => fs.render(md, { parserFlags: PARSER_FLAGS }), slug), ...meta };
+      const locked = readProtected(source);
+      meta = locked
+        ? { ...postMetadata(source, () => '', slug), protected: 'true', ...meta }
+        : { ...postMetadata(source, (md) => fs.render(md, { parserFlags: PARSER_FLAGS }), slug), ...meta };
     } catch {
       return null; // listed in index.json but not uploaded (yet)
     }
@@ -46,7 +51,8 @@ async function postInfo(file) {
     title: meta.title ?? slug,
     date: meta.date ?? '',
     tags: parseTags(meta.tags),
-    excerpt: meta.description || meta.excerpt || '',
+    excerpt: meta.protected === 'true' ? '' : meta.description || meta.excerpt || '',
+    protected: meta.protected === 'true',
     href: file.page ? new URL(file.page, SITE_ROOT).href : `${SITE_ROOT}index.html#/post/${slug}`,
   };
 }
@@ -95,7 +101,7 @@ function entryHtml(p) {
     <time class="sc" datetime="${esc(p.date)}">${esc(formatDate(p.date, 'short'))}</time>
     <div>
       <h2><a href="${esc(p.href)}">${esc(p.title)}</a></h2>
-      ${p.excerpt ? `<p class="abstract">${esc(p.excerpt)}</p>` : ''}
+      ${p.protected ? '<p class="abstract protected-note">🔒 Password-protected</p>' : p.excerpt ? `<p class="abstract">${esc(p.excerpt)}</p>` : ''}
       ${p.tags.length ? `<p class="keywords sc">${p.tags.map((t) => `<a href="?tag=${encodeURIComponent(t)}" data-tag="${esc(t)}">${esc(t)}</a>`).join('')}</p>` : ''}
     </div>
   </li>`;
@@ -183,7 +189,7 @@ async function showLivePost(slug) {
     throw err;
   }
   const { meta, body } = parseFrontMatter(source);
-  if (isDraft(meta)) return missing();
+  if (isDraft(meta) || readProtected(source)) return missing();
   meta.title ||= slug;
   document.title = `${meta.title} · ${site.title}`;
   const author = meta.author || site.author;
@@ -206,6 +212,65 @@ async function showLivePost(slug) {
   await finishArticle(article, site, {
     title: meta.title, date: meta.date, author: meta.author, slug,
     url: `${SITE_ROOT}index.html#/post/${slug}`,
+  });
+}
+
+/* ---------- Password-protected posts ---------- */
+
+// Passwords that unlocked a post in this tab are tried on the next protected
+// post first, so a series sharing one password asks only once.
+const UNLOCKED_KEY = 'md4c-unlocked';
+function rememberedPasswords() {
+  try {
+    const list = JSON.parse(sessionStorage.getItem(UNLOCKED_KEY) ?? '[]');
+    return Array.isArray(list) ? list.filter((p) => typeof p === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+function remember(password) {
+  try {
+    const list = [password, ...rememberedPasswords().filter((p) => p !== password)].slice(0, 10);
+    sessionStorage.setItem(UNLOCKED_KEY, JSON.stringify(list));
+  } catch {}
+}
+
+/** Resolves once the article is decrypted and shown in place of the form. */
+async function unlock(article) {
+  const box = article.querySelector('.protected');
+  const envelope = JSON.parse(box.dataset.envelope);
+  const show = (html) => {
+    const prose = article.querySelector('.prose');
+    prose.innerHTML = html; // the owner's own article, as on any other page
+    box.remove();
+  };
+  for (const password of rememberedPasswords()) {
+    try {
+      show(await decryptText(envelope, password));
+      return;
+    } catch {}
+  }
+  const form = box.querySelector('form');
+  const input = form.querySelector('input');
+  const status = form.querySelector('.unlock-status');
+  input.focus();
+  await new Promise((done) => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const button = form.querySelector('button');
+      button.disabled = true;
+      status.textContent = 'Unlocking…';
+      try {
+        const html = await decryptText(envelope, input.value);
+        remember(input.value);
+        show(html);
+        done();
+      } catch (err) {
+        status.textContent = err instanceof WrongPasswordError ? 'Wrong password. Try again.' : `Could not unlock: ${err.message}`;
+        input.select();
+        button.disabled = false;
+      }
+    });
   });
 }
 
@@ -236,6 +301,7 @@ async function main() {
 
     if (page === 'post') {
       const article = document.querySelector('article');
+      if (article.querySelector('.protected')) await unlock(article);
       const canonical = document.querySelector('link[rel="canonical"]')?.href;
       await finishArticle(article, site, { ...article.dataset, url: canonical || location.href.split('#')[0] });
       return;

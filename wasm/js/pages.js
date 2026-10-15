@@ -166,10 +166,27 @@ function entryHtml(p, root) {
   <time class="sc" datetime="${esc(p.date)}">${esc(formatDate(p.date, 'short'))}</time>
   <div>
     <h2><a href="${root}${esc(p.page)}">${esc(p.title)}</a></h2>
-    ${p.excerpt ? `<p class="abstract">${esc(p.excerpt)}</p>` : ''}
+    ${p.protected ? '<p class="abstract protected-note">🔒 Password-protected</p>' : p.excerpt ? `<p class="abstract">${esc(p.excerpt)}</p>` : ''}
     ${tags.length ? `<p class="keywords sc">${tags.map((t) => `<a href="${root}index.html?tag=${encodeURIComponent(t)}" rel="tag">${esc(t)}</a>`).join('')}</p>` : ''}
   </div>
 </li>`;
+}
+
+/**
+ * The body of a protected article: the encrypted text and an unlock form,
+ * which app.js wires up (the page's CSP allows no inline script).
+ */
+export function protectedArticle(envelope) {
+  return `<div class="protected" data-envelope="${esc(JSON.stringify(envelope))}">
+  <p>🔒 This post is password-protected.</p>
+  <form class="unlock" autocomplete="off">
+    <label for="unlock-password">Password</label>
+    <input id="unlock-password" name="password" type="password" required autocomplete="current-password">
+    <button type="submit">Unlock</button>
+    <p class="unlock-status" role="status" aria-live="polite"></p>
+  </form>
+  <noscript><p>Unlocking needs JavaScript.</p></noscript>
+</div>`;
 }
 
 /** Home page: every published article as a crawlable link, newest first, by year. */
@@ -229,10 +246,11 @@ export function postPage(site, post, html) {
   const root = '../';
   const tags = parseTags(post.tags);
   const author = post.author || site.author;
-  const description = post.description || post.excerpt || site.description;
+  const locked = post.protected === 'true';
+  const description = locked ? 'This post is password-protected.' : post.description || post.excerpt || site.description;
   const url = site.url ? abs(site, post.page) : '';
-  const image = postImage(site, post);
-  const words = html.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
+  const image = locked ? '' : postImage(site, post);
+  const words = locked ? 0 : html.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
   const scholarly = site.theme === 'academic';
   const dateSlash = post.date.replace(/-/g, '/');
 
@@ -282,7 +300,7 @@ export function postPage(site, post, html) {
 <article data-slug="${esc(post.slug)}" data-title="${esc(post.title)}" data-date="${esc(post.date)}" data-author="${esc(post.author ?? '')}">
   <header class="article-header">
     <h1 class="article-title">${esc(post.title)}</h1>
-    <p class="byline sc">${author ? `<span class="author">${esc(author)}</span> · ` : ''}<time datetime="${esc(post.date)}">${esc(formatDate(post.date))}</time>${post.updated ? ` · updated <time datetime="${esc(post.updated)}">${esc(formatDate(post.updated))}</time>` : ''} · ${Math.max(1, Math.round(words / 230))} min read</p>
+    <p class="byline sc">${author ? `<span class="author">${esc(author)}</span> · ` : ''}<time datetime="${esc(post.date)}">${esc(formatDate(post.date))}</time>${post.updated ? ` · updated <time datetime="${esc(post.updated)}">${esc(formatDate(post.updated))}</time>` : ''}${locked ? ' · 🔒' : ` · ${Math.max(1, Math.round(words / 230))} min read`}</p>
     ${tags.length ? `<p class="keywords sc">${tags.map((t) => `<a href="${root}index.html?tag=${encodeURIComponent(t)}" rel="tag">${esc(t)}</a>`).join('')}</p>` : ''}
   </header>
   <div class="prose">
@@ -293,7 +311,9 @@ ${html}
   return documentHtml({
     site, root, page: 'post',
     title: `${post.title} · ${site.title}`,
-    description, canonical: url, head, main,
+    description, canonical: url, head: locked ? '' : head, main,
+    // Search engines would only see the unlock form.
+    robots: locked ? 'noindex' : '',
   });
 }
 
@@ -308,8 +328,8 @@ export function atomFeed(site, posts, htmlBySlug) {
     <id>${escXml(url)}</id>
     <published>${p.date}T00:00:00Z</published>
     <updated>${p.updated || p.date}T00:00:00Z</updated>
-${author ? `    <author><name>${escXml(author)}</name></author>\n` : ''}${parseTags(p.tags).map((t) => `    <category term="${escXml(t)}"/>\n`).join('')}    <summary>${escXml(p.description || p.excerpt)}</summary>
-    <content type="html" xml:base="${escXml(url)}">${escXml(htmlBySlug.get(p.slug) ?? '')}</content>
+${author ? `    <author><name>${escXml(author)}</name></author>\n` : ''}${parseTags(p.tags).map((t) => `    <category term="${escXml(t)}"/>\n`).join('')}    <summary>${escXml(p.protected ? 'Password-protected' : p.description || p.excerpt)}</summary>
+    <content type="html" xml:base="${escXml(url)}">${escXml(p.protected ? '<p>This post is password-protected.</p>' : htmlBySlug.get(p.slug) ?? '')}</content>
   </entry>`;
   });
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -328,7 +348,7 @@ export function sitemap(site, posts) {
   const latest = posts.reduce((m, p) => ((p.updated || p.date) > m ? (p.updated || p.date) : m), '');
   const urls = [
     `  <url><loc>${escXml(site.url)}index.html</loc>${latest ? `<lastmod>${latest}</lastmod>` : ''}</url>`,
-    ...posts.map((p) => `  <url><loc>${escXml(abs(site, p.page))}</loc><lastmod>${p.updated || p.date}</lastmod></url>`),
+    ...posts.filter((p) => !p.protected).map((p) => `  <url><loc>${escXml(abs(site, p.page))}</loc><lastmod>${p.updated || p.date}</lastmod></url>`),
   ];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

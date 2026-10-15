@@ -413,3 +413,14 @@ main.page:focus { outline: none; }
 @media print {
   #filters { display: none; }
 }
+
+/* Password-protected posts */
+.protected { margin: 2rem 0; padding: 1.25rem 1.4rem; border: 1px solid var(--rule, #ccc); border-radius: 6px; }
+.protected p { margin: 0 0 .9rem; }
+.unlock { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; }
+.unlock label { font-weight: 600; }
+.unlock input { flex: 1 1 12rem; min-width: 0; font: inherit; padding: .45rem .6rem; border: 1px solid var(--rule, #bbb); border-radius: 4px; background: transparent; color: inherit; }
+.unlock button { font: inherit; padding: .45rem 1rem; border: 0; border-radius: 4px; background: var(--accent); color: #fff; cursor: pointer; }
+.unlock button:disabled { opacity: .6; cursor: progress; }
+.unlock-status { flex-basis: 100%; margin: 0; min-height: 1.2em; color: var(--muted); }
+.protected-note { color: var(--muted); }
