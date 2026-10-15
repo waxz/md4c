@@ -615,8 +615,11 @@ async function saveStorage(request, env, stores) {
 }
 
 /**
- * Try a store's settings: list it and, except for GitHub, write and delete
- * a file. Empty secrets of a store saved in KV keep their saved values;
+ * Try a store's settings with a full round trip on a small check file:
+ * write, look up, list, read back, delete, confirm gone. GitHub is only
+ * listed (each write would be a commit). Reports the step that failed and,
+ * for WebDAV, the exact server path, so a wrong base or folder is easy to
+ * spot. Empty secrets of a store saved in KV keep their saved values;
  * browser stores send their secrets.
  */
 async function testStorage(request, env) {
@@ -627,17 +630,29 @@ async function testStorage(request, env) {
   // secrets came from the browser, so echoing them back reveals nothing.
   if (body?.check && body.location === 'browser') return json({ ok: true, store: cfg });
   const store = await openStore(cfg, env);
+  const probe = `posts/md4c-admin-check-${Date.now()}.txt`;
+  const at = store.where ? ` (${store.where(probe)})` : '';
+  let step = 'list the drafts';
   try {
     const posts = (await store.list('posts/')).items.filter((m) => postSlug(m.key)).length;
-    // GitHub would record the check as two commits; reading is enough there.
-    if (cfg.type !== 'github') {
-      const probe = `.md4c-admin-check-${Date.now()}.txt`;
-      await store.put(probe, new TextEncoder().encode('ok').buffer, { contentType: 'text/plain; charset=utf-8' });
-      await store.delete(probe);
-    }
-    return json({ ok: true, posts, wrote: cfg.type !== 'github' });
+    if (cfg.type === 'github') return json({ ok: true, posts, wrote: false });
+    const text = `md4c admin check ${new Date().toISOString()}`;
+    step = `write a check file${at}`;
+    await store.put(probe, new TextEncoder().encode(text).buffer, { contentType: 'text/plain; charset=utf-8' });
+    step = `find the check file again${at}`;
+    if (!(await store.head(probe))) throw new Error('not found after writing it');
+    step = 'see the check file in the folder listing';
+    if (!(await store.list('posts/')).items.some((m) => m.key === probe)) throw new Error('missing from the listing');
+    step = 'read the check file back';
+    const back = await store.get(probe);
+    if (!back || new TextDecoder().decode(back.body) !== text) throw new Error('its content came back different');
+    step = `delete the check file${at}`;
+    await store.delete(probe);
+    if (await store.head(probe)) throw new Error('still there after deleting it');
+    return json({ ok: true, posts, wrote: true });
   } catch (err) {
-    return json({ ok: false, error: err.message });
+    await store.delete(probe).catch(() => {});
+    return json({ ok: false, step, error: `Could not ${step}: ${err.message}` });
   }
 }
 

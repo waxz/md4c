@@ -4,8 +4,8 @@
 // server (webdav-server) and a local Access-style JWKS endpoint.
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { createServer, request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -403,6 +403,64 @@ describe('Storage page', () => {
     const now = await call('GET', '/api/storage');
     assert.equal((await putStorage({ version: now.data.version, stores: [] })).status, 200);
     assert.ok(!(await call('GET', '/api/session')).data.stores.some((s) => s.location !== 'deploy'));
+  });
+});
+
+describe('WebDAV servers that answer differently', () => {
+  // A Nextcloud-style share (/remote.php/dav/files/me) behind a server that
+  // refuses single-file PROPFIND (Depth 0) with 403, as some NAS and Apache
+  // setups do. Listing works, so the admin must not call files missing.
+  let proxy;
+  let base;
+  const cookieFor = (list) => Buffer.from(JSON.stringify(list)).toString('base64url');
+  before(async () => {
+    const mount = join(dir, 'nc');
+    await mkdir(mount, { recursive: true });
+    await new Promise((r) => davServer.setFileSystem('/remote.php/dav/files/me', new webdav.PhysicalFileSystem(mount), () => r()));
+    proxy = createServer((req, res) => {
+      if (req.method === 'PROPFIND' && req.headers.depth === '0' && /\.[a-z0-9]+$/i.test(req.url)) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      const up = httpRequest({ host: '127.0.0.1', port: davPort, path: req.url, method: req.method, headers: req.headers }, (r) => {
+        res.writeHead(r.statusCode, r.headers);
+        r.pipe(res);
+      });
+      req.pipe(up);
+    });
+    await new Promise((r) => proxy.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${proxy.address().port}/remote.php/dav/files/me`;
+  });
+  after(() => proxy.close());
+
+  test('upload, read, update and delete work, and Test connection passes', async () => {
+    const store = { id: 'quirky', label: 'Quirky NAS', type: 'webdav', baseUrl: base, root: '/Documents', folder: 'blog', username: 'me', secrets: { password: 'secret' } };
+    const checked = (await postJson('/api/storage/test', { store, location: 'browser', check: true })).data.store;
+    const headers = { cookie: `md4c_stores_0=${cookieFor([checked])}` };
+    const req = (method, path, body, extra = {}) => call(method, path, { body, headers: { ...headers, ...extra } });
+
+    const created = await req('PUT', '/api/file?store=quirky&key=posts/nas-post.md', 'one', { 'if-none-match': '*' });
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    assert.equal((await req('GET', '/api/file?store=quirky&key=posts/nas-post.md')).data, 'one');
+    const updated = await req('PUT', '/api/file?store=quirky&key=posts/nas-post.md', 'two', { 'if-match': `"${created.data.etag}"` });
+    assert.equal(updated.status, 200, JSON.stringify(updated.data));
+    const list = await req('GET', '/api/list?store=quirky&prefix=posts/');
+    assert.deepEqual(list.data.items.map((i) => i.key), ['posts/nas-post.md']);
+    assert.equal((await req('DELETE', '/api/file?store=quirky&key=posts/nas-post.md')).status, 204);
+    assert.equal((await req('GET', '/api/file?store=quirky&key=posts/nas-post.md')).status, 404);
+
+    const t = await postJson('/api/storage/test', { store, location: 'browser' });
+    assert.equal(t.data.ok, true, JSON.stringify(t.data));
+    assert.equal(t.data.wrote, true);
+  });
+
+  test('Test connection names the step and the server path that failed', async () => {
+    const store = { id: 'nowhere', label: 'Wrong URL', type: 'webdav', baseUrl: `${base}/no-such-dir`, root: '/', folder: 'blog', username: 'me', secrets: { password: 'secret' } };
+    const t = await postJson('/api/storage/test', { store, location: 'browser' });
+    assert.equal(t.data.ok, false);
+    assert.match(t.data.error, /Could not (write|find)/);
+    assert.match(t.data.error, /no-such-dir\/blog\/posts\/md4c-admin-check-/);
   });
 });
 

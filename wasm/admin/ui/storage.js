@@ -301,7 +301,7 @@ function openForm(view, existing) {
         const r = await api.testStorage(collect(), existing?.location === 'kv' ? 'kv' : 'browser');
         check.className = r.ok ? 'store-check ok' : 'store-check error';
         check.textContent = r.ok
-          ? `Connected: ${r.posts} post(s) found${r.wrote ? '; writing works too' : ''}.`
+          ? `Connected: ${r.posts} post(s) found${r.wrote ? '; writing, reading and deleting a test file all work' : ''}.`
           : r.error;
       } catch (err) {
         check.className = 'store-check error';

@@ -132,6 +132,114 @@ export function storagesdkStore(storage, { isFile, prefix = '' } = {}) {
   };
 }
 
+/**
+ * A WebDAV share, over storagesdk's WebDAV adapter (`storage`) and its
+ * client (`storage.raw`). Servers differ in small ways, so a file is never
+ * declared missing on one request's word:
+ *   - a single-file PROPFIND ("stat") that fails, or says "folder", is
+ *     checked against the folder listing (PROPFIND Depth 1), which is what
+ *     the explorer shows;
+ *   - the file is then read, replaced and deleted at the path the server
+ *     itself reported, not only at the path we computed;
+ *   - after an upload or a delete, the result is checked, and an error
+ *     names the exact server path if the server disagrees.
+ */
+export function webdavStore(storage, { baseUrl, folderPath }) {
+  const client = storage.raw;
+  const base = `/${folderPath.split('/').filter(Boolean).join('/')}`.replace(/^\/$/, '');
+  const pathOf = (key) => `${base}/${key}`;
+  const where = (key) => `${String(baseUrl).replace(/\/+$/, '')}${pathOf(key)}`;
+  const status = (err) => err?.status ?? err?.response?.status;
+  const etagOf = (e) => String(e ?? '').replace(/^W\//, '').replace(/^"|"$/g, '');
+  const meta = (key, st) => ({
+    key,
+    size: Number(st.size) || 0,
+    etag: etagOf(st.etag) || `${Number(st.size) || 0}-${st.lastmod ?? ''}`,
+    uploaded: st.lastmod ? new Date(st.lastmod) : new Date(0),
+    contentType: st.mime ?? '',
+    path: st.filename ?? pathOf(key), // where the server says it is
+  });
+
+  /** The file at `key` as the server reports it, or null. */
+  const locate = async (key) => {
+    const path = pathOf(key);
+    try {
+      const st = await client.stat(path);
+      if (st?.type === 'file') return meta(key, st);
+    } catch (err) {
+      // 404 is "missing"; other answers (403, 405, 409, odd servers) are
+      // double-checked below rather than trusted.
+      if (status(err) === 401) throw err;
+    }
+    const dir = path.slice(0, path.lastIndexOf('/')) || '/';
+    const name = path.slice(path.lastIndexOf('/') + 1);
+    let entries;
+    try {
+      entries = await client.getDirectoryContents(dir);
+    } catch (err) {
+      if ([404, 403, 405, 409].includes(status(err))) return null;
+      throw err;
+    }
+    const found = (Array.isArray(entries) ? entries : [])
+      .find((e) => e.type === 'file' && (e.basename === name || decodeURIComponent(e.basename ?? '') === name));
+    return found ? meta(key, found) : null;
+  };
+  const strip = ({ path, ...rest }) => rest;
+  const head = async (key) => {
+    const m = await locate(key);
+    return m ? strip(m) : null;
+  };
+
+  return {
+    head,
+    async get(key) {
+      const m = await locate(key);
+      if (!m) return null;
+      const data = await client.getFileContents(m.path, { format: 'binary' });
+      const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      return { meta: strip(m), body: bytes.slice().buffer };
+    },
+    async put(key, body, { contentType, cacheControl, ifMatch } = {}) {
+      if (ifMatch) {
+        const current = await head(key);
+        if (!current || current.etag !== ifMatch) return null;
+      }
+      await storage.upload(key, new Uint8Array(body), { contentType, ...(cacheControl ? { cacheControl } : {}) });
+      const written = await head(key);
+      if (!written) {
+        throw new Error(`the upload to ${where(key)} was accepted, but the server does not list the file there afterwards. Check the server URL, base folder and drafts folder in Storage`);
+      }
+      return written;
+    },
+    async delete(key) {
+      const m = await locate(key);
+      if (!m) return;
+      try {
+        await client.deleteFile(m.path);
+      } catch (err) {
+        if (status(err) !== 404) throw err;
+      }
+      if (await locate(key)) throw new Error(`the server did not delete ${where(key)}`);
+    },
+    async list(sub = '', cursor) {
+      let page;
+      try {
+        page = await storage.list({ prefix: sub, limit: 1000, ...(cursor ? { cursor } : {}) });
+      } catch (err) {
+        if (err instanceof StorageError && (err.code === 'NotFound' || err.code === 'InvalidArgument')) return { items: [] };
+        throw err;
+      }
+      return {
+        items: page.items.map((m) => ({
+          key: m.path, size: m.size, etag: etagOf(m.etag), uploaded: m.lastModified, contentType: m.contentType ?? '',
+        })),
+        ...(page.cursor ? { cursor: page.cursor } : {}),
+      };
+    },
+    where,
+  };
+}
+
 /** A store's I/O failed (unreachable server, wrong password...). */
 export class StoreAccessError extends Error {}
 
@@ -146,6 +254,10 @@ function describe(err) {
 function guarded(store, label) {
   const out = {};
   for (const [name, fn] of Object.entries(store)) {
+    if (name === 'where') {
+      out.where = fn;
+      continue;
+    }
     out[name] = async (...args) => {
       try {
         return await fn(...args);
@@ -288,10 +400,7 @@ async function openOne(cfg, env) {
         ...(token ? { token } : {}),
       }),
     });
-    const prefix = `/${`${root}/${folder}`.split('/').filter(Boolean).join('/')}`;
-    return storagesdkStore(storage, {
-      isFile: async (key) => (await storage.raw.stat(`${prefix}/${key}`)).type === 'file',
-    });
+    return webdavStore(storage, { baseUrl: cfg.baseUrl, folderPath: `${root}/${folder}` });
   }
   if (cfg.type === 's3') {
     const { s3 } = await import('@storagesdk/adapters/s3');

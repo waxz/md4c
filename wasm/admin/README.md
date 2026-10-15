@@ -75,9 +75,13 @@ For each store you choose where its settings and password are kept:
 Nothing is kept in the drafts bucket.
 
 **Using the page:**
-- **Test connection** lists the store and, except for GitHub, writes and
-  deletes a small check file. GitHub is only read, so the check makes no
-  commits.
+- **Test connection** does a full round trip with a small check file in
+  `posts/`: write it, find it again, see it in the folder listing, read it
+  back, delete it, and confirm it's gone.
+  - If a step fails, it says which one, and for WebDAV the exact server
+    address it used. That shows at once whether the server URL, base
+    folder or drafts folder is wrong.
+  - GitHub is only listed, so the check makes no commits.
 - **Saving** checks the settings on the server.
 - **Moving a store.** You can move a store between KV and the browser by
   editing it. Moving it into the browser needs its password typed again,
@@ -92,6 +96,15 @@ the browser, anyone with access to the browser can.
 
 Each store's server must be reachable from Cloudflare. For a home NAS, that
 usually means a public HTTPS address or a Cloudflare Tunnel.
+
+**WebDAV servers differ in small ways**, for example a server URL with a
+path such as Nextcloud's `/remote.php/dav/files/<user>`, or a server that
+refuses to describe a single file. So the admin never takes one
+file-lookup request's word that a file is missing:
+- it checks the folder listing, which is what the explorer shows;
+- it reads, replaces and deletes the file at the path the server reports;
+- after an upload or a delete, it checks the result, and an error names
+  the server address if the server disagrees.
 
 A store that can't be reached doesn't stop the rest of the admin. The
 Posts page shows the error for that store, and writes to it fail with
