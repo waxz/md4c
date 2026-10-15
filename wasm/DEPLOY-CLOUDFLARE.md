@@ -93,7 +93,7 @@ You can upload with any tool:
 - **Wrangler:**
   ```sh
   npx wrangler r2 object put my-blog/posts/kyoto.md --file kyoto.md --remote \
-      --content-type "text/markdown; charset=utf-8" --cache-control "public, max-age=300"
+      --content-type "text/markdown; charset=utf-8" --cache-control "public, no-cache"
   npx wrangler r2 object put my-blog/posts/kyoto-temple.jpg --file kyoto-temple.jpg --remote \
       --content-type image/jpeg
   ```
@@ -115,9 +115,12 @@ or with the publish script, which encrypts the post before uploading it.
   the clear, and the rendered article encrypted with AES-256-GCM. The key
   comes from the password through PBKDF2-SHA256 with 600,000 iterations
   and a random salt.
-- The post's page shows an unlock form. The reader's browser decrypts the
-  article, and remembers the password for that tab so other posts with the
-  same password open straight away.
+- The post's page shows an unlock form, and the reader's browser decrypts
+  the article. The password is asked for on every visit and never stored.
+- Pages and posts are served with `Cache-Control: no-cache`, so a new
+  password or new text is live as soon as you publish. Readers' browsers
+  check for a new version on each visit, which is a cheap 304 when nothing
+  changed.
 - The home page and the feed list the post as 🔒 Password-protected, with
   no excerpt. The sitemap leaves it out, and the page asks search engines
   not to index it.
@@ -284,9 +287,12 @@ hostname:
 - Make it *eligible for cache*.
 - Let the edge TTL follow the `Cache-Control` header if present.
 
-The publish script uploads with `Cache-Control: public, max-age=300` for
-files and `max-age=60` for `index.json`. New posts therefore appear within a
-few minutes. Set the same headers with `--cache-control` when uploading
+The publish script and the admin upload pages, posts (`posts/*.md`,
+`posts/*.html`), `index.json`, `index.html`, the sitemap and the feed with
+`Cache-Control: public, no-cache`. The edge and browsers may keep them, but
+must check for a new version before using them, so edits and new passwords
+are live at once. Attachments and the site's code get `public,
+max-age=300`. Set the same headers with `--cache-control` when uploading
 with wrangler.
 
 ## 8. Get found by search engines

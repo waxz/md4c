@@ -48,7 +48,7 @@ import { loadMd4c } from '../js/md4c.js';
 import { linkPostsForStaticPage, PARSER_FLAGS } from '../js/blog-render.js';
 import { isDraft, parseFrontMatter, SLUG_RE } from '../js/post-format.js';
 import { protectPost, wantsPassword } from '../js/protect.js';
-import { build, CACHE_FILES, listAll, readIndex } from '../js/site-build.js';
+import { build, CACHE_FILES, CACHE_PAGES, listAll, readIndex } from '../js/site-build.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -142,7 +142,7 @@ async function uploadPosts(storage, dir) {
       ? await protectPost(source, (md) => linkPostsForStaticPage(md4c.toHtml(md, { parserFlags: PARSER_FLAGS })))
       : source;
     if (body !== source) log(`encrypt ${name} (password-protected)`);
-    await upload(storage, path, body, contentTypeFor(path));
+    await upload(storage, path, body, contentTypeFor(path), CACHE_PAGES);
   }
   if (args.prune) {
     for (const item of await listAll(storage, 'posts/')) {

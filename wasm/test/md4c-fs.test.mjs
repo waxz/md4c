@@ -386,6 +386,28 @@ describe('password-protected posts', () => {
     assert.match(article, /The launch code is 4242, see <strong>notes<\/strong>/);
   });
 
+  test('pages and indexes are revalidated on every visit, so changes are live at once', async () => {
+    const { build, CACHE_PAGES } = await import('../js/site-build.js');
+    assert.equal(CACHE_PAGES, 'public, no-cache');
+    const storage = new Storage({ adapter: fsAdapter({ root: dir, folder: 'public' }) });
+    const seen = new Map();
+    const spy = new Proxy(storage, {
+      get(target, prop) {
+        if (prop === 'upload') return (path, body, opts) => { seen.set(path, opts?.cacheControl); return target.upload(path, body, opts); };
+        const v = target[prop];
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    await build(spy, await loadMd4c(WASM_URL), { full: true });
+    for (const f of ['posts/vault.html', 'posts/open.html', 'index.json', 'index.html', 'feed.xml', 'sitemap.xml']) {
+      assert.equal(seen.get(f), 'public, no-cache', f);
+    }
+    const { cacheControlFor } = await import('../admin/src/paths.js');
+    assert.equal(cacheControlFor('posts/vault.md'), 'public, no-cache');
+    assert.equal(cacheControlFor('posts/vault.html'), 'public, no-cache');
+    assert.equal(cacheControlFor('posts/photo.jpg'), 'public, max-age=300');
+  });
+
   test('a post with a password found in plain text is never rendered', async () => {
     await writeFile(join(pub(), 'posts', 'leak.md'), '---\ntitle: Leak\ndate: 2026-03-05\npassword: x\n---\n\nOops 4242.\n');
     const { stderr } = await publish('--no-posts');

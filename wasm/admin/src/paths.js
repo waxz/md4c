@@ -92,7 +92,10 @@ export function contentTypeFor(key) {
 
 /** Short cache lifetimes so Cloudflare's edge serves repeat reads. */
 export function cacheControlFor(key) {
-  return /^(index\.(json|html)|sitemap\.xml|feed\.xml)$/.test(key) ? 'public, max-age=60' : 'public, max-age=300';
+  // Pages, posts and indexes are revalidated on every visit (see
+  // js/site-build.js CACHE_PAGES); attachments may be reused for minutes.
+  return /^(index\.(json|html)|sitemap\.xml|feed\.xml|posts\/[^/]+\.(md|html))$/.test(key)
+    ? 'public, no-cache' : 'public, max-age=300';
 }
 
 /** Error message if `key` is not a well-formed object key, else ''. */

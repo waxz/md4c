@@ -24,6 +24,7 @@ import worker from '../src/worker.js';
 import { kvNamespace } from './kv-shim.mjs';
 import { r2Bucket } from './r2-shim.mjs';
 import { normalizeStore, readSaved, writeSaved } from '../src/stores.js';
+import { cacheControlFor } from '../src/paths.js';
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const dist = join(root, 'dist');
@@ -116,7 +117,11 @@ createServer(async (req, res) => {
 }).listen(ADMIN_PORT, HOST, () => console.log(`Admin (dev, auto sign-in as ${EMAIL}): http://${HOST}:${ADMIN_PORT}/`));
 
 createServer(async (req, res) => {
-  const response = await fileResponse(join(dist, 'public'), new URL(req.url, 'http://x').pathname);
+  const pathname = new URL(req.url, 'http://x').pathname;
+  const response = await fileResponse(join(dist, 'public'), pathname);
+  // Cache headers as R2 serves them, so stale-page problems show up here too.
+  const key = pathname.replace(/^\//, '') || 'index.html';
+  if (response.ok) response.headers.set('cache-control', cacheControlFor(key));
   res.writeHead(response.status, Object.fromEntries(response.headers));
   res.end(Buffer.from(await response.arrayBuffer()));
 }).listen(BLOG_PORT, HOST, () => console.log(`Blog (dist/public): http://${HOST}:${BLOG_PORT}/index.html`));

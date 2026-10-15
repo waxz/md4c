@@ -217,25 +217,10 @@ async function showLivePost(slug) {
 
 /* ---------- Password-protected posts ---------- */
 
-// Passwords that unlocked a post in this tab are tried on the next protected
-// post first, so a series sharing one password asks only once.
-const UNLOCKED_KEY = 'md4c-unlocked';
-function rememberedPasswords() {
-  try {
-    const list = JSON.parse(sessionStorage.getItem(UNLOCKED_KEY) ?? '[]');
-    return Array.isArray(list) ? list.filter((p) => typeof p === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-function remember(password) {
-  try {
-    const list = [password, ...rememberedPasswords().filter((p) => p !== password)].slice(0, 10);
-    sessionStorage.setItem(UNLOCKED_KEY, JSON.stringify(list));
-  } catch {}
-}
-
-/** Resolves once the article is decrypted and shown in place of the form. */
+/**
+ * Resolves once the article is decrypted and shown in place of the form.
+ * The password is asked for on every visit and never stored.
+ */
 async function unlock(article) {
   const box = article.querySelector('.protected');
   const envelope = JSON.parse(box.dataset.envelope);
@@ -244,12 +229,6 @@ async function unlock(article) {
     prose.innerHTML = html; // the owner's own article, as on any other page
     box.remove();
   };
-  for (const password of rememberedPasswords()) {
-    try {
-      show(await decryptText(envelope, password));
-      return;
-    } catch {}
-  }
   const form = box.querySelector('form');
   const input = form.querySelector('input');
   const status = form.querySelector('.unlock-status');
@@ -261,8 +240,9 @@ async function unlock(article) {
       button.disabled = true;
       status.textContent = 'Unlocking…';
       try {
-        const html = await decryptText(envelope, input.value);
-        remember(input.value);
+        // Spaces at the ends are not part of a password (phone keyboards add them).
+        const html = await decryptText(envelope, input.value.trim());
+        input.value = '';
         show(html);
         done();
       } catch (err) {

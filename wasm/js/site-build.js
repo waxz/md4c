@@ -21,7 +21,11 @@ import { normalizeSite } from './site-config.js';
 export const BUILD_VERSION = 4;
 export const INDEX = 'index.json';
 export const CACHE_FILES = 'public, max-age=300';
-export const CACHE_INDEX = 'public, max-age=60';
+// Pages, posts and indexes change in place (an edit, a new password), so
+// browsers and the edge must check for a new version each time (a cheap
+// 304 when unchanged) rather than reuse a stale copy for minutes.
+export const CACHE_PAGES = 'public, no-cache';
+export const CACHE_INDEX = CACHE_PAGES;
 const FEED_ENTRIES = 30;
 
 function fnv1a(text) {
@@ -138,13 +142,13 @@ export async function build(storage, md4c, opts = {}) {
         delete metadata.description;
         delete metadata.image;
         metadata.protected = 'true';
-        await put(page, postPage(site, { slug, page, ...metadata }, protectedArticle(locked.envelope)), 'text/html; charset=utf-8');
+        await put(page, postPage(site, { slug, page, ...metadata }, protectedArticle(locked.envelope)), 'text/html; charset=utf-8', CACHE_PAGES);
       } else {
         metadata = postMetadata(source, render, slug);
         const html = linkPostsForStaticPage(render(parseFrontMatter(source).body));
         htmlBySlug.set(slug, html);
         sources.set(slug, source);
-        await put(page, postPage(site, { slug, page, ...metadata }, html), 'text/html; charset=utf-8');
+        await put(page, postPage(site, { slug, page, ...metadata }, html), 'text/html; charset=utf-8', CACHE_PAGES);
       }
       rendered.push(slug);
     }

@@ -9,7 +9,8 @@
 //   ciphertext = AES-256-GCM(key, random 12-byte IV, rendered HTML)
 //
 // The site build turns the envelope into a page with an unlock form, and
-// the reader's browser decrypts it with the password typed there. A wrong
+// the reader's browser decrypts it with the password typed there (asked
+// for on every visit, never stored). A wrong
 // password fails AES-GCM's integrity check, so no password hash is stored
 // anywhere: a public hash would only give guessers a faster target. The
 // password itself stays in the private draft, where the admin keeps it.
