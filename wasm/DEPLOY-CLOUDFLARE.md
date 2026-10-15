@@ -312,8 +312,9 @@ device, with a posts list, folder explorer, editor, live preview and photo
 upload. It runs as a Cloudflare Worker on `admin.blog.example.com`,
 protected by Cloudflare Access. Drafts and their photos stay in private
 draft stores (the drafts R2 bucket, plus any WebDAV share, S3-compatible
-bucket or GitHub repository you add on the admin's Storage page), and are
-copied to the public bucket on publish. Readers keep
+bucket or GitHub repository you add on the admin's Storage page, with its
+settings kept in Cloudflare KV or in your browser), and are copied to the
+public bucket on publish. Readers keep
 reading the public bucket directly. Setup takes about ten minutes; see
 [admin/README.md](admin/README.md).
 

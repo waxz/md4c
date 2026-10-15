@@ -1,9 +1,12 @@
-// Storage: the draft stores, and adding your own from the browser. Stores
-// added here (WebDAV, S3-compatible, GitHub) are saved by the Worker in the
-// private drafts bucket, with their passwords and keys, so no Worker secrets
-// or redeploys are needed. Saved secrets are never sent back to the browser.
+// Storage: the draft stores, and adding your own from the browser
+// (WebDAV, S3-compatible, GitHub). Each store's settings and password are
+// kept either
+//   - in this browser only (localStorage; sent to the Worker with each
+//     request, never saved by it), or
+//   - in Cloudflare KV, for every device (saved secrets are never sent
+//     back to the browser).
 
-import { api, ApiError } from './client.js';
+import { api, ApiError, browserStores } from './client.js';
 import { confirmDialog, esc, reportError, state, toast } from './shared.js';
 
 // S3-compatible services: endpoint pattern and default region.
@@ -20,8 +23,18 @@ const S3_PROVIDERS = {
 };
 
 const TYPE_LABELS = { r2: 'R2 bucket', webdav: 'WebDAV', s3: 'S3-compatible', github: 'GitHub' };
+const WHERE = { deploy: 'set in the deploy', kv: 'KV · every device', browser: 'this browser only' };
 
 let data = null; // GET /api/storage
+
+/** Browser stores as the page shows them: settings plus which secrets are set. */
+function localView() {
+  return browserStores.all().map(({ secrets = {}, ...rest }) => ({
+    ...rest,
+    location: 'browser',
+    secretsSet: Object.fromEntries(Object.keys(secrets).filter((k) => secrets[k]).map((k) => [k, true])),
+  }));
+}
 
 function summary(s) {
   if (s.type === 'webdav') {
@@ -36,39 +49,40 @@ function summary(s) {
   return '';
 }
 
-const problemOf = (id) => data.problems.find((p) => p.store === id)?.error ?? '';
-
-function storeCard(s, saved) {
-  const problem = saved ? problemOf(s.id) : '';
+function storeCard(s) {
+  const problem = s.location === 'deploy' ? '' : data.problems.find((p) => p.store === s.id && p.location === s.location)?.error ?? '';
   return `<li class="post-card store-card">
     <div class="post-card-main">
       <span class="post-title">${esc(s.label)}</span>
-      <span class="post-meta"><span class="chip">${esc(TYPE_LABELS[s.type] ?? s.type)}</span>
-        ${saved ? `<span>${esc(summary(s))}</span>` : '<span>set in the deploy</span>'}</span>
+      <span class="post-meta"><span class="chip">${esc(TYPE_LABELS[s.type] ?? s.type)}</span><span>${esc(WHERE[s.location])}</span></span>
+      ${s.location === 'deploy' ? '' : `<span class="post-meta">${esc(summary(s))}</span>`}
       ${problem ? `<span class="error store-problem">${esc(problem)}</span>` : ''}
     </div>
-    ${saved ? `<button type="button" class="btn btn-small" data-act="edit" data-id="${esc(s.id)}">Edit</button>` : ''}
+    ${s.location === 'deploy' ? '' : `<button type="button" class="btn btn-small" data-act="edit" data-id="${esc(s.id)}" data-location="${s.location}">Edit</button>`}
   </li>`;
 }
 
 export async function showStorage(view) {
   view.innerHTML = '<p class="muted">Loading storage…</p>';
   data = await api.storage();
+  const all = [
+    ...data.deployed.map((s) => ({ ...s, location: 'deploy' })),
+    ...data.stores.map((s) => ({ ...s, location: 'kv' })),
+    ...localView(),
+  ];
   view.innerHTML = `<div class="storage-view">
     <div class="view-head">
       <h1>Storage</h1>
-      ${data.canSave ? '<button type="button" class="btn btn-primary" data-act="add">Add storage</button>' : ''}
+      <button type="button" class="btn btn-primary" data-act="add">Add storage</button>
     </div>
     <p class="hint">Drafts and their images are kept in private storage until you publish. Add a NAS or
-      Nextcloud (WebDAV), any S3-compatible bucket, or a GitHub repository. Settings and passwords are kept
-      in the private drafts bucket; passwords are never shown again.</p>
-    ${data.canSave ? '' : '<p class="warn">Adding storage needs the DRAFTS bucket, which this deploy does not bind.</p>'}
-    <section class="post-section"><h2>Storage <span class="count">${1 + data.deployed.length + data.stores.length}</span></h2>
+      Nextcloud (WebDAV), any S3-compatible bucket, or a GitHub repository. Keep its settings and password in
+      this browser only, or in Cloudflare KV to use it from every device.</p>
+    <section class="post-section"><h2>Storage <span class="count">${all.length + 1}</span></h2>
       <ul class="post-cards">
         <li class="post-card store-card"><div class="post-card-main"><span class="post-title">Published site</span>
           <span class="post-meta"><span class="chip">R2 bucket</span><span>public</span></span></div></li>
-        ${data.deployed.map((s) => storeCard(s, false)).join('')}
-        ${data.stores.map((s) => storeCard(s, true)).join('')}
+        ${all.map(storeCard).join('')}
       </ul>
     </section>
     <div class="store-form-slot"></div>
@@ -77,7 +91,9 @@ export async function showStorage(view) {
     const btn = e.target.closest('button[data-act]');
     if (!btn || btn.closest('.store-form')) return;
     if (btn.dataset.act === 'add') openForm(view, null);
-    if (btn.dataset.act === 'edit') openForm(view, data.stores.find((s) => s.id === btn.dataset.id));
+    if (btn.dataset.act === 'edit') {
+      openForm(view, all.find((s) => s.id === btn.dataset.id && s.location === btn.dataset.location));
+    }
   });
 }
 
@@ -124,6 +140,7 @@ function slugify(text) {
 function openForm(view, existing) {
   const slot = view.querySelector('.store-form-slot');
   const isNew = !existing;
+  const where = existing?.location ?? (data.kv ? 'kv' : 'browser');
   slot.innerHTML = `<form class="store-form" novalidate>
     <h2>${isNew ? 'Add storage' : `Edit “${esc(existing.label)}”`}</h2>
     <div class="grid">
@@ -134,6 +151,13 @@ function openForm(view, existing) {
       </select></label>
       ${field('label', 'Name shown in the admin', 'required maxlength="60" placeholder="Home NAS"')}
       ${field('id', 'Short id', `required pattern="[a-z][a-z0-9\\-]{0,30}" ${isNew ? '' : 'readonly'}`, 'Used in addresses; cannot be changed later.')}
+      <fieldset class="where">
+        <legend>Keep the settings and password</legend>
+        <label class="check"><input type="radio" name="location" value="kv" ${data.kv ? '' : 'disabled'}>
+          In Cloudflare KV: use it from every device${data.kv ? '' : ' (this deploy has no KV namespace)'}</label>
+        <label class="check"><input type="radio" name="location" value="browser">
+          In this browser only: other devices never see it</label>
+      </fieldset>
       <div class="type-fields grid"></div>
     </div>
     <p class="store-check" aria-live="polite"></p>
@@ -147,6 +171,7 @@ function openForm(view, existing) {
   const form = slot.querySelector('form');
   const typeSel = form.elements.type;
   const check = form.querySelector('.store-check');
+  form.querySelector(`input[name=location][value=${where}]`).checked = true;
   let idTouched = !isNew;
 
   const renderType = () => {
@@ -154,7 +179,7 @@ function openForm(view, existing) {
     if (existing?.type === typeSel.value) {
       for (const [k, v] of Object.entries(existing)) {
         const el = form.elements[k];
-        if (!el || el.type === 'password' || k === 'type') continue;
+        if (!el || el.type === 'password' || el.type === 'radio' || k === 'type') continue;
         if (el.type === 'checkbox') el.checked = Boolean(v);
         else el.value = k === 'root' || k === 'folder' ? String(v).replace(/^\/|\/$/g, '') || (k === 'root' ? '/' : '') : v;
       }
@@ -188,34 +213,69 @@ function openForm(view, existing) {
   });
   form.elements.id.addEventListener('input', () => { idTouched = true; });
 
+  const target = () => form.querySelector('input[name=location]:checked').value;
+
+  /** The form's settings. Empty secrets mean "keep": filled in here from a
+   *  browser store, or by the Worker for a store saved in KV. */
   const collect = () => {
     const out = { type: typeSel.value, secrets: {} };
     for (const el of form.elements) {
-      if (!el.name || el.name === 'type') continue;
+      if (!el.name || el.name === 'type' || el.name === 'location') continue;
       if (el.type === 'password') out.secrets[el.name] = el.value;
       else if (el.type === 'checkbox') out[el.name] = el.checked;
       else out[el.name] = el.value.trim();
     }
-    if (out.type === 'webdav' && !out.folder) out.folder = 'blog-drafts';
-    if (out.type === 'github' && !out.folder) out.folder = 'blog-drafts';
+    if ((out.type === 'webdav' || out.type === 'github') && !out.folder) out.folder = 'blog-drafts';
+    if (existing?.location === 'browser' && existing.type === out.type) {
+      const kept = browserStores.all().find((s) => s.id === existing.id)?.secrets ?? {};
+      for (const [k, v] of Object.entries(kept)) if (!out.secrets[k]) out.secrets[k] = v;
+    }
     return out;
   };
   const busy = (on) => form.querySelectorAll('button').forEach((b) => { b.disabled = on; });
 
-  const save = async (stores) => {
-    const saved = await api.saveStorage(data.etag, stores);
+  /** Remove the store being edited from where it is kept now. */
+  const removeExisting = async () => {
+    if (existing?.location === 'browser') browserStores.save(browserStores.all().filter((s) => s.id !== existing.id));
+    if (existing?.location === 'kv') {
+      data = await api.saveStorage(data.version, data.stores.filter((s) => s.id !== existing.id));
+    }
+  };
+
+  const save = async () => {
+    const store = collect();
+    const to = target();
+    const moving = existing && existing.location !== to;
+    if (moving && existing.location === 'kv' && Object.values(store.secrets).every((v) => !v)) {
+      // KV never sends its secrets back, so they must be typed in again.
+      throw new Error('To keep this store in the browser instead, type its password or key again.');
+    }
+    if (to === 'browser') {
+      const { store: checked } = await api.testStorage(store, 'browser', true);
+      const others = browserStores.all().filter((s) => s.id !== store.id);
+      if (moving) await removeExisting();
+      browserStores.save([...others, checked]);
+    } else {
+      const list = data.stores.filter((s) => s.id !== store.id);
+      data = await api.saveStorage(data.version, [...list, store]);
+      if (moving) await removeExisting();
+    }
     state.session = await api.session();
-    return saved;
+    return store;
   };
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!form.reportValidity()) return;
-    const store = collect();
-    const stores = isNew ? [...data.stores, store] : data.stores.map((s) => (s.id === existing.id ? store : s));
+    const id = form.elements.id.value;
+    const taken = [...data.deployed, ...data.stores, ...localView()].some((s) => s.id === id);
+    if (isNew && taken) {
+      toast(`The id “${id}” is already used.`, 'error');
+      return;
+    }
     busy(true);
     try {
-      await save(stores);
+      const store = await save();
       toast(`Saved “${store.label}”.`, 'success');
       await showStorage(view);
     } catch (err) {
@@ -238,7 +298,7 @@ function openForm(view, existing) {
       check.className = 'store-check muted';
       check.textContent = 'Connecting…';
       try {
-        const r = await api.testStorage(collect());
+        const r = await api.testStorage(collect(), existing?.location === 'kv' ? 'kv' : 'browser');
         check.className = r.ok ? 'store-check ok' : 'store-check error';
         check.textContent = r.ok
           ? `Connected: ${r.posts} post(s) found${r.wrote ? '; writing works too' : ''}.`
@@ -255,7 +315,8 @@ function openForm(view, existing) {
         'The admin stops using it. Nothing is deleted: its files stay where they are, and you can add it again later.', 'Remove');
       if (!ok) return;
       try {
-        await save(data.stores.filter((s) => s.id !== existing.id));
+        await removeExisting();
+        state.session = await api.session();
         toast(`Removed “${existing.label}”.`, 'success');
         await showStorage(view);
       } catch (err) {

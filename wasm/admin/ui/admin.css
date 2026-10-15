@@ -267,3 +267,7 @@ code { font-family: var(--mono); font-size: .9em; }
   .store-form .type-fields { grid-column: 1 / -1; }
   .store-form .type-fields .hint, .store-form .type-fields .check { grid-column: 1 / -1; }
 }
+.store-form fieldset.where { border: 0; padding: 0; margin: 0; display: grid; gap: .45rem; min-width: 0; }
+.store-form fieldset.where legend { padding: 0; margin-bottom: .4rem; font-size: .85rem; color: var(--muted); }
+.check input { flex: none; margin: 0; width: 1.1rem; height: 1.1rem; }
+.store-form .where label:has(input:disabled) { color: var(--muted); }

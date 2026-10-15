@@ -56,22 +56,38 @@ The `DRAFTS` R2 bucket is always a draft store. Add more from the admin's
 | S3-compatible | Amazon S3, another R2 bucket, Backblaze B2, Wasabi, DigitalOcean Spaces, MinIO | service, endpoint, region, bucket, optional folder, access key ID and secret |
 | GitHub | a private repository | owner, repository, branch, folder, and a fine-grained token with *Contents: Read and write* |
 
+For each store you choose where its settings and password are kept:
+
+- **In Cloudflare KV (every device).** Saved in the `SETTINGS` KV namespace.
+  - The password is never sent back to the browser; leave the field empty
+    to keep it.
+  - KV is eventually consistent, so another device may take up to a
+    minute to see a change.
+- **In this browser only.** Kept in the browser's local storage.
+  - The admin app sends them to the Worker with each request, in cookies
+    limited to `/api` (`SameSite=Strict`, `Secure`), so image previews
+    work too.
+  - The Worker uses them for that request and never saves them.
+  - Other devices never see the store. Clearing the site's data in the
+    browser forgets it.
+
+Nothing is kept in the drafts bucket.
+
+**Using the page:**
 - **Test connection** lists the store and, except for GitHub, writes and
   deletes a small check file. GitHub is only read, so the check makes no
   commits.
-- **Saving** checks the settings on the server. Settings and credentials
-  are kept in the private `DRAFTS` bucket at `.admin/stores.json`.
-- **Secrets stay on the server.** Passwords and keys are never sent back to
-  the browser. Leave a password field empty to keep the saved one.
-- **Hidden from the file API.** The settings file can't be listed, read
-  or overwritten through the file API.
+- **Saving** checks the settings on the server.
+- **Moving a store.** You can move a store between KV and the browser by
+  editing it. Moving it into the browser needs its password typed again,
+  because KV never sends it back.
 - **Removing a store** only stops the admin using it. Its files stay where
   they are.
 
-Anyone who can read the `DRAFTS` bucket can also read these credentials:
-the Worker, and Cloudflare API tokens with R2 access to it. So keep that
-bucket private, and give each store credentials limited to it: an app
-password, a key scoped to one bucket, or a token for one repository.
+Give each store credentials limited to it, such as an app password, a key
+scoped to one bucket, or a token for one repository. For KV, anyone with
+access to the KV namespace in your Cloudflare account can read them. For
+the browser, anyone with access to the browser can.
 
 Each store's server must be reachable from Cloudflare. For a home NAS, that
 usually means a public HTTPS address or a Cloudflare Tunnel.
@@ -80,12 +96,12 @@ A store that can't be reached doesn't stop the rest of the admin. The
 Posts page shows the error for that store, and writes to it fail with
 `502 store-unreachable` and the reason.
 
+**Limits:**
 - **Change checks.** WebDAV, S3 and GitHub stores have no conditional
   writes through storagesdk, so "changed elsewhere" is checked just before
   writing. That is safe for one admin, but not a lock between two
   simultaneous writers.
-- **GitHub limits.** Every save is a commit, and files over 1 MB can't be
-  stored.
+- **GitHub.** Every save is a commit, and files over 1 MB can't be stored.
 
 **In the deploy instead (optional).** `DRAFT_STORES` in `wrangler.toml`
 still works for stores you want fixed in the deploy, such as extra R2
@@ -99,8 +115,10 @@ You need the blog already deployed (see `DEPLOY-CLOUDFLARE.md`), a domain on
 Cloudflare, and Node.js 20 or newer on a computer for the first deploy.
 
 1. **Create the drafts bucket.** In R2, create a second bucket, for example
-   `my-blog-drafts`. Do **not** enable public access on it. It holds drafts,
-   and the settings of storage you add later from the Storage page.
+   `my-blog-drafts`. Do **not** enable public access on it.
+   Optionally create a KV namespace too, for example `blog-admin-settings`,
+   if you want storage added on the Storage page to be usable from every
+   device. Without one, it is kept in each browser.
 2. **Protect the admin hostname with Cloudflare Access.** In the Zero Trust
    dashboard (Cloudflare One), add an Access application:
    - Type: *Self-hosted*. Application domain: `admin.blog.example.com`.
@@ -113,7 +131,8 @@ Cloudflare, and Node.js 20 or newer on a computer for the first deploy.
      - your **team domain**, `https://<team>.cloudflareaccess.com`.
 3. **Edit `admin/wrangler.toml`:**
    - the route pattern (`admin.blog.example.com`);
-   - the two `bucket_name`s;
+   - the two `bucket_name`s, and the KV namespace `id` (or remove that
+     section);
    - `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `ADMIN_EMAILS` and `PUBLIC_URL`
      (the blog's public address).
 

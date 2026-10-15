@@ -15,10 +15,15 @@
 //   POST   /api/publish {from, ifMatch, overwrite}
 //                                               draft -> site, with the files it uses
 //   POST   /api/indexnow {urls}                 notify IndexNow search engines
-//   GET    /api/storage                         draft stores: deployed and saved
+//   GET    /api/storage                         draft stores: deployed and saved in KV
 //                                               (settings only, never secrets)
-//   PUT    /api/storage {etag, stores}          save the Storage page's stores
-//   POST   /api/storage/test {store}            try a store's settings
+//   PUT    /api/storage {version, stores}       save the Storage page's KV stores
+//   POST   /api/storage/test {store, location, check}
+//                                               try a store's settings (check: only
+//                                               validate a browser store)
+//
+// Stores kept in the admin's browser arrive with each request, in cookies
+// (stores.js browserConfigs); the Worker never saves them.
 //
 // Conflicts are refused with 409 (code in the JSON body):
 //   exists            the destination already exists
@@ -32,7 +37,7 @@
 
 import { cacheControlFor, classify, contentTypeFor, keyProblem, postSlug, referencedKeys } from './paths.js';
 import {
-  normalizeStore, openStore, openStores, publicStore, readSaved, settingsBucket, STORE_TYPES,
+  normalizeStore, openStore, openStores, publicStore, readSaved, STORE_TYPES,
   StoreAccessError, StoreConfigError, writeSaved,
 } from './stores.js';
 
@@ -84,7 +89,7 @@ function requireWritable(entry, key) {
 }
 
 /** All objects under `prefix` (a missing folder is just empty). */
-/** Hidden files (".admin/stores.json", connection checks) are never listed. */
+/** Hidden files (e.g. connection checks) are never listed. */
 const visible = (meta) => !meta.key.split('/').some((s) => s.startsWith('.'));
 
 async function listAll(entry, prefix) {
@@ -437,10 +442,10 @@ const MAX_SAVED_STORES = 20;
 async function storageView(env, stores) {
   const saved = await readSaved(env);
   return {
-    canSave: Boolean(settingsBucket(env)),
-    etag: saved.etag,
+    kv: Boolean(env.SETTINGS),
+    version: saved.version,
     types: STORE_TYPES,
-    deployed: [...stores.values()].filter((e) => e.role === 'drafts' && !e.saved)
+    deployed: [...stores.values()].filter((e) => e.role === 'drafts' && e.location === 'deploy')
       .map(({ id, label, type }) => ({ id, label, type })),
     stores: saved.stores.map(publicStore),
     problems: stores.problems,
@@ -457,14 +462,15 @@ function checkedStore(input, previous) {
 }
 
 async function saveStorage(request, env, stores) {
+  if (!env.SETTINGS) throw new ApiError(400, 'This deploy has no SETTINGS KV namespace; keep storage in this browser instead', { code: 'no-kv' });
   const body = await request.json().catch(() => null);
-  if (!Array.isArray(body?.stores)) throw new ApiError(400, 'Send { etag, stores: [...] }');
+  if (!Array.isArray(body?.stores)) throw new ApiError(400, 'Send { version, stores: [...] }');
   if (body.stores.length > MAX_SAVED_STORES) throw new ApiError(400, `At most ${MAX_SAVED_STORES} stores`);
   const saved = await readSaved(env);
   const changed = () => new ApiError(412, 'The storage settings were changed elsewhere; reload them', { code: 'changed' });
-  if (String(body.etag ?? '') !== saved.etag) throw changed();
+  if (Number(body.version) !== saved.version) throw changed();
   const previous = new Map(saved.stores.map((s) => [s.id, s]));
-  const taken = new Set([...stores.values()].filter((e) => !e.saved).map((e) => e.id));
+  const taken = new Set([...stores.values()].filter((e) => e.location === 'deploy').map((e) => e.id));
   const out = [];
   for (const input of body.stores) {
     const cfg = checkedStore(input, previous.get(input?.id));
@@ -472,15 +478,22 @@ async function saveStorage(request, env, stores) {
     taken.add(cfg.id);
     out.push(cfg);
   }
-  if (!(await writeSaved(env, out, saved.etag))) throw changed();
-  return json(await storageView(env, await openStores(env)));
+  if (!(await writeSaved(env, out, saved.version))) throw changed();
+  return json(await storageView(env, await openStores(env, request)));
 }
 
-/** Try a store's settings: list it and, except for GitHub, write and delete a file. */
+/**
+ * Try a store's settings: list it and, except for GitHub, write and delete
+ * a file. Empty secrets of a store saved in KV keep their saved values;
+ * browser stores send their secrets.
+ */
 async function testStorage(request, env) {
   const body = await request.json().catch(() => null);
-  const saved = await readSaved(env);
-  const cfg = checkedStore(body?.store, saved.stores.find((s) => s.id === body?.store?.id));
+  const saved = body?.location === 'kv' ? (await readSaved(env)).stores.find((s) => s.id === body?.store?.id) : undefined;
+  const cfg = checkedStore(body?.store, saved);
+  // Browser stores are validated here before the browser keeps them; their
+  // secrets came from the browser, so echoing them back reveals nothing.
+  if (body?.check && body.location === 'browser') return json({ ok: true, store: cfg });
   const store = await openStore(cfg, env);
   try {
     const posts = (await store.list('posts/')).items.filter((m) => postSlug(m.key)).length;
@@ -512,7 +525,7 @@ export async function handleApi(request, env, user) {
         throw new ApiError(403, 'Cross-site request refused', { code: 'csrf' });
       }
     }
-    const stores = await openStores(env);
+    const stores = await openStores(env, request);
     const raw = /^\/api\/raw\/([a-z][a-z0-9-]{0,30})\/(.+)$/.exec(url.pathname);
     if (raw && request.method === 'GET') {
       return await readFile(stores, raw[1], decodeURIComponent(raw[2]), true);
@@ -522,7 +535,8 @@ export async function handleApi(request, env, user) {
         return json({
           email: user.email,
           publicUrl: String(env.PUBLIC_URL ?? ''),
-          stores: [...stores.values()].map(({ id, label, role, type, saved }) => ({ id, label, role, type, saved })),
+          stores: [...stores.values()].map(({ id, label, role, type, location }) => ({ id, label, role, type, location })),
+          kv: Boolean(env.SETTINGS),
           problems: stores.problems,
           maxUploadMb: Number(env.MAX_UPLOAD_MB ?? 25),
         });

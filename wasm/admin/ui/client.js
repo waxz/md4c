@@ -35,6 +35,53 @@ async function request(method, path, { body, headers = {}, raw = false } = {}) {
 
 const q = (o) => new URLSearchParams(o).toString();
 
+/* ---------- Storage kept in this browser ---------- */
+
+// "This browser only" stores live in localStorage and are mirrored into
+// cookies scoped to /api, so every API request (also images loaded by
+// previews) carries them. The Worker uses them per request, never saves them.
+const LOCAL_KEY = 'md4c-admin-stores';
+const COOKIE_PREFIX = 'md4c_stores_';
+const COOKIE_CHUNK = 3500;
+const MAX_CHUNKS = 6;
+
+function syncCookies(list) {
+  const attrs = `; Path=/api; SameSite=Strict${location.protocol === 'https:' ? '; Secure' : ''}`;
+  let value = '';
+  if (list.length) {
+    const bytes = new TextEncoder().encode(JSON.stringify(list));
+    value = btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(''))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  const chunks = value.match(new RegExp(`.{1,${COOKIE_CHUNK}}`, 'g')) ?? [];
+  if (chunks.length > MAX_CHUNKS) throw new Error('Too much storage is kept in this browser; remove a store or save it in KV');
+  for (let i = 0; i < 12; i++) {
+    document.cookie = i < chunks.length ? `${COOKIE_PREFIX}${i}=${chunks[i]}${attrs}` : `${COOKIE_PREFIX}${i}=; Max-Age=0${attrs}`;
+  }
+}
+
+export const browserStores = {
+  /** Store settings, with their secrets, kept in this browser. */
+  all() {
+    try {
+      const list = JSON.parse(localStorage.getItem(LOCAL_KEY) ?? '[]');
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  },
+  save(list) {
+    syncCookies(list);
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(list));
+  },
+};
+
+try {
+  syncCookies(browserStores.all());
+} catch (err) {
+  console.error(err);
+}
+
 export const api = {
   session: () => request('GET', 'session'),
 
@@ -96,13 +143,15 @@ export const api = {
   /** Draft stores: deployed ones, and the ones saved from the Storage page. */
   storage: () => request('GET', 'storage'),
 
-  saveStorage: (etag, stores) => request('PUT', 'storage', {
-    body: JSON.stringify({ etag, stores }),
+  /** Save the stores kept in KV (`version` from storage()). */
+  saveStorage: (version, stores) => request('PUT', 'storage', {
+    body: JSON.stringify({ version, stores }),
     headers: { 'content-type': 'application/json' },
   }),
 
-  testStorage: (store) => request('POST', 'storage/test', {
-    body: JSON.stringify({ store }),
+  /** Try a store; `location` is "kv" or "browser"; `check` only validates (browser). */
+  testStorage: (store, location, check = false) => request('POST', 'storage/test', {
+    body: JSON.stringify({ store, location, check }),
     headers: { 'content-type': 'application/json' },
   }),
 

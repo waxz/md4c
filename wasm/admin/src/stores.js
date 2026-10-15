@@ -3,19 +3,19 @@
 //   site            the public blog bucket (R2 binding SITE)
 //   draft stores    one or more private stores for drafts and their images
 //
-// Draft stores come from two places:
+// Draft stores come from three places:
 //
-//   1. The admin's Storage page (the usual way). Stores added there are
-//      saved, with their passwords and keys, in the private DRAFTS bucket at
-//      .admin/stores.json. No redeploy and no Worker secrets are needed.
-//      Types: "webdav" (Nextcloud, ownCloud, a NAS...), "s3" (any
-//      S3-compatible service: AWS S3, another R2 bucket, Backblaze B2,
-//      MinIO, Wasabi, DigitalOcean Spaces...) and "github" (a repository).
-//   2. Optionally DRAFT_STORES (JSON) in wrangler.toml, for R2 bindings or
-//      stores you want fixed in the deploy. Credentials there name Worker
-//      secrets ("passwordSecret": "NAS_PASSWORD"), never values.
+//   1. The deploy: the DRAFTS R2 binding, or DRAFT_STORES (JSON) in
+//      wrangler.toml, whose credentials name Worker secrets
+//      ("passwordSecret": "NAS_PASSWORD"), never values.
+//   2. The admin's Storage page, saved in Cloudflare KV (the SETTINGS
+//      namespace): usable from every device.
+//   3. The admin's Storage page, kept in that browser only (localStorage,
+//      sent to the Worker in cookies with each request; never stored here).
 //
-// Without DRAFT_STORES, a DRAFTS binding (if any) is the first draft store.
+// Types for 2 and 3: "webdav" (Nextcloud, ownCloud, a NAS...), "s3" (any
+// S3-compatible service: AWS S3, another R2 bucket, Backblaze B2, MinIO,
+// Wasabi, DigitalOcean Spaces...) and "github" (a repository).
 //
 // Every store has the same small interface (keys are "posts/a.md" etc.):
 //   head(key)                     -> Meta | null
@@ -328,40 +328,68 @@ export async function openStore(cfg, env) {
   return guarded(await openOne(cfg, env), cfg.label ?? cfg.id);
 }
 
-/* ---------- Saved stores (.admin/stores.json in the DRAFTS bucket) ---------- */
+/* ---------- Stores saved in Cloudflare KV ---------- */
 
-export const SAVED_KEY = '.admin/stores.json';
+// The SETTINGS KV namespace holds { version, stores } under this key. KV is
+// eventually consistent: another Cloudflare location may see a change up
+// to a minute late.
+export const KV_KEY = 'draft-stores';
 
-/** The private bucket that keeps the Storage page's settings, if any. */
-export const settingsBucket = (env) => (env.DRAFTS?.put ? env.DRAFTS : null);
-
-/** { etag, stores } as saved by the Storage page ({ etag: '' } when none). */
+/** { version, stores } saved in KV ({ version: 0 } when none or no KV). */
 export async function readSaved(env) {
-  const bucket = settingsBucket(env);
-  const obj = bucket ? await bucket.get(SAVED_KEY) : null;
-  if (!obj) return { etag: '', stores: [] };
-  let doc;
-  try {
-    doc = JSON.parse(await obj.text());
-  } catch {
-    doc = {};
-  }
-  return { etag: obj.etag, stores: Array.isArray(doc.stores) ? doc.stores : [] };
+  const text = env.SETTINGS ? await env.SETTINGS.get(KV_KEY) : null;
+  return parseSaved(text);
 }
 
-/** Save the Storage page's stores; false when `etag` is no longer current. */
-export async function writeSaved(env, stores, etag) {
-  const bucket = settingsBucket(env);
-  if (!bucket) throw new StoreConfigError('stores can only be saved when the DRAFTS bucket is bound');
-  const current = await bucket.head(SAVED_KEY);
-  if ((current?.etag ?? '') !== (etag ?? '')) return false;
-  const body = JSON.stringify({ version: 1, stores }, null, 2);
-  const res = await bucket.put(SAVED_KEY, body, {
-    httpMetadata: { contentType: 'application/json' },
-    ...(current ? { onlyIf: { etagMatches: current.etag } } : {}),
-  });
-  return Boolean(res);
+function parseSaved(text) {
+  let doc = {};
+  try {
+    doc = text ? JSON.parse(text) : {};
+  } catch {}
+  return { version: Number(doc.version) || 0, stores: Array.isArray(doc.stores) ? doc.stores : [] };
 }
+
+/** Save the KV stores; false when `version` is no longer the current one. */
+export async function writeSaved(env, stores, version) {
+  if (!env.SETTINGS) throw new StoreConfigError('saving to KV needs the SETTINGS KV namespace binding');
+  const current = await readSaved(env);
+  if (current.version !== Number(version)) return false;
+  await env.SETTINGS.put(KV_KEY, JSON.stringify({ version: current.version + 1, stores }));
+  return true;
+}
+
+/* ---------- Stores kept in the admin's browser ---------- */
+
+// The admin app keeps "this browser only" stores in localStorage and
+// mirrors them into cookies scoped to /api (see ui/client.js), so every API
+// request, including image requests from previews, carries them. The Worker
+// uses them for that request only and never stores them.
+export const COOKIE_PREFIX = 'md4c_stores_';
+const MAX_COOKIES = 12;
+
+/** The browser's store settings from the request cookies ([] when none). */
+export function browserConfigs(request) {
+  const header = request?.headers?.get('cookie') ?? '';
+  const parts = [];
+  for (const pair of header.split(/;\s*/)) {
+    const eq = pair.indexOf('=');
+    const name = pair.slice(0, eq);
+    if (!name.startsWith(COOKIE_PREFIX)) continue;
+    const n = Number(name.slice(COOKIE_PREFIX.length));
+    if (Number.isInteger(n) && n >= 0 && n < MAX_COOKIES) parts[n] = pair.slice(eq + 1);
+  }
+  if (!parts.length) return [];
+  try {
+    const b64 = parts.join('').replace(/-/g, '+').replace(/_/g, '/');
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const list = JSON.parse(new TextDecoder().decode(bytes));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [{ id: '', error: 'The storage saved in this browser could not be read; open Storage and save it again' }];
+  }
+}
+
+/* ---------- All stores ---------- */
 
 /** The stores fixed by the deploy (DRAFT_STORES, or the DRAFTS binding). */
 function deployedConfigs(env) {
@@ -376,46 +404,76 @@ function deployedConfigs(env) {
   return configs;
 }
 
-const cache = new WeakMap();
+/** Open user-added stores into `stores`; ones that fail go to `problems`. */
+async function addStores(stores, problems, configs, location, env, check) {
+  for (const raw of configs) {
+    try {
+      if (raw?.error) throw new StoreConfigError(raw.error);
+      const cfg = check ? normalizeStore(raw) : raw;
+      if (stores.has(cfg?.id)) throw new StoreConfigError(`the id "${cfg.id}" is already used`);
+      const label = String(cfg.label ?? cfg.id).slice(0, 60);
+      stores.set(cfg.id, { id: cfg.id, label, role: 'drafts', type: cfg.type, location, store: await openStore(cfg, env) });
+    } catch (err) {
+      problems.push({ store: String(raw?.id ?? ''), location, error: err.message });
+    }
+  }
+}
 
-/**
- * All stores for this environment: Map(id -> { id, label, role, type,
- * saved, store }), "site" first, then the deployed draft stores, then the
- * saved ones. `map.problems` lists saved stores that could not be opened
- * (they are left out rather than breaking the admin).
- *
- * Cached per env object (i.e. per Worker isolate) until the saved settings
- * change, which costs one R2 head request per API call.
- */
-export async function openStores(env) {
-  const bucket = settingsBucket(env);
-  const tag = bucket ? (await bucket.head(SAVED_KEY))?.etag ?? '' : '';
-  const hit = cache.get(env);
-  if (hit && hit.tag === tag) return hit.promise;
+const serverCache = new WeakMap(); // env -> { text, promise }
+const browserCache = new Map(); // cookie text -> opened stores (a few, per isolate)
+
+/** Site, deployed and KV stores; cached per isolate until the KV value changes. */
+async function serverStores(env) {
+  const text = env.SETTINGS ? (await env.SETTINGS.get(KV_KEY)) ?? '' : '';
+  const hit = serverCache.get(env);
+  if (hit && hit.text === text) return hit.promise;
   const promise = (async () => {
     if (!env.SITE?.put) throw new StoreConfigError('the SITE R2 binding is missing');
-    const stores = new Map([['site', { id: 'site', label: 'Published site', role: 'site', type: 'r2', saved: false, store: r2Store(env.SITE) }]]);
-    stores.problems = [];
+    const stores = new Map([['site', { id: 'site', label: 'Published site', role: 'site', type: 'r2', location: 'deploy', store: r2Store(env.SITE) }]]);
+    const problems = [];
     for (const cfg of deployedConfigs(env)) {
       if (!ID_RE.test(cfg?.id ?? '') || cfg.id === 'site') {
         throw new StoreConfigError(`draft store id "${cfg?.id}" must be lowercase letters, digits and dashes, and not "site"`);
       }
       if (stores.has(cfg.id)) throw new StoreConfigError(`duplicate draft store id "${cfg.id}"`);
       const label = String(cfg.label ?? cfg.id).slice(0, 60);
-      stores.set(cfg.id, { id: cfg.id, label, role: 'drafts', type: cfg.type, saved: false, store: guarded(await openOne(cfg, env), label) });
+      stores.set(cfg.id, { id: cfg.id, label, role: 'drafts', type: cfg.type, location: 'deploy', store: guarded(await openOne(cfg, env), label) });
     }
-    for (const cfg of (await readSaved(env)).stores) {
-      try {
-        if (stores.has(cfg?.id)) throw new StoreConfigError(`the id "${cfg.id}" is already used`);
-        const label = String(cfg.label ?? cfg.id).slice(0, 60);
-        stores.set(cfg.id, { id: cfg.id, label, role: 'drafts', type: cfg.type, saved: true, store: await openStore(cfg, env) });
-      } catch (err) {
-        stores.problems.push({ store: String(cfg?.id ?? ''), error: err.message });
-      }
-    }
-    return stores;
+    await addStores(stores, problems, parseSaved(text).stores, 'kv', env, false);
+    return { stores, problems };
   })();
-  cache.set(env, { tag, promise });
-  promise.catch(() => cache.delete(env));
+  serverCache.set(env, { text, promise });
+  promise.catch(() => serverCache.delete(env));
   return promise;
+}
+
+/**
+ * All stores for a request: Map(id -> { id, label, role, type, location,
+ * store }), "site" first, then the deployed draft stores, then those saved
+ * in KV, then those sent by the admin's browser. `map.problems` lists
+ * added stores that could not be opened (left out rather than breaking
+ * the admin).
+ */
+export async function openStores(env, request) {
+  const { stores: base, problems: baseProblems } = await serverStores(env);
+  const stores = new Map(base);
+  const problems = [...baseProblems];
+  const configs = browserConfigs(request);
+  if (configs.length) {
+    const key = JSON.stringify(configs);
+    let opened = browserCache.get(key);
+    if (!opened) {
+      opened = { stores: new Map(), problems: [] };
+      await addStores(opened.stores, opened.problems, configs, 'browser', env, true);
+      if (browserCache.size >= 8) browserCache.delete(browserCache.keys().next().value);
+      browserCache.set(key, opened);
+    }
+    for (const [id, entry] of opened.stores) {
+      if (stores.has(id)) problems.push({ store: id, location: 'browser', error: `the id "${id}" is already used` });
+      else stores.set(id, entry);
+    }
+    problems.push(...opened.problems);
+  }
+  stores.problems = problems;
+  return stores;
 }

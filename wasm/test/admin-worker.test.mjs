@@ -12,6 +12,7 @@ import { after, before, describe, test } from 'node:test';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { v2 as webdav } from 'webdav-server';
 import worker from '../admin/src/worker.js';
+import { kvNamespace } from '../admin/dev/kv-shim.mjs';
 import { r2Bucket } from '../admin/dev/r2-shim.mjs';
 
 const AUD = 'test-aud';
@@ -78,6 +79,7 @@ before(async () => {
   env = {
     SITE: r2Bucket(dir, 'site'),
     DRAFTS: r2Bucket(dir, 'drafts'),
+    SETTINGS: kvNamespace(),
     DRAFT_STORES: JSON.stringify([
       { id: 'drafts', label: 'Drafts', type: 'r2', binding: 'DRAFTS' },
       { id: 'nas', label: 'Home NAS', type: 'webdav', baseUrl: `http://127.0.0.1:${davPort}`,
@@ -261,34 +263,41 @@ describe('WebDAV draft store', () => {
   });
 });
 
-describe('Storage page (saved stores)', () => {
+describe('Storage page', () => {
   const putStorage = (body) => call('PUT', '/api/storage', { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
   const dav = (extra = {}) => ({ id: 'dav2', label: 'Second share', type: 'webdav', baseUrl: `http://127.0.0.1:${davPort}`,
     root: '/', folder: 'saved-drafts', username: 'me', ...extra });
+  // What the admin app sends for "this browser only" stores (ui/client.js).
+  const cookies = (list, size = 50) => {
+    const v = Buffer.from(JSON.stringify(list)).toString('base64url');
+    return v.match(new RegExp(`.{1,${size}}`, 'g')).map((c, i) => `md4c_stores_${i}=${c}`).join('; ');
+  };
 
-  test('a store added in the admin works without secrets or a redeploy', async () => {
+  test('a store saved in KV works without secrets or a redeploy', async () => {
     const view = await call('GET', '/api/storage');
     assert.equal(view.status, 200);
-    assert.equal(view.data.canSave, true);
+    assert.equal(view.data.kv, true);
+    assert.equal(view.data.version, 0);
     assert.deepEqual(view.data.deployed.map((s) => s.id), ['drafts', 'nas']);
-    const saved = await putStorage({ etag: view.data.etag, stores: [dav({ secrets: { password: 'secret' } })] });
+    const saved = await putStorage({ version: 0, stores: [dav({ secrets: { password: 'secret' } })] });
     assert.equal(saved.status, 200, JSON.stringify(saved.data));
-    const [store] = saved.data.stores;
-    assert.equal(store.id, 'dav2');
-    assert.deepEqual(store.secretsSet, { password: true });
+    assert.equal(saved.data.version, 1);
+    assert.deepEqual(saved.data.stores[0].secretsSet, { password: true });
     assert.ok(!JSON.stringify(saved.data).includes('"secret"'), 'the password is never sent back');
+    assert.ok(JSON.parse(await env.SETTINGS.get('draft-stores')).stores[0].secrets.password, 'kept in KV');
+    assert.equal(await env.DRAFTS.head('.admin/stores.json'), null, 'nothing in the drafts bucket');
 
     const session = await call('GET', '/api/session');
-    assert.ok(session.data.stores.some((s) => s.id === 'dav2' && s.saved && s.role === 'drafts'));
+    assert.ok(session.data.stores.some((s) => s.id === 'dav2' && s.location === 'kv' && s.role === 'drafts'));
     assert.equal((await create('dav2', 'posts/saved-one.md', 'hello')).status, 201);
     assert.equal(await read('dav2', 'posts/saved-one.md'), 'hello');
-    // Slugs stay unique across deployed and saved stores.
+    // Slugs stay unique across all stores.
     assert.equal((await create('drafts', 'posts/saved-one.md')).data.code, 'draft-exists');
   });
 
   test('saving again keeps the password unless a new one is given', async () => {
     const view = await call('GET', '/api/storage');
-    const r = await putStorage({ etag: view.data.etag, stores: [dav({ label: 'Renamed' })] });
+    const r = await putStorage({ version: view.data.version, stores: [dav({ label: 'Renamed' })] });
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.deepEqual(r.data.stores[0].secretsSet, { password: true });
     assert.equal(await read('dav2', 'posts/saved-one.md'), 'hello');
@@ -296,36 +305,62 @@ describe('Storage page (saved stores)', () => {
   });
 
   test('stale saves, taken ids and bad settings are refused', async () => {
-    const view = await call('GET', '/api/storage');
-    assert.equal((await putStorage({ etag: 'old', stores: [] })).data.code, 'changed');
-    assert.equal((await putStorage({ etag: view.data.etag, stores: [dav({ id: 'nas' })] })).data.code, 'exists');
-    assert.equal((await putStorage({ etag: view.data.etag, stores: [dav(), dav()] })).data.code, 'exists');
-    const s3 = await putStorage({ etag: view.data.etag, stores: [{ id: 'b2', type: 's3', bucket: 'my-drafts', accessKeyId: 'k' }] });
+    const { version } = (await call('GET', '/api/storage')).data;
+    assert.equal((await putStorage({ version: version - 1, stores: [] })).data.code, 'changed');
+    assert.equal((await putStorage({ version, stores: [dav({ id: 'nas' })] })).data.code, 'exists');
+    assert.equal((await putStorage({ version, stores: [dav(), dav()] })).data.code, 'exists');
+    const s3 = await putStorage({ version, stores: [{ id: 'b2', type: 's3', bucket: 'my-drafts', accessKeyId: 'k' }] });
     assert.equal(s3.data.code, 'bad-store');
     assert.match(s3.data.error, /secret access key/);
-    assert.equal((await putStorage({ etag: view.data.etag, stores: [dav({ baseUrl: 'ftp://x' })] })).data.code, 'bad-store');
-    assert.equal((await putStorage({ etag: view.data.etag, stores: [{ id: 'gh', type: 'github', owner: 'me', repo: 'notes' }] })).data.code, 'bad-store');
+    assert.equal((await putStorage({ version, stores: [dav({ baseUrl: 'ftp://x' })] })).data.code, 'bad-store');
+    assert.equal((await putStorage({ version, stores: [{ id: 'gh', type: 'github', owner: 'me', repo: 'notes' }] })).data.code, 'bad-store');
   });
 
-  test('the settings file is hidden from the file API', async () => {
-    const list = await call('GET', '/api/list?store=drafts');
-    assert.ok(!list.data.items.some((i) => i.key.startsWith('.')));
-    assert.equal((await read('drafts', '.admin/stores.json')), null);
+  test('without a KV namespace, saving is refused', async () => {
+    const r = await call('PUT', '/api/storage', { environment: { ...env, SETTINGS: undefined },
+      body: JSON.stringify({ version: 0, stores: [] }), headers: { 'content-type': 'application/json' } });
+    assert.equal(r.data.code, 'no-kv');
+  });
+
+  test('a store kept in the browser travels in cookies and is never saved', async () => {
+    const local = { ...dav({ id: 'mine', label: 'Only here', folder: 'browser-drafts' }), secrets: { password: 'secret' } };
+    const checked = await postJson('/api/storage/test', { store: local, location: 'browser', check: true });
+    assert.equal(checked.data.ok, true);
+    assert.equal(checked.data.store.folder, 'browser-drafts/');
+    const cookie = cookies([checked.data.store]);
+    const withCookie = (method, path, body) => call(method, path, { body, headers: { cookie, ...(body ? { 'if-none-match': '*' } : {}) } });
+    const session = await withCookie('GET', '/api/session');
+    assert.ok(session.data.stores.some((s) => s.id === 'mine' && s.location === 'browser'));
+    assert.equal((await withCookie('PUT', '/api/file?store=mine&key=posts/local-one.md', 'from my phone')).status, 201);
+    assert.equal((await withCookie('GET', '/api/file?store=mine&key=posts/local-one.md')).data, 'from my phone');
+    assert.ok((await withCookie('GET', '/api/posts')).data.posts.some((p) => p.store === 'mine'));
+    // Other requests (another device) don't see it, and nothing was stored.
+    assert.ok(!(await call('GET', '/api/session')).data.stores.some((s) => s.id === 'mine'));
+    assert.ok(!(await env.SETTINGS.get('draft-stores')).includes('mine'));
+    // A browser store whose id is taken, or an unreadable cookie, is reported.
+    const clash = await call('GET', '/api/session', { headers: { cookie: cookies([{ ...checked.data.store, id: 'dav2' }]) } });
+    assert.ok(clash.data.problems.some((p) => p.store === 'dav2' && p.location === 'browser'));
+    const junk = await call('GET', '/api/session', { headers: { cookie: 'md4c_stores_0=@@@' } });
+    assert.equal(junk.status, 200);
+    assert.match(junk.data.problems[0].error, /could not be read/);
   });
 
   test('connection check reports a wrong password', async () => {
-    const good = await postJson('/api/storage/test', { store: dav() });
+    const good = await postJson('/api/storage/test', { store: dav(), location: 'kv' });
     assert.equal(good.data.ok, true, JSON.stringify(good.data));
     assert.equal(good.data.wrote, true);
-    const bad = await postJson('/api/storage/test', { store: dav({ secrets: { password: 'wrong' } }) });
+    const bad = await postJson('/api/storage/test', { store: dav({ secrets: { password: 'wrong' } }), location: 'kv' });
     assert.equal(bad.data.ok, false);
     assert.match(bad.data.error, /Second share/);
+    // A KV store's saved secret is only used for that store, not a browser one.
+    const browser = await postJson('/api/storage/test', { store: dav(), location: 'browser' });
+    assert.equal(browser.data.ok, false);
   });
 
-  test('an unreachable saved store does not hide the other posts', async () => {
+  test('an unreachable store does not hide the other posts', async () => {
     const view = await call('GET', '/api/storage');
     const down = { id: 'down', label: 'Offline NAS', type: 'webdav', baseUrl: 'http://127.0.0.1:9', secrets: { password: 'x' } };
-    await putStorage({ etag: view.data.etag, stores: [...view.data.stores, down] });
+    await putStorage({ version: view.data.version, stores: [...view.data.stores, down] });
     const posts = await call('GET', '/api/posts');
     assert.equal(posts.status, 200);
     assert.ok(posts.data.posts.some((p) => p.key === 'posts/saved-one.md'));
@@ -335,8 +370,8 @@ describe('Storage page (saved stores)', () => {
     assert.equal(write.data.code, 'store-unreachable');
     // Clean up: the remaining suites expect only the deployed stores.
     const now = await call('GET', '/api/storage');
-    assert.equal((await putStorage({ etag: now.data.etag, stores: [] })).status, 200);
-    assert.ok(!(await call('GET', '/api/session')).data.stores.some((s) => s.saved));
+    assert.equal((await putStorage({ version: now.data.version, stores: [] })).status, 200);
+    assert.ok(!(await call('GET', '/api/session')).data.stores.some((s) => s.location !== 'deploy'));
   });
 });
 

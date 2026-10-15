@@ -34,6 +34,14 @@ bucket_name = "my-blog"
 binding = "DRAFTS"
 bucket_name = "my-blog-drafts"
 
+# Optional: a KV namespace for storage added on the admin's Storage page
+# and kept "in Cloudflare KV" (usable from every device). Without it, such
+# storage can only be kept in each browser.
+#   npx wrangler kv namespace create blog-admin-settings
+[[kv_namespaces]]
+binding = "SETTINGS"
+id = "paste the namespace id here"
+
 [vars]
 ACCESS_TEAM_DOMAIN = "https://your-team.cloudflareaccess.com"
 ACCESS_AUD = "paste the Access application's Audience (AUD) tag here"
@@ -42,10 +50,10 @@ PUBLIC_URL = "https://blog.example.com/"
 MAX_UPLOAD_MB = "25"
 
 # Draft stores: add WebDAV, S3-compatible or GitHub storage from the admin's
-# Storage page (saved in the DRAFTS bucket; no secrets or redeploy needed).
-# DRAFT_STORES is only for stores fixed in the deploy, e.g. more R2 bindings;
-# without it, the DRAFTS bucket above is the deployed draft store.
-# Credentials here name Worker secrets:
+# Storage page, kept in KV (above) or in your browser; no secrets or
+# redeploy needed. DRAFT_STORES is only for stores fixed in the deploy,
+# e.g. more R2 bindings; without it, the DRAFTS bucket above is the
+# deployed draft store. Credentials here name Worker secrets:
 #   npx wrangler secret put NAS_PASSWORD --config admin/wrangler.toml
 # DRAFT_STORES = """[
 #   { "id": "drafts", "label": "Drafts", "type": "r2", "binding": "DRAFTS" },
