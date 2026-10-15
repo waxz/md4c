@@ -41,14 +41,12 @@ ADMIN_EMAILS = "you@example.com"
 PUBLIC_URL = "https://blog.example.com/"
 MAX_UPLOAD_MB = "25"
 
-# Draft stores. Without this, the DRAFTS bucket above is the only one. Each
-# entry is an R2 binding ("r2") or a WebDAV share ("webdav": Nextcloud,
-# ownCloud, a NAS, ...). Passwords/tokens are Worker secrets named here:
+# Draft stores: add WebDAV, S3-compatible or GitHub storage from the admin's
+# Storage page (saved in the DRAFTS bucket; no secrets or redeploy needed).
+# DRAFT_STORES is only for stores fixed in the deploy, e.g. more R2 bindings;
+# without it, the DRAFTS bucket above is the deployed draft store.
+# Credentials here name Worker secrets:
 #   npx wrangler secret put NAS_PASSWORD --config admin/wrangler.toml
-DRAFT_STORES = """[
-  { "id": "drafts", "label": "Drafts", "type": "r2", "binding": "DRAFTS" }
-]"""
-# Example with a second, WebDAV store:
 # DRAFT_STORES = """[
 #   { "id": "drafts", "label": "Drafts", "type": "r2", "binding": "DRAFTS" },
 #   { "id": "nas", "label": "Home NAS", "type": "webdav",

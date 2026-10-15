@@ -249,3 +249,21 @@ code { font-family: var(--mono); font-size: .9em; }
   font: inherit; font-size: 1rem; color: var(--ink); background: var(--surface);
   border: 1px solid var(--line); border-radius: var(--radius); padding: .55rem .7rem; width: 100%;
 }
+
+/* Storage */
+.store-card { align-items: center; padding-right: .6rem; }
+.store-card .post-meta span:last-child { overflow-wrap: anywhere; }
+.store-problem { font-size: .82rem; }
+.store-form { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: .9rem; margin-top: 1rem; }
+.store-form h2 { margin: 0 0 .75rem; font-size: 1.15rem; }
+.store-form .grid { display: grid; gap: .75rem; }
+.field-hint { font-style: normal; font-size: .8rem; color: var(--muted); }
+.check { display: flex; align-items: center; gap: .5rem; font-size: .9rem; }
+.store-check { font-size: .9rem; min-height: 1.2em; }
+.store-check.ok { color: var(--ok); }
+.notice { background: var(--surface); border: 1px solid var(--danger); border-radius: var(--radius); padding: .6rem .8rem; font-size: .9rem; }
+@media (min-width: 720px) {
+  .store-form .grid { grid-template-columns: 1fr 1fr; }
+  .store-form .type-fields { grid-column: 1 / -1; }
+  .store-form .type-fields .hint, .store-form .type-fields .check { grid-column: 1 / -1; }
+}

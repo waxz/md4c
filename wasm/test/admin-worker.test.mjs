@@ -261,6 +261,85 @@ describe('WebDAV draft store', () => {
   });
 });
 
+describe('Storage page (saved stores)', () => {
+  const putStorage = (body) => call('PUT', '/api/storage', { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+  const dav = (extra = {}) => ({ id: 'dav2', label: 'Second share', type: 'webdav', baseUrl: `http://127.0.0.1:${davPort}`,
+    root: '/', folder: 'saved-drafts', username: 'me', ...extra });
+
+  test('a store added in the admin works without secrets or a redeploy', async () => {
+    const view = await call('GET', '/api/storage');
+    assert.equal(view.status, 200);
+    assert.equal(view.data.canSave, true);
+    assert.deepEqual(view.data.deployed.map((s) => s.id), ['drafts', 'nas']);
+    const saved = await putStorage({ etag: view.data.etag, stores: [dav({ secrets: { password: 'secret' } })] });
+    assert.equal(saved.status, 200, JSON.stringify(saved.data));
+    const [store] = saved.data.stores;
+    assert.equal(store.id, 'dav2');
+    assert.deepEqual(store.secretsSet, { password: true });
+    assert.ok(!JSON.stringify(saved.data).includes('"secret"'), 'the password is never sent back');
+
+    const session = await call('GET', '/api/session');
+    assert.ok(session.data.stores.some((s) => s.id === 'dav2' && s.saved && s.role === 'drafts'));
+    assert.equal((await create('dav2', 'posts/saved-one.md', 'hello')).status, 201);
+    assert.equal(await read('dav2', 'posts/saved-one.md'), 'hello');
+    // Slugs stay unique across deployed and saved stores.
+    assert.equal((await create('drafts', 'posts/saved-one.md')).data.code, 'draft-exists');
+  });
+
+  test('saving again keeps the password unless a new one is given', async () => {
+    const view = await call('GET', '/api/storage');
+    const r = await putStorage({ etag: view.data.etag, stores: [dav({ label: 'Renamed' })] });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.deepEqual(r.data.stores[0].secretsSet, { password: true });
+    assert.equal(await read('dav2', 'posts/saved-one.md'), 'hello');
+    assert.equal((await call('GET', '/api/session')).data.stores.find((s) => s.id === 'dav2').label, 'Renamed');
+  });
+
+  test('stale saves, taken ids and bad settings are refused', async () => {
+    const view = await call('GET', '/api/storage');
+    assert.equal((await putStorage({ etag: 'old', stores: [] })).data.code, 'changed');
+    assert.equal((await putStorage({ etag: view.data.etag, stores: [dav({ id: 'nas' })] })).data.code, 'exists');
+    assert.equal((await putStorage({ etag: view.data.etag, stores: [dav(), dav()] })).data.code, 'exists');
+    const s3 = await putStorage({ etag: view.data.etag, stores: [{ id: 'b2', type: 's3', bucket: 'my-drafts', accessKeyId: 'k' }] });
+    assert.equal(s3.data.code, 'bad-store');
+    assert.match(s3.data.error, /secret access key/);
+    assert.equal((await putStorage({ etag: view.data.etag, stores: [dav({ baseUrl: 'ftp://x' })] })).data.code, 'bad-store');
+    assert.equal((await putStorage({ etag: view.data.etag, stores: [{ id: 'gh', type: 'github', owner: 'me', repo: 'notes' }] })).data.code, 'bad-store');
+  });
+
+  test('the settings file is hidden from the file API', async () => {
+    const list = await call('GET', '/api/list?store=drafts');
+    assert.ok(!list.data.items.some((i) => i.key.startsWith('.')));
+    assert.equal((await read('drafts', '.admin/stores.json')), null);
+  });
+
+  test('connection check reports a wrong password', async () => {
+    const good = await postJson('/api/storage/test', { store: dav() });
+    assert.equal(good.data.ok, true, JSON.stringify(good.data));
+    assert.equal(good.data.wrote, true);
+    const bad = await postJson('/api/storage/test', { store: dav({ secrets: { password: 'wrong' } }) });
+    assert.equal(bad.data.ok, false);
+    assert.match(bad.data.error, /Second share/);
+  });
+
+  test('an unreachable saved store does not hide the other posts', async () => {
+    const view = await call('GET', '/api/storage');
+    const down = { id: 'down', label: 'Offline NAS', type: 'webdav', baseUrl: 'http://127.0.0.1:9', secrets: { password: 'x' } };
+    await putStorage({ etag: view.data.etag, stores: [...view.data.stores, down] });
+    const posts = await call('GET', '/api/posts');
+    assert.equal(posts.status, 200);
+    assert.ok(posts.data.posts.some((p) => p.key === 'posts/saved-one.md'));
+    assert.ok(posts.data.problems.some((p) => p.store === 'down' && /Offline NAS/.test(p.error)));
+    const write = await create('down', 'posts/nowhere.md');
+    assert.equal(write.status, 502);
+    assert.equal(write.data.code, 'store-unreachable');
+    // Clean up: the remaining suites expect only the deployed stores.
+    const now = await call('GET', '/api/storage');
+    assert.equal((await putStorage({ etag: now.data.etag, stores: [] })).status, 200);
+    assert.ok(!(await call('GET', '/api/session')).data.stores.some((s) => s.saved));
+  });
+});
+
 describe('publishing with files', () => {
   const md = (body) => `---\ntitle: Trip\ndate: 2026-10-14\nimage: cover.png\n---\n\n${body}\n`;
 

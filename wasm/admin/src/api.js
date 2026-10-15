@@ -15,6 +15,10 @@
 //   POST   /api/publish {from, ifMatch, overwrite}
 //                                               draft -> site, with the files it uses
 //   POST   /api/indexnow {urls}                 notify IndexNow search engines
+//   GET    /api/storage                         draft stores: deployed and saved
+//                                               (settings only, never secrets)
+//   PUT    /api/storage {etag, stores}          save the Storage page's stores
+//   POST   /api/storage/test {store}            try a store's settings
 //
 // Conflicts are refused with 409 (code in the JSON body):
 //   exists            the destination already exists
@@ -27,7 +31,10 @@
 // write does not say whether it creates or updates.
 
 import { cacheControlFor, classify, contentTypeFor, keyProblem, postSlug, referencedKeys } from './paths.js';
-import { openStores, StoreConfigError } from './stores.js';
+import {
+  normalizeStore, openStore, openStores, publicStore, readSaved, settingsBucket, STORE_TYPES,
+  StoreAccessError, StoreConfigError, writeSaved,
+} from './stores.js';
 
 export class ApiError extends Error {
   constructor(status, message, extra = {}) {
@@ -77,19 +84,17 @@ function requireWritable(entry, key) {
 }
 
 /** All objects under `prefix` (a missing folder is just empty). */
+/** Hidden files (".admin/stores.json", connection checks) are never listed. */
+const visible = (meta) => !meta.key.split('/').some((s) => s.startsWith('.'));
+
 async function listAll(entry, prefix) {
   const items = [];
   let cursor;
-  try {
-    do {
-      const page = await entry.store.list(prefix, cursor);
-      items.push(...page.items);
-      cursor = page.cursor;
-    } while (cursor);
-  } catch (err) {
-    if (prefix) return items;
-    throw err;
-  }
+  do {
+    const page = await entry.store.list(prefix, cursor);
+    items.push(...page.items.filter(visible));
+    cursor = page.cursor;
+  } while (cursor);
   return items;
 }
 
@@ -370,8 +375,17 @@ async function listPosts(stores) {
       siteMeta = new Map((doc.items ?? []).filter((e) => e?.path && e.metadata).map((e) => [e.path, e]));
     } catch {}
   }
+  const problems = [...stores.problems];
   for (const entry of stores.values()) {
-    const items = (await listAll(entry, 'posts/')).filter((i) => postSlug(i.key));
+    let items;
+    try {
+      items = (await listAll(entry, 'posts/')).filter((i) => postSlug(i.key));
+    } catch (err) {
+      // One unreachable draft store must not hide every other post.
+      if (!(err instanceof StoreAccessError) || entry.role === 'site') throw err;
+      problems.push({ store: entry.id, error: err.message });
+      continue;
+    }
     await Promise.all(items.map(async (item) => {
       let meta = entry.role === 'site' && siteMeta.get(item.key)?.etag === item.etag ? siteMeta.get(item.key).metadata : null;
       if (!meta) {
@@ -387,7 +401,7 @@ async function listPosts(stores) {
       });
     }));
   }
-  return json({ posts: out });
+  return json({ posts: out, problems });
 }
 
 async function indexNow(request, stores) {
@@ -416,6 +430,72 @@ async function indexNow(request, stores) {
   return json({ status: res.status, submitted: list.length }, res.ok ? 200 : 502);
 }
 
+/* ---------- Storage page ---------- */
+
+const MAX_SAVED_STORES = 20;
+
+async function storageView(env, stores) {
+  const saved = await readSaved(env);
+  return {
+    canSave: Boolean(settingsBucket(env)),
+    etag: saved.etag,
+    types: STORE_TYPES,
+    deployed: [...stores.values()].filter((e) => e.role === 'drafts' && !e.saved)
+      .map(({ id, label, type }) => ({ id, label, type })),
+    stores: saved.stores.map(publicStore),
+    problems: stores.problems,
+  };
+}
+
+function checkedStore(input, previous) {
+  try {
+    return normalizeStore(input, previous);
+  } catch (err) {
+    if (err instanceof StoreConfigError) throw new ApiError(400, err.message, { code: 'bad-store' });
+    throw err;
+  }
+}
+
+async function saveStorage(request, env, stores) {
+  const body = await request.json().catch(() => null);
+  if (!Array.isArray(body?.stores)) throw new ApiError(400, 'Send { etag, stores: [...] }');
+  if (body.stores.length > MAX_SAVED_STORES) throw new ApiError(400, `At most ${MAX_SAVED_STORES} stores`);
+  const saved = await readSaved(env);
+  const changed = () => new ApiError(412, 'The storage settings were changed elsewhere; reload them', { code: 'changed' });
+  if (String(body.etag ?? '') !== saved.etag) throw changed();
+  const previous = new Map(saved.stores.map((s) => [s.id, s]));
+  const taken = new Set([...stores.values()].filter((e) => !e.saved).map((e) => e.id));
+  const out = [];
+  for (const input of body.stores) {
+    const cfg = checkedStore(input, previous.get(input?.id));
+    if (taken.has(cfg.id)) throw new ApiError(409, `The id "${cfg.id}" is already used`, { code: 'exists' });
+    taken.add(cfg.id);
+    out.push(cfg);
+  }
+  if (!(await writeSaved(env, out, saved.etag))) throw changed();
+  return json(await storageView(env, await openStores(env)));
+}
+
+/** Try a store's settings: list it and, except for GitHub, write and delete a file. */
+async function testStorage(request, env) {
+  const body = await request.json().catch(() => null);
+  const saved = await readSaved(env);
+  const cfg = checkedStore(body?.store, saved.stores.find((s) => s.id === body?.store?.id));
+  const store = await openStore(cfg, env);
+  try {
+    const posts = (await store.list('posts/')).items.filter((m) => postSlug(m.key)).length;
+    // GitHub would record the check as two commits; reading is enough there.
+    if (cfg.type !== 'github') {
+      const probe = `.md4c-admin-check-${Date.now()}.txt`;
+      await store.put(probe, new TextEncoder().encode('ok').buffer, { contentType: 'text/plain; charset=utf-8' });
+      await store.delete(probe);
+    }
+    return json({ ok: true, posts, wrote: cfg.type !== 'github' });
+  } catch (err) {
+    return json({ ok: false, error: err.message });
+  }
+}
+
 /** Route an /api request. `user` is the verified Access identity. */
 export async function handleApi(request, env, user) {
   const url = new URL(request.url);
@@ -442,18 +522,16 @@ export async function handleApi(request, env, user) {
         return json({
           email: user.email,
           publicUrl: String(env.PUBLIC_URL ?? ''),
-          stores: [...stores.values()].map(({ id, label, role, type }) => ({ id, label, role, type })),
+          stores: [...stores.values()].map(({ id, label, role, type, saved }) => ({ id, label, role, type, saved })),
+          problems: stores.problems,
           maxUploadMb: Number(env.MAX_UPLOAD_MB ?? 25),
         });
       case 'GET /api/posts':
         return await listPosts(stores);
       case 'GET /api/list': {
         const entry = storeOf(stores, storeParam);
-        const page = await entry.store.list(q('prefix') ?? '', q('cursor') || undefined).catch((err) => {
-          if (q('prefix')) return { items: [] };
-          throw err;
-        });
-        return json({ items: page.items.map((m) => info(entry, m)), ...(page.cursor ? { cursor: page.cursor } : {}) });
+        const page = await entry.store.list(q('prefix') ?? '', q('cursor') || undefined);
+        return json({ items: page.items.filter(visible).map((m) => info(entry, m)), ...(page.cursor ? { cursor: page.cursor } : {}) });
       }
       case 'GET /api/file':
         return await readFile(stores, storeParam, q('key'), false);
@@ -467,11 +545,18 @@ export async function handleApi(request, env, user) {
         return await publish(request, stores);
       case 'POST /api/indexnow':
         return await indexNow(request, stores);
+      case 'GET /api/storage':
+        return json(await storageView(env, stores));
+      case 'PUT /api/storage':
+        return await saveStorage(request, env, stores);
+      case 'POST /api/storage/test':
+        return await testStorage(request, env);
       default:
         throw new ApiError(404, 'No such API route');
     }
   } catch (err) {
     if (err instanceof ApiError) return json({ error: err.message, ...err.extra }, err.status);
+    if (err instanceof StoreAccessError) return json({ error: err.message, code: 'store-unreachable' }, 502);
     if (err instanceof StoreConfigError) return json({ error: `Storage configuration: ${err.message}`, code: 'config' }, 500);
     console.error(err);
     return json({ error: 'Internal error' }, 500);

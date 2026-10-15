@@ -7,12 +7,14 @@
 //   #/files/<store>/<prefix>    folder explorer
 //   #/edit/<store>/<key>        post editor;  #/new[/<store>]  a new post
 //   #/view/<store>/<key>        file details; #/text/<store>/<key> text editor
+//   #/storage                   draft stores; add WebDAV, S3 or GitHub storage
 //   #/settings                  site settings and rebuild
 
 import { api } from './client.js';
 import { hasUnsavedChanges, showEditor, showTextEditor } from './editor.js';
 import { showFile, showFiles } from './explorer.js';
 import { showPosts } from './posts.js';
+import { showStorage } from './storage.js';
 import { DEFAULT_SITE, normalizeSite } from './lib/site-config.js';
 import { dialog, esc, init, publicUrl, rebuildSite, reportError, state, toast } from './shared.js';
 
@@ -36,6 +38,7 @@ async function route() {
     else if (r.name === 'view') await showFile(view, r.store, r.path);
     else if (r.name === 'text') await showTextEditor(view, r.store, r.path);
     else if (r.name === 'settings') await showSettings();
+    else if (r.name === 'storage') await showStorage(view);
     else if (r.name === 'files') await showFiles(view, r.store, r.path);
     else await showPosts(view);
     lastHash = location.hash;

@@ -31,7 +31,7 @@ function section(title, posts, empty) {
 
 export async function showPosts(view) {
   view.innerHTML = '<p class="muted">Loading posts…</p>';
-  const { posts } = await api.posts();
+  const { posts, problems = [] } = await api.posts();
   const order = (a, b) => (b.date || b.uploaded).localeCompare(a.date || a.uploaded);
   const drafts = posts.filter((p) => p.status === 'draft').sort(order);
   const published = posts.filter((p) => p.status === 'published').sort(order);
@@ -41,6 +41,7 @@ export async function showPosts(view) {
       <h1>Posts</h1>
       <a class="btn btn-primary" href="#/new">New post</a>
     </div>
+    ${problems.map((p) => `<p class="notice error">${esc(p.error)} <a href="#/storage">Check storage</a></p>`).join('')}
     <input type="search" class="search" placeholder="Search posts" aria-label="Search posts">
     <div class="post-sections"></div>
   </div>`;

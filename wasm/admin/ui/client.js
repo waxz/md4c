@@ -93,6 +93,19 @@ export const api = {
     });
   },
 
+  /** Draft stores: deployed ones, and the ones saved from the Storage page. */
+  storage: () => request('GET', 'storage'),
+
+  saveStorage: (etag, stores) => request('PUT', 'storage', {
+    body: JSON.stringify({ etag, stores }),
+    headers: { 'content-type': 'application/json' },
+  }),
+
+  testStorage: (store) => request('POST', 'storage/test', {
+    body: JSON.stringify({ store }),
+    headers: { 'content-type': 'application/json' },
+  }),
+
   indexNow: (urls) => request('POST', 'indexnow', {
     body: JSON.stringify({ urls }),
     headers: { 'content-type': 'application/json' },

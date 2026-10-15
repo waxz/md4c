@@ -47,44 +47,51 @@ public bucket can be read by URL, so drafts stay out of it until you publish.
 
 ## Draft stores
 
-By default the `DRAFTS` R2 bucket is the only draft store. Set
-`DRAFT_STORES` in `wrangler.toml` to use several, for example R2 plus a
-WebDAV share on a NAS, Nextcloud or ownCloud:
+The `DRAFTS` R2 bucket is always a draft store. Add more from the admin's
+**Storage** page, from any device, with no redeploy and no Worker secrets:
 
-```toml
-DRAFT_STORES = """[
-  { "id": "drafts", "label": "Drafts",   "type": "r2", "binding": "DRAFTS" },
-  { "id": "nas",    "label": "Home NAS", "type": "webdav",
-    "baseUrl": "https://dav.example.com/remote.php/dav/files/me",
-    "root": "/blog", "folder": "drafts",
-    "username": "me", "passwordSecret": "NAS_PASSWORD" }
-]"""
-```
+| Type | For | You enter |
+|---|---|---|
+| WebDAV | Nextcloud, ownCloud, a NAS | server URL, folder, user name, password (an app password is best) or token |
+| S3-compatible | Amazon S3, another R2 bucket, Backblaze B2, Wasabi, DigitalOcean Spaces, MinIO | service, endpoint, region, bucket, optional folder, access key ID and secret |
+| GitHub | a private repository | owner, repository, branch, folder, and a fine-grained token with *Contents: Read and write* |
 
-```sh
-npx wrangler secret put NAS_PASSWORD --config admin/wrangler.toml
-```
+- **Test connection** lists the store and, except for GitHub, writes and
+  deletes a small check file. GitHub is only read, so the check makes no
+  commits.
+- **Saving** checks the settings on the server. Settings and credentials
+  are kept in the private `DRAFTS` bucket at `.admin/stores.json`.
+- **Secrets stay on the server.** Passwords and keys are never sent back to
+  the browser. Leave a password field empty to keep the saved one.
+- **Hidden from the file API.** The settings file can't be listed, read
+  or overwritten through the file API.
+- **Removing a store** only stops the admin using it. Its files stay where
+  they are.
 
-- `id`: lowercase letters, digits and dashes, not `site`.
-- `label`: what the admin shows.
-- `type`: `r2` (with a `binding`) or `webdav`.
-- WebDAV settings: `baseUrl`, `root` and `folder` (files live in
-  `<root>/<folder>`), plus `username` and `passwordSecret`, or `tokenSecret`
-  for a bearer token.
-- Credentials are always Worker secrets, referred to by name, never values
-  in the config.
+Anyone who can read the `DRAFTS` bucket can also read these credentials:
+the Worker, and Cloudflare API tokens with R2 access to it. So keep that
+bucket private, and give each store credentials limited to it: an app
+password, a key scoped to one bucket, or a token for one repository.
 
-WebDAV stores use storagesdk's WebDAV adapter, which needs the
-`nodejs_compat` flag (already set). The server must be reachable from
-Cloudflare: for a home NAS, that usually means a public HTTPS address or a
-Cloudflare Tunnel. WebDAV has no conditional writes, so for these stores
-"changed elsewhere" is checked just before writing. That is safe for one
-admin, but not a lock between two simultaneous writers.
+Each store's server must be reachable from Cloudflare. For a home NAS, that
+usually means a public HTTPS address or a Cloudflare Tunnel.
 
-A new post asks which draft store to use, and photos you add while
-drafting are uploaded to that store. Unpublishing asks which store to keep
-the post in. Files the post used stay public, because other posts may use
-them too.
+A store that can't be reached doesn't stop the rest of the admin. The
+Posts page shows the error for that store, and writes to it fail with
+`502 store-unreachable` and the reason.
+
+- **Change checks.** WebDAV, S3 and GitHub stores have no conditional
+  writes through storagesdk, so "changed elsewhere" is checked just before
+  writing. That is safe for one admin, but not a lock between two
+  simultaneous writers.
+- **GitHub limits.** Every save is a commit, and files over 1 MB can't be
+  stored.
+
+**In the deploy instead (optional).** `DRAFT_STORES` in `wrangler.toml`
+still works for stores you want fixed in the deploy, such as extra R2
+bindings. There, credentials name Worker secrets
+(`"passwordSecret": "NAS_PASSWORD"`) rather than values. Those stores are
+listed as "set in the deploy" and can't be edited from the admin.
 
 ## One-time setup
 
@@ -92,7 +99,8 @@ You need the blog already deployed (see `DEPLOY-CLOUDFLARE.md`), a domain on
 Cloudflare, and Node.js 20 or newer on a computer for the first deploy.
 
 1. **Create the drafts bucket.** In R2, create a second bucket, for example
-   `my-blog-drafts`. Do **not** enable public access on it.
+   `my-blog-drafts`. Do **not** enable public access on it. It holds drafts,
+   and the settings of storage you add later from the Storage page.
 2. **Protect the admin hostname with Cloudflare Access.** In the Zero Trust
    dashboard (Cloudflare One), add an Access application:
    - Type: *Self-hosted*. Application domain: `admin.blog.example.com`.
@@ -148,6 +156,7 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
   **Delete** removes it.
 - **Changed elsewhere:** if a post was saved from another device while you
   were editing, you choose to overwrite it with your version or load theirs.
+- **Storage:** add, test, edit or remove draft storage (see above).
 - **Settings:** edit the `site` section of `index.json` (title, theme,
   colours, background, `url`, search-engine verification…). Saving rebuilds
   every page. *Notify search engines* submits the pages to IndexNow when

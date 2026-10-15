@@ -7,7 +7,7 @@
 //
 // It stands in for Cloudflare: R2 buckets are folders (dist/public for the
 // site, dist/drafts for drafts), a second draft store is an embedded WebDAV
-// server (files in dist/webdav), and Cloudflare Access is simulated by signing
+// server (files in dist/webdav, user "dev", password "dev-password"), and Cloudflare Access is simulated by signing
 // an Access-style JWT for every request, so the Worker's real token check
 // runs. Because of that, anyone who can reach the port is "signed in": the
 // server only listens on 127.0.0.1.
@@ -21,6 +21,7 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { v2 as webdav } from 'webdav-server';
 import worker from '../src/worker.js';
 import { r2Bucket } from './r2-shim.mjs';
+import { normalizeStore, readSaved, writeSaved } from '../src/stores.js';
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const dist = join(root, 'dist');
@@ -70,12 +71,6 @@ const jwk = { ...(await exportJWK(keys.publicKey)), kid: 'dev', alg: 'RS256', us
 const env = {
   SITE: r2Bucket(dist, 'public'),
   DRAFTS: r2Bucket(dist, 'drafts'),
-  DRAFT_STORES: JSON.stringify([
-    { id: 'drafts', label: 'Drafts (R2)', type: 'r2', binding: 'DRAFTS' },
-    { id: 'nas', label: 'NAS (WebDAV)', type: 'webdav', baseUrl: `http://${HOST}:${DAV_PORT}`,
-      root: '/', folder: 'blog-drafts', username: 'dev', passwordSecret: 'NAS_PASSWORD' },
-  ]),
-  NAS_PASSWORD: 'dev-password',
   ASSETS: { fetch: (req) => fileResponse(join(dist, 'admin'), new URL(req.url).pathname) },
   ACCESS_TEAM_DOMAIN: team,
   ACCESS_AUD: 'local-dev',
@@ -83,6 +78,13 @@ const env = {
   PUBLIC_URL: `http://${HOST}:${BLOG_PORT}/`,
   MAX_UPLOAD_MB: '25',
 };
+
+// The WebDAV share is added the way you would add yours: as a saved store
+// (what the admin's Storage page writes), on the first start only.
+if (!(await readSaved(env)).etag) {
+  await writeSaved(env, [normalizeStore({ id: 'nas', label: 'NAS (WebDAV)', type: 'webdav', baseUrl: `http://${HOST}:${DAV_PORT}`,
+    root: '/', folder: 'blog-drafts', username: 'dev', secrets: { password: 'dev-password' } })], '');
+}
 
 async function readBody(req) {
   const chunks = [];
