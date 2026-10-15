@@ -455,6 +455,40 @@ describe('WebDAV servers that answer differently', () => {
     assert.equal(t.data.wrote, true);
   });
 
+  test('folders made by other WebDAV apps are listed, and can be removed when empty', async () => {
+    const { createClient } = await import('webdav');
+    const other = createClient(`http://127.0.0.1:${davPort}`, { username: 'me', password: 'secret' });
+    // The "nas" store keeps its files in /blog-drafts on this server.
+    await other.createDirectory('/blog-drafts/assets/from-phone-app/2026', { recursive: true });
+    await other.createDirectory('/blog-drafts/notes', { recursive: true });
+    await other.putFileContents('/blog-drafts/notes/idea.txt', 'hello');
+
+    const all = await call('GET', '/api/list?store=nas');
+    for (const f of ['assets/from-phone-app/', 'assets/from-phone-app/2026/', 'notes/']) {
+      assert.ok(all.data.folders.includes(f), `${f} in ${JSON.stringify(all.data.folders)}`);
+    }
+    assert.ok(all.data.items.some((i) => i.key === 'notes/idea.txt'));
+    const sub = await call('GET', '/api/list?store=nas&prefix=assets/');
+    assert.ok(sub.data.folders.includes('assets/from-phone-app/'));
+    assert.ok(!sub.data.folders.includes('notes/'), 'only folders under the prefix');
+
+    // A file may not take an existing (empty) folder's name.
+    assert.equal((await create('nas', 'assets/from-phone-app/2026')).data.code, 'bad-path');
+    await other.createDirectory('/blog-drafts/assets/album.v2');
+    assert.equal((await create('nas', 'assets/album.v2')).data.code, 'folder-exists');
+
+    // New folder in the admin is a real folder other apps see.
+    assert.equal((await postJson('/api/folder', { store: 'nas', prefix: 'assets/made-in-admin/' })).status, 201);
+    assert.equal((await other.stat('/blog-drafts/assets/made-in-admin')).type, 'directory');
+
+    // Removing empty folders deletes them on the server; non-empty ones are refused.
+    assert.equal((await call('DELETE', '/api/folder?store=nas&prefix=assets/from-phone-app/')).status, 204);
+    assert.equal(await other.exists('/blog-drafts/assets/from-phone-app'), false);
+    assert.equal((await call('DELETE', '/api/folder?store=nas&prefix=notes/')).data.code, 'not-empty');
+    assert.equal((await call('DELETE', '/api/folder?store=nas&prefix=assets/made-in-admin/')).status, 204);
+    assert.equal(await other.exists('/blog-drafts/assets/made-in-admin'), false);
+  });
+
   test('Test connection names the step and the server path that failed', async () => {
     const store = { id: 'nowhere', label: 'Wrong URL', type: 'webdav', baseUrl: `${base}/no-such-dir`, root: '/', folder: 'blog', username: 'me', secrets: { password: 'secret' } };
     const t = await postJson('/api/storage/test', { store, location: 'browser' });

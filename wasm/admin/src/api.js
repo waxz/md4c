@@ -142,22 +142,32 @@ async function createFolder(request, stores) {
     const path = parts.slice(0, i).join('/');
     if (await entry.store.head(path)) throw new ApiError(409, `${path} is a file, so it cannot be a folder`, { code: 'file-in-path' });
   }
-  const marker = `${prefix}${FOLDER_MARKER}`;
-  if (!(await entry.store.head(marker))) {
-    await entry.store.put(marker, new ArrayBuffer(0), { contentType: 'text/plain; charset=utf-8' });
+  if (entry.store.makeFolder) {
+    // Stores with real folders (WebDAV) get one, visible to other apps too.
+    await entry.store.makeFolder(prefix);
+  } else {
+    const marker = `${prefix}${FOLDER_MARKER}`;
+    if (!(await entry.store.head(marker))) {
+      await entry.store.put(marker, new ArrayBuffer(0), { contentType: 'text/plain; charset=utf-8' });
+    }
   }
   return json({ store: entry.id, prefix }, 201);
 }
 
 async function deleteFolder(entry, prefix) {
-  const problem = folderProblem(prefix ?? '');
-  if (problem) throw new ApiError(400, problem, { code: 'bad-path' });
-  if ((await listAll(entry, prefix)).length) {
+  // Any folder may be removed when empty, also ones other apps created
+  // outside posts/ and assets/; only the path's shape is checked.
+  const p = String(prefix ?? '');
+  if (!/^([A-Za-z0-9_][^/]*\/)+$/.test(p) || p.split('/').includes('..') || p.length > 500) {
+    throw new ApiError(400, 'Not a folder path', { code: 'bad-path' });
+  }
+  if ((await listAll(entry, p)).length) {
     throw new ApiError(409, 'Only an empty folder can be removed; delete or move its files first', { code: 'not-empty' });
   }
-  for (const m of (await entry.store.list(prefix)).items) {
+  for (const m of (await entry.store.list(p)).items) {
     if (m.key.endsWith(`/${FOLDER_MARKER}`)) await entry.store.delete(m.key);
   }
+  if (entry.store.removeFolder) await entry.store.removeFolder(p);
   return new Response(null, { status: 204 });
 }
 
@@ -165,7 +175,13 @@ async function deleteFolder(entry, prefix) {
 async function checkPathShape(entry, key) {
   if (await entry.store.head(key)) throw new ApiError(409, `${key} already exists`, { code: 'exists' });
   const below = await entry.store.list(`${key}/`).catch(() => ({ items: [] }));
-  if (below.items.length) throw new ApiError(409, `A folder named ${key} already exists`, { code: 'folder-exists' });
+  let folder = below.items.length > 0;
+  if (!folder && entry.store.makeFolder) {
+    // Real folders (WebDAV) can be empty: ask the parent whether one has this name.
+    const parent = key.slice(0, key.lastIndexOf('/') + 1);
+    folder = ((await entry.store.list(parent).catch(() => ({}))).folders ?? []).includes(`${key}/`);
+  }
+  if (folder) throw new ApiError(409, `A folder named ${key} already exists`, { code: 'folder-exists' });
   const parts = key.split('/');
   for (let i = 1; i < parts.length; i++) {
     const parent = parts.slice(0, i).join('/');
@@ -694,7 +710,8 @@ export async function handleApi(request, env, user) {
         const page = await entry.store.list(q('prefix') ?? '', q('cursor') || undefined);
         return json({
           items: page.items.filter(visible).map((m) => info(entry, m)),
-          folders: keptFolders(page.items),
+          // Kept empty folders (markers), and real folders where the store has them.
+          folders: [...new Set([...keptFolders(page.items), ...(page.folders ?? [])])],
           ...(page.cursor ? { cursor: page.cursor } : {}),
         });
       }

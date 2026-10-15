@@ -104,7 +104,12 @@ file-lookup request's word that a file is missing:
 - it checks the folder listing, which is what the explorer shows;
 - it reads, replaces and deletes the file at the path the server reports;
 - after an upload or a delete, it checks the result, and an error names
-  the server address if the server disagrees.
+  the server address if the server disagrees;
+- folders are real WebDAV folders. The explorer lists the server's folders,
+  including empty ones that other WebDAV apps made. *New folder* and
+  *Remove folder* create and delete real folders that other apps see too.
+  R2, S3 and GitHub have no real folders, so there an empty folder is kept
+  by a hidden `.keep` file.
 
 A store that can't be reached doesn't stop the rest of the admin. The
 Posts page shows the error for that store, and writes to it fail with

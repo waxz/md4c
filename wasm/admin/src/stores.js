@@ -142,7 +142,10 @@ export function storagesdkStore(storage, { isFile, prefix = '' } = {}) {
  *   - the file is then read, replaced and deleted at the path the server
  *     itself reported, not only at the path we computed;
  *   - after an upload or a delete, the result is checked, and an error
- *     names the exact server path if the server disagrees.
+ *     names the exact server path if the server disagrees;
+ *   - folders are real WebDAV collections: listings report them (also the
+ *     empty ones other WebDAV apps create), and the admin's New folder /
+ *     Remove folder create and delete them on the server.
  */
 export function webdavStore(storage, { baseUrl, folderPath }) {
   const client = storage.raw;
@@ -185,6 +188,49 @@ export function webdavStore(storage, { baseUrl, folderPath }) {
     return found ? meta(key, found) : null;
   };
   const strip = ({ path, ...rest }) => rest;
+
+  /**
+   * Files and folders under `sub` (a "posts/"-style prefix), walking real
+   * collections one PROPFIND (Depth 1) at a time, as most servers refuse
+   * Depth infinity. Folders come back as "a/b/" prefixes.
+   */
+  const walk = async (sub = '') => {
+    const files = [];
+    const folders = [];
+    // Start at the deepest folder the prefix names, so listing posts/ does
+    // not walk the whole share.
+    const startRel = sub.slice(0, sub.lastIndexOf('/') + 1);
+    const stack = [`${base}/${startRel}`.replace(/\/+$/, '') || '/'];
+    const seen = new Set(stack);
+    const relOf = (filename) => {
+      const f = String(filename ?? '').replace(/\/+$/, '');
+      return f.startsWith(`${base}/`) ? f.slice(base.length + 1) : null;
+    };
+    while (stack.length) {
+      const dir = stack.pop();
+      let entries;
+      try {
+        entries = await client.getDirectoryContents(dir);
+      } catch (err) {
+        if ([404, 403, 405, 409].includes(status(err))) continue; // missing (yet)
+        throw err;
+      }
+      for (const e of Array.isArray(entries) ? entries : []) {
+        const rel = relOf(e.filename);
+        if (!rel || rel.split('/').some((seg) => seg.startsWith('.storagesdk'))) continue;
+        if (e.type === 'directory') {
+          const path = `${base}/${rel}`;
+          if (seen.has(path)) continue;
+          seen.add(path);
+          folders.push(`${rel}/`);
+          stack.push(path);
+        } else {
+          files.push({ ...strip(meta(rel, e)) });
+        }
+      }
+    }
+    return { files, folders };
+  };
   const head = async (key) => {
     const m = await locate(key);
     return m ? strip(m) : null;
@@ -222,19 +268,28 @@ export function webdavStore(storage, { baseUrl, folderPath }) {
       if (await locate(key)) throw new Error(`the server did not delete ${where(key)}`);
     },
     async list(sub = '', cursor) {
-      let page;
-      try {
-        page = await storage.list({ prefix: sub, limit: 1000, ...(cursor ? { cursor } : {}) });
-      } catch (err) {
-        if (err instanceof StorageError && (err.code === 'NotFound' || err.code === 'InvalidArgument')) return { items: [] };
-        throw err;
-      }
+      const { files, folders } = await walk(sub);
+      const items = files.filter((m) => m.key.startsWith(sub)).sort((a, b) => a.key.localeCompare(b.key));
+      const start = cursor ? items.findIndex((m) => m.key > cursor) : 0;
+      const page = start < 0 ? [] : items.slice(start, start + 1000);
+      const more = start >= 0 && start + 1000 < items.length;
       return {
-        items: page.items.map((m) => ({
-          key: m.path, size: m.size, etag: etagOf(m.etag), uploaded: m.lastModified, contentType: m.contentType ?? '',
-        })),
-        ...(page.cursor ? { cursor: page.cursor } : {}),
+        items: page,
+        ...(cursor ? {} : { folders: folders.filter((f) => f.startsWith(sub) && f !== sub).sort() }),
+        ...(more ? { cursor: page[page.length - 1].key } : {}),
       };
+    },
+    /** Create the folder `prefix` ("assets/a/") on the server. */
+    async makeFolder(prefix) {
+      await client.createDirectory(`${base}/${prefix.replace(/\/+$/, '')}`, { recursive: true });
+    },
+    /** Delete the (empty) folder `prefix` on the server. */
+    async removeFolder(prefix) {
+      try {
+        await client.deleteFile(`${base}/${prefix.replace(/\/+$/, '')}`);
+      } catch (err) {
+        if (status(err) !== 404) throw err;
+      }
     },
     where,
   };
