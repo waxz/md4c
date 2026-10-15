@@ -8,6 +8,7 @@
 //   dist/blog/vendor/dompurify/        <- DOMPurify ESM build
 //   dist/blog/vendor/source-serif-4/   <- Source Serif 4 web font (OFL)
 //   dist/blog/vendor/katex/            <- KaTeX, loaded only for posts with math
+//   dist/blog/vendor/highlight/        <- highlight.js, only for posts with code
 //
 // Bare imports ("@storagesdk/core") are rewritten to relative paths so the
 // page needs no inline import map, which a strict CSP would block.
@@ -91,6 +92,13 @@ await cp(join(katexDir, 'dist', 'fonts'), join(katexOut, 'fonts'), {
   recursive: true,
   filter: (src) => !/\.(ttf|woff)$/.test(src), // woff2 is enough for current browsers
 });
+
+// highlight.js, loaded only for posts with fenced code in a named language.
+const hljsDir = dirname(require.resolve('@highlightjs/cdn-assets/package.json'));
+const hljsOut = join(out, 'vendor', 'highlight');
+await mkdir(hljsOut, { recursive: true });
+await cp(join(hljsDir, 'es', 'highlight.min.js'), join(hljsOut, 'highlight.min.js'));
+await cp(join(hljsDir, 'LICENSE'), join(hljsOut, 'LICENSE'));
 
 // A starter home page and theme (no posts yet); publish.mjs rebuilds both.
 const rawSite = JSON.parse(await readFile(join(root, 'blog', 'site.json'), 'utf8'));

@@ -199,6 +199,92 @@ export async function renderMath(container, site) {
   }
 }
 
+/* ---------- Code blocks: syntax colours and a Copy button ---------- */
+
+let hljsPromise;
+function loadHighlight() {
+  // highlight.js (common languages), self-hosted so the CSP stays 'self'.
+  hljsPromise ??= import('./vendor/highlight/highlight.min.js').then((m) => {
+    const hljs = m.default;
+    hljs.configure({ ignoreUnescapedHTML: true });
+    return hljs;
+  });
+  return hljsPromise;
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Older browsers, or a page not served over https.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.className = 'copy-buffer';
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  }
+}
+
+/**
+ * Give each fenced code block a Copy button, and colour the ones whose
+ * language is named (```cpp). highlight.js is loaded only when a post has
+ * such a block; blocks without a language stay plain.
+ */
+export async function enhanceCode(container) {
+  const blocks = [...container.querySelectorAll('pre > code')].filter((c) => !c.closest('.code-block'));
+  if (!blocks.length) return;
+  for (const code of blocks) {
+    const pre = code.parentElement;
+    const lang = /\blanguage-([\w+#.-]+)/.exec(code.className)?.[1] ?? '';
+    const box = document.createElement('div');
+    box.className = 'code-block';
+    pre.replaceWith(box);
+    const bar = document.createElement('div');
+    bar.className = 'code-bar';
+    if (lang) {
+      const label = document.createElement('span');
+      label.className = 'code-lang';
+      label.textContent = lang;
+      bar.append(label);
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'code-copy';
+    button.textContent = 'Copy';
+    button.setAttribute('aria-label', `Copy ${lang ? `${lang} ` : ''}code`);
+    button.addEventListener('click', async () => {
+      const ok = await copyText(code.textContent.replace(/\n$/, ''));
+      button.textContent = ok ? 'Copied' : 'Copy failed';
+      clearTimeout(button.reset);
+      button.reset = setTimeout(() => { button.textContent = 'Copy'; }, 1800);
+    });
+    bar.append(button);
+    box.append(bar, pre);
+  }
+  const named = blocks.filter((c) => /\blanguage-/.test(c.className));
+  if (!named.length) return;
+  let hljs;
+  try {
+    hljs = await loadHighlight();
+  } catch (err) {
+    console.warn('highlight.js:', err);
+    return;
+  }
+  for (const code of named) {
+    const lang = /\blanguage-([\w+#.-]+)/.exec(code.className)[1];
+    if (!hljs.getLanguage(lang)) continue; // unknown: leave it plain
+    // highlight() escapes the text itself; named explicitly, as the class
+    // parser would read "language-c++" as C.
+    code.innerHTML = hljs.highlight(code.textContent, { language: lang, ignoreIllegals: true }).value;
+    code.classList.add('hljs');
+  }
+}
+
 /** Everything an article needs once its .prose is in the page. */
 export async function finishArticle(article, site, info) {
   const prose = article.querySelector('.prose');
@@ -212,5 +298,5 @@ export async function finishArticle(article, site, info) {
     prose.before(toc);
   }
   if (site.citation && !article.querySelector('.cite')) article.append(citation(site, info));
-  await renderMath(prose, site);
+  await Promise.all([renderMath(prose, site), enhanceCode(prose)]);
 }

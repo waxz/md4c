@@ -179,6 +179,10 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
     Generated pages and site code are folded away and can only be viewed.
   - **Uploads:** any type of file can go into `posts/`, a folder inside
     it, or a folder under `assets/`.
+  - **Markdown uploaded to `posts/` becomes a post.** Its address uses
+    lowercase letters, digits and dashes, so the file is renamed if needed
+    (`My_Notes v1.2.md` → `my-notes-v1-2.md`). A name with no usable
+    letters, for example Chinese only, takes the post's title instead.
   - **Folders:** *New folder* creates a folder straight away, and it stays
     listed while it is empty. *Remove folder* removes an empty one.
   - **Viewing a file:** a file's page plays audio and video, shows images

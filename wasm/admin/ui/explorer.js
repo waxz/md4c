@@ -43,17 +43,41 @@ export async function resizeImage(file, max = 2400) {
   return blob && blob.size < file.size ? blob : file;
 }
 
+/** A post's address from text: lowercase letters, digits and dashes. */
+function toSlug(text) {
+  return String(text ?? '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80).replace(/-+$/, '');
+}
+
+/**
+ * The file name a Markdown upload gets in posts/, where it becomes a post:
+ * its address must be lowercase letters, digits and dashes, so "My_Notes
+ * v1.2.md" becomes "my-notes-v1-2.md". A name with nothing usable (e.g.
+ * only Chinese characters) falls back to the post's title, then to a date.
+ */
+async function postFileName(file) {
+  let slug = toSlug(file.name.replace(/\.(md|markdown)$/i, ''));
+  if (!slug) {
+    const title = /^---\r?\n[\s\S]*?^title:\s*(.+)$/m.exec(await file.text().catch(() => ''))?.[1];
+    slug = toSlug(title) || `post-${new Date().toISOString().slice(0, 10)}`;
+  }
+  return `${slug}.md`;
+}
+
 /** Upload files into `prefix` of `store`. Name clashes ask first. Returns the keys written. */
 export async function uploadFiles(store, prefix, files) {
   const written = [];
   for (const file of files) {
-    const name = safeName(file.name);
+    const isPost = prefix === 'posts/' && /\.(md|markdown)$/i.test(file.name);
+    const name = isPost ? await postFileName(file) : safeName(file.name);
     let key = `${prefix}${name}`;
     const kind = classify(roleOf(store), key);
     if (kind !== 'asset' && kind !== 'content') {
-      toast(`${name}: files of this type cannot go in ${prefix || 'the top folder'}`, 'error');
+      toast(`${file.name} cannot go in ${prefix || 'the top folder'}: files go in posts/ or a folder under assets/${
+        /^posts\/[^/]+\.html$/.test(key) ? ', and posts/<name>.html is the page the blog builds for a post' : ''}`, 'error');
       continue;
     }
+    if (isPost && name !== file.name) toast(`${file.name} is saved as ${name}: a post's address uses lowercase letters, digits and dashes.`, 'info');
     const body = await resizeImage(file);
     try {
       try {

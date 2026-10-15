@@ -258,8 +258,14 @@ The `academic` theme is laid out like a journal:
 - a citation box;
 - clean print styles.
 
-It uses Source Serif 4. The font and KaTeX are served from the same bucket,
-so readers never contact a third-party CDN.
+In both themes, fenced code blocks get a **Copy** button. If the block
+names its language (` ```cpp `, ` ```python `, ` ```bash `…), it shows the
+language and colours the code in light and dark. highlight.js, with its
+common languages, is loaded only on pages that need it. Blocks with no
+language, or a language it doesn't know, stay plain.
+
+It uses Source Serif 4. The font, KaTeX and highlight.js are served from the
+same bucket, so readers never contact a third-party CDN.
 
 `publish.mjs` keeps the `site` section when it rebuilds `index.json`. Use
 `--config site.json` to replace it from a local file. On the first publish
