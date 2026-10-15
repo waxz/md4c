@@ -317,13 +317,23 @@ The home page lists every article as a plain link. `sitemap.xml`,
    "language": "en"
    ```
    Then rerun `node scripts/publish.mjs --to r2 --no-posts`.
-2. **Google:** open [Search Console](https://search.google.com/search-console)
-   and add a *URL-prefix* property for `https://blog.example.com/`.
-   - Choose the *HTML tag* verification method.
-   - Copy the `content` value into `index.json` as
-     `"verification": { "google": "…" }` and republish.
-   - Click *Verify*.
-   - Under *Sitemaps*, submit `sitemap.xml`.
+2. **Google:** a new site isn't searchable until Google has found it, and
+   Google rarely finds a new domain by itself. Tell it once:
+   - **Add the site.** Open [Search Console](https://search.google.com/search-console)
+     and add the site. If the domain is on Cloudflare, the easiest way is a
+     *Domain* property (`blog.example.com`) verified with the DNS TXT record
+     Search Console shows; it can add the record to Cloudflare for you.
+     Alternatively, use a *URL-prefix* property with the *HTML tag*
+     method: put the `content` value in `index.json` as
+     `"verification": { "google": "…" }`, republish, then click *Verify*.
+   - **Submit the sitemap.** Under *Sitemaps*, submit
+     `https://blog.example.com/sitemap.xml`.
+   - **Optionally, ask for a quick crawl.** Paste a post's address into
+     *URL inspection* and click *Request indexing*.
+
+   Pages usually appear within a few days, sometimes up to a few weeks.
+   Check with `site:blog.example.com` (the host name only, without
+   `https://`), or `cpp site:blog.example.com` for posts mentioning cpp.
 3. **Bing (which also feeds DuckDuckGo and others):** in
    [Bing Webmaster Tools](https://www.bing.com/webmasters), either import
    the site from Search Console, or verify with the meta tag
@@ -336,6 +346,17 @@ The home page lists every article as a plain link. `sitemap.xml`,
      requires and submits your page URLs to `api.indexnow.org`.
    - Google doesn't use IndexNow; it reads your sitemap.
 
+**Full-text search on the blog.** The home page's search box filters
+titles, abstracts and keywords as you type. For the posts' full text it
+uses a web search engine with a `site:` query:
+- pressing Enter in the box, or the *Full text on Google* link under it,
+  opens Google with `… site:blog.example.com`;
+- choose the engine with `"search"` in `site`: `google` (the default),
+  `bing`, `duckduckgo`, or `none` to turn it off;
+- results come from the engine's index, so they appear only once your
+  pages are indexed (see above), and password-protected posts never show
+  up.
+
 Tips:
 - Give every post a `description` of one or two sentences and a meaningful
   `title`. Use `image` for posts you expect to be shared.
@@ -343,8 +364,8 @@ Tips:
   breaks existing links and resets its search ranking.
 - The canonical home page is `index.html`, which works even without the
   rewrite rule from step 6.
-- Pages are cached for 5 minutes and the sitemap for 1 minute (see step 7),
-  so crawlers see updates quickly.
+- Pages, posts, the sitemap and the feed are served with `no-cache`, and
+  crawlers revalidate them on each visit, so they see updates at once.
 
 ## 9. Edit from your phone (optional)
 

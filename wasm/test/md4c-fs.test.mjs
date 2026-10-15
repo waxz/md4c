@@ -416,3 +416,17 @@ describe('password-protected posts', () => {
     assert.ok(!(await read('index.json')).includes('Oops'));
   });
 });
+
+test('full-text search of the blog on a web search engine', async () => {
+  const { normalizeSite, webSearch } = await import('../js/site-config.js');
+  const site = normalizeSite({ url: 'https://blog.example.com' }, 'https://blog.example.com/');
+  assert.equal(site.search, 'google', 'on by default');
+  assert.deepEqual(webSearch(site, ' c++ templates ', 'blog.example.com'), {
+    label: 'Google',
+    href: 'https://www.google.com/search?q=c%2B%2B%20templates%20site%3Ablog.example.com',
+  });
+  assert.equal(webSearch(site, '   ', 'blog.example.com'), null);
+  assert.match(webSearch(normalizeSite({ search: 'bing' }, 'https://x/'), 'q', 'x.org').href, /^https:\/\/www\.bing\.com\/search\?q=q%20site%3Ax\.org$/);
+  assert.equal(webSearch(normalizeSite({ search: 'none' }, 'https://x/'), 'q', 'x.org'), null);
+  assert.equal(normalizeSite({ search: 'evil.example' }, 'https://x/').search, 'google', 'unknown engines are ignored');
+});

@@ -23,7 +23,9 @@
 //       "footer": "© 2026 Your Name. CC BY 4.0.",
 //       "links": [ { "label": "About", "href": "#/post/about" } ],
 //       "verification": { "google": "...", "bing": "..." },  // search consoles
-//       "indexNowKey": "0123456789abcdef0123456789abcdef"     // publish --indexnow
+//       "indexNowKey": "0123456789abcdef0123456789abcdef",    // publish --indexnow
+//       "search": "google"            // full-text search of the posts on the
+//                                     // web: google | bing | duckduckgo | none
 //     },
 //     "items": [ ... ]
 //   }
@@ -64,7 +66,25 @@ export const DEFAULT_SITE = Object.freeze({
   links: [],
   verification: {},
   indexNowKey: '',
+  search: 'google',
 });
+
+const SEARCH_ENGINES = {
+  google: { label: 'Google', url: 'https://www.google.com/search?q=' },
+  bing: { label: 'Bing', url: 'https://www.bing.com/search?q=' },
+  duckduckgo: { label: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=' },
+};
+
+/**
+ * { label, href } searching the full text of this blog's posts on the web
+ * engine set in `site.search` (a "site:" query), or null when off.
+ */
+export function webSearch(site, query, host) {
+  const engine = SEARCH_ENGINES[site?.search];
+  const q = String(query ?? '').trim();
+  if (!engine || !q || !host) return null;
+  return { label: engine.label, href: `${engine.url}${encodeURIComponent(`${q} site:${host}`)}` };
+}
 
 function text(v, max = 300) {
   return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '';
@@ -146,5 +166,6 @@ export function normalizeSite(raw, base) {
         .map((k) => [k, verification[k]])
     ),
     indexNowKey: /^[A-Za-z0-9-]{8,128}$/.test(r.indexNowKey ?? '') ? r.indexNowKey : '',
+    search: r.search === 'none' || SEARCH_ENGINES[r.search] ? r.search : DEFAULT_SITE.search,
   };
 }

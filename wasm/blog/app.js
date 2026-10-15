@@ -3,7 +3,9 @@
 // whichever page it runs on:
 //
 //   index.html          search, year and tag filters over index.json
-//                       (state in the URL: ?tag=…&year=…&q=…)
+//                       (state in the URL: ?tag=…&year=…&q=…), and a link
+//                       that searches the posts' full text on Google
+//                       (site.search; Enter in the search box opens it)
 //   posts/<slug>.html   contents box, figures, citation, math; for a
 //                       password-protected post, the unlock form first
 //   index.html#/post/x  old links: go to posts/x.html, or render x.md live
@@ -20,6 +22,7 @@ import { isDraft, parseFrontMatter, parseTags, postMetadata, SLUG_RE } from './l
 import { decryptText, readProtected, WrongPasswordError } from './lib/protect.js';
 import { esc, finishArticle, formatDate, renderLive } from './render.js';
 import { applySite, normalizeSite } from './theme.js';
+import { webSearch } from './lib/site-config.js';
 
 const SITE_ROOT = new URL('./', import.meta.url).href;
 const app = document.getElementById('app');
@@ -107,8 +110,21 @@ function entryHtml(p) {
   </li>`;
 }
 
+/** Full-text search of this blog on the web engine in site.search, or null. */
+function fullTextSearch(q) {
+  let host = location.host;
+  try {
+    if (site.url) host = new URL(site.url).host;
+  } catch {}
+  return webSearch(site, q, host);
+}
+
+const searchLink = (web, text) =>
+  `<a class="web-search" href="${esc(web.href)}" target="_blank" rel="noopener">${esc(text)} ↗</a>`;
+
 function renderEntries(posts, f) {
   const shown = posts.filter((p) => matches(p, f));
+  const web = fullTextSearch(f.q);
   const groups = new Map();
   for (const p of shown) {
     const y = p.date.slice(0, 4) || '—';
@@ -117,11 +133,13 @@ function renderEntries(posts, f) {
   }
   document.getElementById('entries').innerHTML = shown.length
     ? [...groups].map(([y, ps]) => `<section class="year-group"><h2 class="year-heading sc">${esc(y)}</h2><ol class="entries">${ps.map(entryHtml).join('')}</ol></section>`).join('')
-    : '<p class="muted empty">No articles match these filters.</p>';
+    : `<p class="muted empty">No titles, abstracts or keywords match these filters.${web
+      ? ` ${searchLink(web, `Search the full text on ${web.label}`)}` : ''}</p>`;
   const active = f.tag || f.year || f.q;
   const status = document.querySelector('.filter-status');
   status.innerHTML = active
-    ? `${shown.length} of ${posts.length} article${posts.length === 1 ? '' : 's'} · <a href="index.html" class="clear">Clear filters</a>`
+    ? `${shown.length} of ${posts.length} article${posts.length === 1 ? '' : 's'} · <a href="index.html" class="clear">Clear filters</a>${web
+      ? ` · ${searchLink(web, `Full text on ${web.label}`)}` : ''}`
     : `${posts.length} article${posts.length === 1 ? '' : 's'}`;
   for (const chip of document.querySelectorAll('.tag-chip')) {
     chip.setAttribute('aria-pressed', String(chip.dataset.tag === f.tag));
@@ -140,7 +158,8 @@ async function showHome() {
 
   document.getElementById('filters').innerHTML = `<div class="filters" role="search">
     <div class="filter-row">
-      <input type="search" id="filter-q" placeholder="Search titles, abstracts, keywords" aria-label="Search articles" value="${esc(f.q)}">
+      <input type="search" id="filter-q" placeholder="${site.search === 'none' ? 'Search titles, abstracts, keywords'
+        : 'Search articles (Enter: full text)'}" aria-label="Search articles" enterkeyhint="search" value="${esc(f.q)}">
       <select id="filter-year" aria-label="Year">
         <option value="">All years</option>
         ${years.map((y) => `<option value="${esc(y)}"${y === f.year ? ' selected' : ''}>${esc(y)}</option>`).join('')}
@@ -156,6 +175,13 @@ async function showHome() {
     renderEntries(posts, f);
   };
   document.getElementById('filter-q').addEventListener('input', (e) => { f.q = e.target.value.trim(); update(); });
+  // Enter searches the posts' full text on the web engine (titles,
+  // abstracts and keywords are already filtered as you type).
+  document.getElementById('filter-q').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    const web = fullTextSearch(e.target.value);
+    if (web) window.open(web.href, '_blank', 'noopener');
+  });
   document.getElementById('filter-year').addEventListener('change', (e) => { f.year = e.target.value; update(); });
   app.addEventListener('click', (e) => {
     const t = e.target.closest('[data-tag]');

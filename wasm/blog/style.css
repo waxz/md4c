@@ -424,3 +424,4 @@ main.page:focus { outline: none; }
 .unlock button:disabled { opacity: .6; cursor: progress; }
 .unlock-status { flex-basis: 100%; margin: 0; min-height: 1.2em; color: var(--muted); }
 .protected-note { color: var(--muted); }
+.empty .web-search { color: var(--accent); white-space: nowrap; }
