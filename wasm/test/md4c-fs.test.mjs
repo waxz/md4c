@@ -283,6 +283,20 @@ describe('static pages for search engines', () => {
     assert.equal(JSON.parse(await read('index.json')).site.title, 'Test Journal', 'site settings kept');
   });
 
+  test('--site-url fills in a missing url and never replaces one', async () => {
+    const indexFile = join(dir, 'public', 'index.json');
+    const original = await readFile(indexFile, 'utf8');
+    const doc = JSON.parse(original);
+    delete doc.site.url;
+    await writeFile(indexFile, JSON.stringify(doc));
+    await publish('--no-posts', '--site-url', 'https://pub-abc.r2.dev');
+    assert.equal(JSON.parse(await readFile(indexFile, 'utf8')).site.url, 'https://pub-abc.r2.dev/');
+    await publish('--no-posts', '--site-url', 'https://other.example');
+    assert.equal(JSON.parse(await readFile(indexFile, 'utf8')).site.url, 'https://pub-abc.r2.dev/');
+    assert.equal(JSON.parse(await readFile(indexFile, 'utf8')).site.title, 'Test Journal', 'other settings kept');
+    await writeFile(indexFile, original);
+  });
+
   test('builds are incremental: only changed posts are re-rendered', async () => {
     let { stdout } = await publish('--no-posts');
     assert.match(stdout, /Incremental build: 0 page\(s\) rendered/);

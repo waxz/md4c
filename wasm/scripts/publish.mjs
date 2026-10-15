@@ -18,6 +18,9 @@
 //   --config <file>  set index.json's "site" section (title, slogan, theme,
 //                    ...) from a JSON file. Without it the existing section
 //                    is kept; on first publish blog/site.json is used.
+//   --site-url <url> the blog's public address; stored as the "site" url
+//                    when the settings have none yet (canonical links,
+//                    sitemap, feed). Settings that have a url keep it.
 //   --indexnow       after publishing, notify Bing, Yandex and other
 //                    IndexNow search engines of the pages (needs site.url
 //                    and site.indexNowKey in index.json)
@@ -43,7 +46,7 @@ import { ADAPTERS, buildAdapter, getAdapterEnvVars } from '@storagesdk/adapters'
 import { contentTypeFor } from '../js/md4c-fs.js';
 import { loadMd4c } from '../js/md4c.js';
 import { isDraft, parseFrontMatter, SLUG_RE } from '../js/post-format.js';
-import { build, CACHE_FILES, listAll } from '../js/site-build.js';
+import { build, CACHE_FILES, listAll, readIndex } from '../js/site-build.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -55,6 +58,7 @@ const { values: args } = parseArgs({
     site: { type: 'boolean', default: false },
     prune: { type: 'boolean', default: false },
     config: { type: 'string' },
+    'site-url': { type: 'string' },
     indexnow: { type: 'boolean', default: false },
     full: { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
@@ -157,13 +161,19 @@ async function readJsonObject(text, what) {
 }
 
 /** --config replaces the "site" section; blog/site.json seeds it on first publish. */
-async function siteOptions() {
+async function siteOptions(storage) {
   if (args.config) return { site: await readJsonObject(await readFile(resolve(args.config), 'utf8'), args.config) };
+  let defaultSite;
   try {
-    return { defaultSite: await readJsonObject(await readFile(join(root, 'blog', 'site.json'), 'utf8'), 'blog/site.json') };
-  } catch {
-    return {};
+    defaultSite = await readJsonObject(await readFile(join(root, 'blog', 'site.json'), 'utf8'), 'blog/site.json');
+  } catch {}
+  const url = args['site-url'];
+  if (url) {
+    if (!/^https?:\/\/[^\s"]+$/.test(url)) throw new Error(`--site-url must be an http(s) URL, got "${url}"`);
+    const current = (await readIndex(storage))?.site ?? defaultSite ?? {};
+    if (!current.url) return { site: { ...current, url: url.replace(/\/?$/, '/') } };
   }
+  return defaultSite ? { defaultSite } : {};
 }
 
 /** Tell IndexNow engines (Bing, Yandex, Seznam, Naver, ...) about our pages. */
@@ -199,7 +209,7 @@ if (dry) {
   console.log('Done (dry run): index.json and pages would be rebuilt.');
 } else {
   const { site, posts, rendered, removed, full } = await build(storage, md4c, {
-    ...(await siteOptions()),
+    ...(await siteOptions(storage)),
     full: args.full,
     log: (msg) => (msg.startsWith('upload') || msg.startsWith('delete') ? log(msg) : console.warn(msg)),
   });
