@@ -88,16 +88,34 @@ export const api = {
   /** Every post in every store: { posts: [{ store, key, status, title, date, tags, … }] }. */
   posts: () => request('GET', 'posts'),
 
+  /** Every object under `prefix`; `.folders` = kept (possibly empty) folders. */
   async listAll(store, prefix = '') {
     const items = [];
+    const folders = new Set();
     let cursor;
     do {
       const page = await request('GET', `list?${q({ store, prefix, ...(cursor ? { cursor } : {}) })}`);
       items.push(...page.items);
+      for (const f of page.folders ?? []) folders.add(f);
       cursor = page.cursor;
     } while (cursor);
+    items.folders = [...folders];
     return items;
   },
+
+  /** Keep a folder ("assets/talks/"), so it exists before anything is in it. */
+  createFolder: (store, prefix) => request('POST', 'folder', {
+    body: JSON.stringify({ store, prefix }),
+    headers: { 'content-type': 'application/json' },
+  }),
+
+  deleteFolder: (store, prefix) => request('DELETE', `folder?${q({ store, prefix })}`),
+
+  /** Copy a draft store's attachment to the site at the same path. */
+  copyToSite: (store, key, { overwrite = false, ifMatch } = {}) => request('POST', 'copy', {
+    body: JSON.stringify({ from: { store, key }, overwrite, ...(ifMatch ? { ifMatch } : {}) }),
+    headers: { 'content-type': 'application/json' },
+  }),
 
   /** { text|bytes, etag } of an object. */
   async read(store, key, as = 'text') {
@@ -135,9 +153,9 @@ export const api = {
 
   /** Copy a draft to the site with the files it uses (the draft stays).
    *  `overwrite` lists public files to replace; `siteEtag` = the public copy last seen. */
-  publish(from, etag, overwrite = [], siteEtag) {
+  publish(from, etag, overwrite = [], siteEtag, { skip = [], dryRun = false } = {}) {
     return request('POST', 'publish', {
-      body: JSON.stringify({ from, ...(etag ? { ifMatch: etag } : {}), ...(siteEtag ? { siteIfMatch: siteEtag } : {}), overwrite }),
+      body: JSON.stringify({ from, ...(etag ? { ifMatch: etag } : {}), ...(siteEtag ? { siteIfMatch: siteEtag } : {}), overwrite, skip, dryRun }),
       headers: { 'content-type': 'application/json' },
     });
   },

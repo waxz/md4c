@@ -34,12 +34,12 @@ All of these checks happen on the server, whatever the browser sends.
 |---|---|
 | Identity | Each request must carry a valid Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`). The Worker checks the signature against your team's rotating keys, the issuer, the audience (AUD) and the expiry. `ADMIN_EMAILS` optionally narrows access further. This includes the admin pages, not just the API. |
 | CSRF | Writes need an `X-Admin-Request` header and a same-origin request (`Origin`, `Sec-Fetch-Site`). |
-| Paths | Posts must be `posts/<slug>.md` (slug: `a-z`, `0-9`, `-`). Files go in `posts/` or `assets/`. Generated files (`index.html`, `posts/<slug>.html`, `index.json`, `sitemap.xml`, `feed.xml`, `robots.txt`, `theme.css`) are written by the build. The site's code (`app.js`, `lib/`, `vendor/`, …) is locked and deployed only with `publish.mjs --site`. No `..`, hidden files or odd characters are allowed. |
+| Paths | Posts must be `posts/<slug>.md` (slug: `a-z`, `0-9`, `-`). Only posts are rendered to pages. Attachments of any type (images, audio, video, PDFs, HTML, archives…) go in `posts/`, its sub-folders, or `assets/`, and are served as they are. An empty folder is kept by a hidden `.keep` marker (`POST /api/folder`). Generated files (`index.html`, `posts/<slug>.html`, `index.json`, `sitemap.xml`, `feed.xml`, `robots.txt`, `theme.css`) are written by the build. The site's code (`app.js`, `lib/`, `vendor/`, …) is locked and deployed only with `publish.mjs --site`. No `..`, hidden files or odd characters are allowed. |
 | Content types | Set by the server from the file extension. The client's claim is ignored. |
 | Create vs update | Creating needs `If-None-Match: *`, and fails with `409 exists` if the file is there. Updating needs `If-Match: <etag>`, and fails with `412 changed` if the file was changed elsewhere, for example from your laptop, since you opened it. A post or asset written without either gets `428`. |
 | Path conflicts | `409 file-in-path`: a parent "folder" is actually a file. `409 folder-exists`: a folder already has that name. |
 | Slug conflicts | A post has at most one draft, in one draft store, and at most one published copy. A new post can't take the slug of another draft (`409 draft-exists`) or of a published post (`409 published-exists`). The exception is the published post's own draft, which the editor creates with `ofPublished=1`. |
-| Publishing | Drafts go live only through `/api/publish`; a plain move into the site is refused with `use-publish`. Publishing works out which local files the post uses, from its Markdown links and images, HTML `src`/`href`, and front-matter `image:`, and copies them from the draft store to the site before the post itself. A public file with the same name is kept if identical. If it differs, publishing stops with `409 asset-conflict` and lists the files, and nothing is written until you choose to replace them. The draft and its files stay in the draft store. Publishing again updates the public copy; if that copy was changed elsewhere since the editor last saw it (`siteIfMatch`), it stops with `412 changed`. |
+| Publishing | Drafts go live only through `/api/publish`; a plain move into the site is refused with `use-publish`. Publishing works out which local files the post uses, from its Markdown links and images, HTML `src`/`href`, and front-matter `image:`, and copies them from the draft store to the site before the post itself. The editor first asks for the plan (`dryRun`) and lets you untick files, which stay private (`skip`). Single attachments can also be copied with `/api/copy`. A public file with the same name is kept if identical. If it differs, publishing stops with `409 asset-conflict` and lists the files, and nothing is written until you choose to replace them. The draft and its files stay in the draft store. Publishing again updates the public copy; if that copy was changed elsewhere since the editor last saw it (`siteIfMatch`), it stops with `412 changed`. |
 | Size | Uploads are limited to `MAX_UPLOAD_MB` (25 MB by default). The editor shrinks photos to 2400 px first. |
 | Reading | Files are served to the admin with a sandboxing CSP, and HTML is served as text, so stored content can never run in the admin's origin. |
 
@@ -157,16 +157,26 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
 - **Posts** (the home screen) lists drafts, labelled by their store, and
   published posts in separate sections, with search.
 - **Files** browses one store at a time; choose it from the menu at the top.
-  - Each folder lists sub-folders, posts, and images & files separately.
+  - Each folder lists sub-folders, posts and attachments separately.
     Generated pages and site code are folded away and can only be viewed.
-  - Upload into `posts/` or a folder under `assets/`.
-  - The ⋯ button on a row offers open, copy Markdown, open on the blog,
-    rename or move, and delete.
-  - A folder appears once something is uploaded into it.
+  - **Uploads:** any type of file can go into `posts/`, a folder inside
+    it, or a folder under `assets/`.
+  - **Folders:** *New folder* creates a folder straight away, and it stays
+    listed while it is empty. *Remove folder* removes an empty one.
+  - **Viewing a file:** a file's page plays audio and video, shows images
+    and text, and offers a download.
+  - **The ⋯ menu** on a row offers open, copy Markdown, open on the blog,
+    rename or move, and delete. In a draft store it also has *Copy to
+    public site*, which asks before replacing a different public file.
 - **New post:** fill in the title (the address is derived from it), date,
   tags, and optionally a search description and social image. Then write.
-  - The toolbar inserts Markdown. *Image* uploads photos from the camera
-    roll and inserts them as figures.
+  - The toolbar inserts Markdown.
+    - *Image* uploads photos from the camera roll and inserts them as
+      figures.
+    - *File* attaches anything else. Audio and video become players, and
+      other files become links.
+  - **Publish** lists the files the post uses. Untick any that should stay
+    private.
   - *Preview* shows the post in the blog's theme, with contents box, figures
     and maths.
   - What you type is also kept on the device until it's saved.

@@ -11,9 +11,9 @@ import { api, ApiError } from './client.js';
 import { parseFrontMatter, SLUG_RE } from './lib/post-format.js';
 import { slugify } from './lib/blog-render.js';
 import { finishArticle, renderLive } from './render.js';
-import { uploadFiles, editHref, filesHref } from './explorer.js';
+import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
 import {
-  confirmDialog, dialog, draftStores, esc, formatTime, publicUrl, rebuildSite, reportError, state,
+  confirmDialog, dialog, draftStores, esc, formatSize, formatTime, publicUrl, rebuildSite, reportError, state,
   storeLabel, toast,
 } from './shared.js';
 
@@ -176,7 +176,8 @@ export async function showEditor(view, store, key, newStore) {
           <button type="button" data-md="quote" title="Quote">❝</button>
           <button type="button" data-md="code" title="Code">{ }</button>
           <button type="button" data-md="math" title="Math">∑</button>
-          <label class="tb-upload" title="Insert image">Image<input type="file" accept="image/*" multiple hidden></label>
+          <label class="tb-upload" title="Insert images">Image<input type="file" accept="image/*" multiple hidden></label>
+          <label class="tb-upload" title="Attach files: audio, video, PDF, HTML, anything">File<input type="file" multiple hidden></label>
         </div>
         <textarea name="body" spellcheck="true" aria-label="Markdown"></textarea>
       </div>
@@ -306,19 +307,24 @@ export async function showEditor(view, store, key, newStore) {
   });
   // Photos go where the post is: a draft's stay private in its draft store
   // and are copied to the site when it is published.
-  form.querySelector('.tb-upload input').addEventListener('change', async (e) => {
-    const files = [...e.target.files];
-    e.target.value = '';
-    const keys = await uploadFiles(home(), 'posts/', files);
-    for (const k of keys) {
-      const name = k.slice('posts/'.length);
-      const alt = name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
-      // Its own paragraph, so the blog typesets it as a numbered figure.
-      const before = f.body.value.slice(0, f.body.selectionStart);
-      const lead = before === '' || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
-      wrapSelection(f.body, `${lead}![${alt}](${name})\n\n`, '', '');
-    }
-  });
+  // Attachments go next to the post (posts/ in its draft store) and are
+  // linked from it: images as figures, audio and video as players, other
+  // files as links. Publishing offers to copy them to the site.
+  for (const input of form.querySelectorAll('.tb-upload input')) {
+    input.addEventListener('change', async (e) => {
+      const files = [...e.target.files];
+      e.target.value = '';
+      const keys = await uploadFiles(home(), 'posts/', files);
+      for (const k of keys) {
+        const snippet = attachmentMarkdown(k.slice('posts/'.length));
+        const before = f.body.value.slice(0, f.body.selectionStart);
+        // Images and players get their own paragraph (a numbered figure).
+        const block = IMAGE_EXT.test(k) || snippet.startsWith('<');
+        const lead = !block || before === '' || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+        wrapSelection(f.body, block ? `${lead}${snippet}\n\n` : snippet, '', '');
+      }
+    });
+  }
 
   // Offer to restore text that was typed but never saved (e.g. tab closed).
   const stash = loadLocal(local);
@@ -403,13 +409,43 @@ export async function showEditor(view, store, key, newStore) {
     Object.assign(ed, { store: toStore, key: newKey, etag: moved.etag });
   }
 
-  /** Publish the draft with its files; asks before replacing different public files. */
+  /**
+   * Which of the files the post uses go public: lists them with checkboxes
+   * (new files ticked; different public files unticked, ticking replaces
+   * them). Returns { skip, overwrite }, or null when cancelled.
+   */
+  async function chooseFiles(files) {
+    const open = files.filter((x) => x.action === 'copy' || x.action === 'conflict');
+    if (!open.length) return { skip: [], overwrite: [] };
+    const body = document.createElement('div');
+    body.innerHTML = `<p>This post uses these files from ${esc(storeLabel(ed.store))}. Tick the ones to copy to the public site;
+      unticked files stay private (their links won't work on the blog).</p>
+      <ul class="file-choices">${open.map((x) => `<li><label class="check">
+        <input type="checkbox" value="${esc(x.key)}" ${x.action === 'copy' ? 'checked' : ''}>
+        <span><code>${esc(x.key)}</code> <span class="muted">${esc(formatSize(x.size ?? 0))}${x.action === 'conflict'
+          ? ' · <b>replaces</b> a different public file' : ''}</span></span></label></li>`).join('')}</ul>`;
+    const ok = await dialog({ title: 'Files to publish', body, buttons: [
+      { label: 'Cancel', value: false }, { label: 'Publish', value: true, kind: 'primary' },
+    ] });
+    if (!ok) return null;
+    const ticked = new Set([...body.querySelectorAll('input:checked')].map((i) => i.value));
+    return {
+      skip: open.filter((x) => !ticked.has(x.key)).map((x) => x.key),
+      overwrite: open.filter((x) => x.action === 'conflict' && ticked.has(x.key)).map((x) => x.key),
+    };
+  }
+
+  /** Publish the draft with the files chosen; asks before replacing different public files. */
   async function publishDraft() {
-    let overwrite = [];
+    const from = { store: ed.store, key: ed.key };
+    const siteEtag = () => (ed.published?.key === ed.key ? ed.published.etag : undefined);
+    const plan = await api.publish(from, ed.etag, [], siteEtag(), { dryRun: true });
+    const choice = await chooseFiles(plan.files);
+    if (!choice) return null;
+    let overwrite = choice.overwrite;
     for (;;) {
       try {
-        const siteEtag = ed.published?.key === ed.key ? ed.published.etag : undefined;
-        return await api.publish({ store: ed.store, key: ed.key }, ed.etag, overwrite, siteEtag);
+        return await api.publish(from, ed.etag, overwrite, siteEtag(), { skip: choice.skip });
       } catch (err) {
         if (!(err instanceof ApiError && err.code === 'asset-conflict')) throw err;
         const ul = document.createElement('div');
@@ -494,7 +530,8 @@ export async function showEditor(view, store, key, newStore) {
             api.indexNow([url, publicUrl('index.html')]).catch((err) => console.warn('IndexNow:', err));
           }
           const copied = r.files.copy.length + r.files.overwrite.length;
-          toast(`${r.updated ? 'Site updated' : 'Published'}${copied ? ` with ${copied} file(s)` : ''}. The draft stays in ${storeLabel(ed.store)}.`, 'success');
+          const kept = r.files.skip.length;
+          toast(`${r.updated ? 'Site updated' : 'Published'}${copied ? ` with ${copied} file(s)` : ''}${kept ? `; ${kept} file(s) kept private` : ''}. The draft stays in ${storeLabel(ed.store)}.`, 'success');
           return;
         }
 

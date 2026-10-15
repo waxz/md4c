@@ -145,7 +145,7 @@ describe('CSRF defence', () => {
 
 describe('paths', () => {
   test('site code and malformed paths cannot be written', async () => {
-    for (const k of ['app.js', 'lib/md4c.js', 'vendor/katex/katex.mjs', 'style.css', 'posts/x.js', 'other/a.png']) {
+    for (const k of ['app.js', 'lib/md4c.js', 'vendor/katex/katex.mjs', 'style.css', 'other/a.png', 'posts/Bad.md']) {
       const r = await create('site', k);
       assert.equal(r.status, 403, k);
       assert.equal(r.data.code, 'locked');
@@ -160,6 +160,37 @@ describe('paths', () => {
     assert.equal((await create('drafts', 'posts/x.html')).status, 403);
     assert.equal((await create('drafts', 'assets/d/ok.png')).status, 201);
     assert.equal((await call('GET', '/api/list?store=nope')).status, 404);
+  });
+
+  test('attachments of any type go in posts/ and assets/; only posts/<slug>.md is a post', async () => {
+    for (const k of ['assets/talk.mp3', 'assets/demo/page.html', 'posts/data.zip', 'posts/notes/extra.md', 'posts/sub/clip.mov']) {
+      const r = await create('drafts', k);
+      assert.equal(r.status, 201, `${k}: ${JSON.stringify(r.data)}`);
+      assert.equal(r.data.kind, 'asset', k);
+    }
+    assert.equal((await env.DRAFTS.head('assets/talk.mp3')).httpMetadata.contentType, 'audio/mpeg');
+    assert.equal((await create('drafts', 'posts/x.html')).status, 403, 'posts/<slug>.html is a generated page');
+  });
+
+  test('empty folders are kept and listed until removed', async () => {
+    const mk = (store, prefix) => postJson('/api/folder', { store, prefix });
+    assert.equal((await mk('nas', 'assets/new-folder/')).status, 201);
+    assert.equal((await mk('drafts', 'posts/gallery/')).status, 201);
+    let list = await call('GET', '/api/list?store=nas');
+    assert.ok(list.data.folders.includes('assets/new-folder/'), JSON.stringify(list.data.folders));
+    assert.ok(!list.data.items.some((i) => i.key.endsWith('.keep')), 'the marker is not a file');
+    assert.ok((await call('GET', '/api/list?store=drafts&prefix=posts/')).data.folders.includes('posts/gallery/'));
+    assert.equal((await mk('nas', 'other/x/')).status, 400);
+    assert.equal((await mk('nas', 'assets/')).status, 400);
+    assert.equal((await mk('drafts', 'assets/talk.mp3/')).data.code, 'file-in-path');
+    assert.equal((await mk('nas', 'assets/scans.v1/')).status, 201);
+    assert.equal((await create('nas', 'assets/scans.v1')).data.code, 'folder-exists', 'a file may not take its name');
+    assert.equal((await create('nas', 'assets/new-folder/a.pdf')).status, 201);
+    assert.equal((await call('DELETE', '/api/folder?store=nas&prefix=assets/new-folder/')).data.code, 'not-empty');
+    const del = await call('DELETE', '/api/folder?store=drafts&prefix=posts/gallery/');
+    assert.equal(del.status, 204);
+    list = await call('GET', '/api/list?store=drafts&prefix=posts/');
+    assert.ok(!list.data.folders.includes('posts/gallery/'));
   });
 
   test('content types come from the extension, not the client', async () => {
@@ -454,6 +485,38 @@ describe('publishing with files', () => {
     assert.equal(second.data.code, 'draft-exists', 'trip already has its draft in nas');
     assert.equal((await publish('site', 'posts/trip.md')).status, 400, 'only drafts publish');
     assert.equal((await publish('nas', 'posts/nothing.md')).status, 404);
+  });
+
+  test('you choose which attachments go public', async () => {
+    await create('drafts', 'posts/keep-private.pdf', 'PRIVATE');
+    await create('drafts', 'posts/song.mp3', 'MP3');
+    await create('drafts', 'posts/choose.md', md('[pdf](keep-private.pdf) <audio controls src="song.mp3"></audio>'));
+    const plan = await publish('drafts', 'posts/choose.md', { dryRun: true });
+    assert.equal(plan.status, 200, JSON.stringify(plan.data));
+    assert.deepEqual(plan.data.files.map((f) => `${f.key}:${f.action}`).sort(), ['posts/keep-private.pdf:copy', 'posts/song.mp3:copy']);
+    assert.equal(await read('site', 'posts/choose.md'), null, 'a dry run writes nothing');
+    const r = await publish('drafts', 'posts/choose.md', { skip: ['posts/keep-private.pdf'] });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.deepEqual(r.data.files.skip, ['posts/keep-private.pdf']);
+    assert.equal(await read('site', 'posts/song.mp3'), 'MP3');
+    assert.equal(await read('site', 'posts/keep-private.pdf'), null, 'skipped files stay private');
+  });
+
+  test('a draft store file can be copied to the site on its own', async () => {
+    const copy = (key, extra = {}) => postJson('/api/copy', { from: { store: 'drafts', key }, ...extra });
+    await create('drafts', 'assets/handout.html', '<h1>v1</h1>');
+    const r = await copy('assets/handout.html');
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(await read('site', 'assets/handout.html'), '<h1>v1</h1>');
+    assert.equal((await copy('assets/handout.html')).data.action, 'identical');
+    const cur = (await call('GET', '/api/list?store=drafts&prefix=assets/handout.html')).data.items[0];
+    await put('drafts', 'assets/handout.html', '<h1>v2</h1>', { 'if-match': `"${cur.etag}"` });
+    assert.equal((await copy('assets/handout.html')).data.code, 'exists');
+    assert.equal((await copy('assets/handout.html', { overwrite: true, ifMatch: 'stale' })).data.code, 'changed');
+    assert.equal((await copy('assets/handout.html', { overwrite: true })).data.action, 'overwrite');
+    assert.equal(await read('site', 'assets/handout.html'), '<h1>v2</h1>');
+    assert.equal((await copy('posts/d1.md')).data.code, 'use-publish');
+    assert.equal((await postJson('/api/copy', { from: { store: 'site', key: 'assets/handout.html' } })).status, 400);
   });
 
   test('previews read draft files, falling back to the public copy', async () => {

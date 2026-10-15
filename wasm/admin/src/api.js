@@ -4,7 +4,10 @@
 //
 //   GET    /api/session                         who is signed in; the stores
 //   GET    /api/posts                           posts in every store, with title/date/tags
-//   GET    /api/list?store=&prefix=&cursor=     objects (flat; the UI builds folders)
+//   GET    /api/list?store=&prefix=&cursor=     objects (flat; the UI builds folders),
+//                                               plus `folders`: kept empty folders
+//   POST   /api/folder {store, prefix}          keep an (empty) folder: posts/… or assets/…
+//   DELETE /api/folder?store=&prefix=           forget an empty folder
 //   GET    /api/file?store=&key=                object body
 //   GET    /api/raw/<store>/<key>               same, by path (previews resolve relative
 //                                               URLs); draft stores fall back to the site
@@ -14,9 +17,12 @@
 //                                               starts the draft of a published post
 //   DELETE /api/file?store=&key=                delete; If-Match optional
 //   POST   /api/move    {from, to, ifMatch}     rename, move, unpublish
-//   POST   /api/publish {from, ifMatch, siteIfMatch, overwrite}
+//   POST   /api/publish {from, ifMatch, siteIfMatch, overwrite, skip, dryRun}
 //                                               copy a draft to the site, with the files
-//                                               it uses; the draft stays (working copy)
+//                                               it uses (except `skip`); the draft stays
+//                                               (working copy). dryRun: only the plan
+//   POST   /api/copy {from, overwrite, ifMatch} copy a draft store's attachment to the
+//                                               site (same path); ifMatch = public copy
 //   POST   /api/indexnow {urls}                 notify IndexNow search engines
 //   GET    /api/storage                         draft stores: deployed and saved in KV
 //                                               (settings only, never secrets)
@@ -39,7 +45,9 @@
 // with 412 "changed" when If-Match no longer matches, 428 when a content
 // write does not say whether it creates or updates.
 
-import { cacheControlFor, classify, contentTypeFor, keyProblem, postSlug, referencedKeys } from './paths.js';
+import {
+  cacheControlFor, classify, contentTypeFor, FOLDER_MARKER, folderProblem, keyProblem, postSlug, referencedKeys,
+} from './paths.js';
 import {
   normalizeStore, openStore, openStores, publicStore, readSaved, STORE_TYPES,
   StoreAccessError, StoreConfigError, writeSaved,
@@ -105,6 +113,48 @@ async function listAll(entry, prefix) {
     cursor = page.cursor;
   } while (cursor);
   return items;
+}
+
+/** The kept folders (from their markers) among `items`, as "a/b/" prefixes. */
+function keptFolders(items) {
+  const out = [];
+  for (const m of items) {
+    if (!m.key.endsWith(`/${FOLDER_MARKER}`)) continue;
+    const prefix = m.key.slice(0, -FOLDER_MARKER.length);
+    if (!folderProblem(prefix)) out.push(prefix);
+  }
+  return out;
+}
+
+async function createFolder(request, stores) {
+  const body = await request.json().catch(() => ({}));
+  const entry = storeOf(stores, body.store);
+  const prefix = String(body.prefix ?? '');
+  const problem = folderProblem(prefix);
+  if (problem) throw new ApiError(400, problem, { code: 'bad-path' });
+  // A file may not use the folder's name, or the name of a folder above it.
+  const parts = prefix.slice(0, -1).split('/');
+  for (let i = 1; i <= parts.length; i++) {
+    const path = parts.slice(0, i).join('/');
+    if (await entry.store.head(path)) throw new ApiError(409, `${path} is a file, so it cannot be a folder`, { code: 'file-in-path' });
+  }
+  const marker = `${prefix}${FOLDER_MARKER}`;
+  if (!(await entry.store.head(marker))) {
+    await entry.store.put(marker, new ArrayBuffer(0), { contentType: 'text/plain; charset=utf-8' });
+  }
+  return json({ store: entry.id, prefix }, 201);
+}
+
+async function deleteFolder(entry, prefix) {
+  const problem = folderProblem(prefix ?? '');
+  if (problem) throw new ApiError(400, problem, { code: 'bad-path' });
+  if ((await listAll(entry, prefix)).length) {
+    throw new ApiError(409, 'Only an empty folder can be removed; delete or move its files first', { code: 'not-empty' });
+  }
+  for (const m of (await entry.store.list(prefix)).items) {
+    if (m.key.endsWith(`/${FOLDER_MARKER}`)) await entry.store.delete(m.key);
+  }
+  return new Response(null, { status: 204 });
 }
 
 /** Refuse a new object whose path clashes with a file or folder. */
@@ -269,6 +319,7 @@ async function publish(request, stores) {
   if (!['undefined', 'string'].includes(typeof body.siteIfMatch)) throw new ApiError(400, 'siteIfMatch must be a string');
   if (!postSlug(from.key)) throw new ApiError(400, 'Only posts (posts/<slug>.md) can be published', { code: 'bad-path' });
   const overwrite = new Set(Array.isArray(body.overwrite) ? body.overwrite : []);
+  const skip = new Set(Array.isArray(body.skip) ? body.skip : []);
 
   const post = await src.store.get(from.key);
   if (!post) throw new ApiError(404, `${from.key} not found`, { code: 'not-found' });
@@ -291,6 +342,10 @@ async function publish(request, stores) {
     if (classify('drafts', key) !== 'asset') continue;
     const draftFile = await src.store.get(key);
     if (!draftFile) continue; // already public, or simply missing
+    if (skip.has(key)) {
+      plan.push({ key, action: 'skip', size: draftFile.meta.size });
+      continue;
+    }
     const publicMeta = await site.store.head(key);
     if (!publicMeta) {
       try {
@@ -299,14 +354,25 @@ async function publish(request, stores) {
         conflicts.push({ key, reason: err.message });
         continue;
       }
-      plan.push({ key, action: 'copy', body: draftFile.body });
+      plan.push({ key, action: 'copy', size: draftFile.meta.size, body: draftFile.body });
     } else if (await sameBytes(draftFile.body, (await site.store.get(key)).body)) {
-      plan.push({ key, action: 'identical' });
+      plan.push({ key, action: 'identical', size: draftFile.meta.size });
     } else if (overwrite.has(key)) {
-      plan.push({ key, action: 'overwrite', body: draftFile.body, ifMatch: publicMeta.etag });
+      plan.push({ key, action: 'overwrite', size: draftFile.meta.size, body: draftFile.body, ifMatch: publicMeta.etag });
     } else {
-      conflicts.push({ key, reason: 'a different file with this name is already public' });
+      conflicts.push({ key, size: draftFile.meta.size, reason: 'a different file with this name is already public' });
     }
+  }
+  if (body.dryRun) {
+    // What publishing would do, so the admin can choose which files go public.
+    return json({
+      dryRun: true,
+      updated: Boolean(live),
+      files: [
+        ...plan.map(({ key, action, size }) => ({ key, action, size })),
+        ...conflicts.map(({ key, size, reason }) => ({ key, action: 'conflict', size, reason })),
+      ],
+    });
   }
   if (conflicts.length) {
     throw new ApiError(409, `Publishing would replace ${conflicts.length} public file(s) that differ from the draft's`,
@@ -325,8 +391,42 @@ async function publish(request, stores) {
     post: info(site, published),
     draft: info(src, post.meta),
     updated: Boolean(live),
-    files: Object.fromEntries(['copy', 'identical', 'overwrite'].map((a) => [a, plan.filter((p) => p.action === a).map((p) => p.key)])),
+    files: Object.fromEntries(['copy', 'identical', 'overwrite', 'skip'].map((a) => [a, plan.filter((p) => p.action === a).map((p) => p.key)])),
   });
+}
+
+/**
+ * Copy one attachment from a draft store to the site, at the same path.
+ * An identical public file is left alone; a different one needs
+ * `overwrite` (and `ifMatch`, the public copy's etag, when known).
+ */
+async function copyToSite(request, stores) {
+  const body = await request.json().catch(() => ({}));
+  const { from } = endpoints(body);
+  if (!from) throw new ApiError(400, 'Body must be { from: {store, key}, overwrite?, ifMatch? }');
+  const src = storeOf(stores, from.store);
+  const site = stores.get('site');
+  if (src.role !== 'drafts') throw new ApiError(400, 'Copy from a draft store', { code: 'bad-path' });
+  requireKey(from.key);
+  if (classify('site', from.key) !== 'asset') {
+    throw new ApiError(400, postSlug(from.key) ? 'Publish posts from the editor' : `${from.key} cannot be public`,
+      { code: postSlug(from.key) ? 'use-publish' : 'bad-path' });
+  }
+  const file = await src.store.get(from.key);
+  if (!file) throw new ApiError(404, `${from.key} not found`, { code: 'not-found' });
+  const current = await site.store.head(from.key);
+  if (!current) {
+    await checkPathShape(site, from.key);
+    return json({ action: 'copy', file: info(site, await site.store.put(from.key, file.body, putOpts(from.key))) }, 201);
+  }
+  if (await sameBytes(file.body, (await site.store.get(from.key)).body)) return json({ action: 'identical', file: info(site, current) });
+  if (!body.overwrite) {
+    throw new ApiError(409, `A different ${from.key} is already public`, { code: 'exists', current: info(site, current) });
+  }
+  const ifMatch = body.ifMatch ? stripQuotes(body.ifMatch) : current.etag;
+  const written = await site.store.put(from.key, file.body, putOpts(from.key, ifMatch));
+  if (!written) throw new ApiError(412, `The public ${from.key} was changed elsewhere`, { code: 'changed', current: info(site, current) });
+  return json({ action: 'overwrite', file: info(site, written) });
 }
 
 function bodyResponse(key, obj) {
@@ -541,7 +641,11 @@ export async function handleApi(request, env, user) {
       case 'GET /api/list': {
         const entry = storeOf(stores, storeParam);
         const page = await entry.store.list(q('prefix') ?? '', q('cursor') || undefined);
-        return json({ items: page.items.filter(visible).map((m) => info(entry, m)), ...(page.cursor ? { cursor: page.cursor } : {}) });
+        return json({
+          items: page.items.filter(visible).map((m) => info(entry, m)),
+          folders: keptFolders(page.items),
+          ...(page.cursor ? { cursor: page.cursor } : {}),
+        });
       }
       case 'GET /api/file':
         return await readFile(stores, storeParam, q('key'), false);
@@ -553,6 +657,12 @@ export async function handleApi(request, env, user) {
         return await moveFile(request, stores);
       case 'POST /api/publish':
         return await publish(request, stores);
+      case 'POST /api/copy':
+        return await copyToSite(request, stores);
+      case 'POST /api/folder':
+        return await createFolder(request, stores);
+      case 'DELETE /api/folder':
+        return await deleteFolder(storeOf(stores, storeParam), q('prefix'));
       case 'POST /api/indexnow':
         return await indexNow(request, stores);
       case 'GET /api/storage':

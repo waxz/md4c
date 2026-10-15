@@ -5,8 +5,11 @@
 //   drafts  private draft stores (R2, WebDAV, ...): posts and their files
 //
 // Every key falls into one class:
-//   content    posts/<slug>.md — the source of a post
-//   asset      images, PDFs, media, stylesheets: posts/<file>, assets/**
+//   content    posts/<slug>.md — the source of a post, the only file
+//              rendered to a page
+//   asset      attachments of any type (images, audio, video, PDFs, HTML,
+//              archives...): posts/<file> (except posts/<slug>.html),
+//              posts/<folder>/**, assets/**
 //   generated  written by the site build: index.json, index.html,
 //              posts/<slug>.html, theme.css, robots.txt, sitemap.xml,
 //              feed.xml, <indexnow-key>.txt
@@ -16,6 +19,9 @@
 // Content and asset writes must say whether they create (If-None-Match: *)
 // or update a known version (If-Match: <etag>); generated files may be
 // overwritten freely.
+//
+// Folders are key prefixes. An empty folder is kept by a hidden marker,
+// <folder>/.keep, which the file API never lists or serves as a file.
 
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 const SEGMENT_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,199}$/;
@@ -43,10 +49,33 @@ const TYPES = {
   ogg: 'audio/ogg',
   csv: 'text/csv; charset=utf-8',
   bib: 'text/plain; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  tex: 'text/plain; charset=utf-8',
+  yaml: 'text/plain; charset=utf-8',
+  yml: 'text/plain; charset=utf-8',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  wav: 'audio/wav',
+  flac: 'audio/flac',
+  opus: 'audio/ogg',
+  oga: 'audio/ogg',
+  ogv: 'video/ogg',
+  mov: 'video/quicktime',
+  m4v: 'video/mp4',
+  vtt: 'text/vtt; charset=utf-8',
+  zip: 'application/zip',
+  gz: 'application/gzip',
+  tar: 'application/x-tar',
+  epub: 'application/epub+zip',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ipynb: 'application/json',
+  woff2: 'font/woff2',
 };
 
-const ASSET_EXT = new Set(['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'ico', 'pdf',
-  'mp4', 'webm', 'mp3', 'ogg', 'csv', 'bib', 'txt', 'css', 'json']);
+export const FOLDER_MARKER = '.keep';
 const GENERATED_ROOT = new Set(['index.json', 'index.html', 'theme.css', 'robots.txt', 'sitemap.xml', 'feed.xml']);
 const INDEXNOW_KEY_FILE = /^[A-Za-z0-9-]{8,128}\.txt$/;
 
@@ -99,12 +128,24 @@ export function classify(role, key) {
   }
   if (parts[0] === 'posts' && parts.length === 2) {
     const base = parts[1].slice(0, parts[1].lastIndexOf('.'));
+    // Only posts/<slug>.md is a post (rendered to posts/<slug>.html).
     if (ext === 'md') return SLUG_RE.test(base) ? 'content' : 'locked';
-    if (ext === 'html') return SLUG_RE.test(base) ? 'generated' : 'locked';
-    return ASSET_EXT.has(ext) ? 'asset' : 'locked';
+    if (ext === 'html' && SLUG_RE.test(base)) return 'generated';
+    return 'asset';
   }
-  if (parts[0] === 'assets') return ASSET_EXT.has(ext) || ext === 'md' ? 'asset' : 'locked';
+  // Any other file under posts/ or assets/ is an attachment, kept as is.
+  if (parts[0] === 'posts' || parts[0] === 'assets') return 'asset';
   return 'locked';
+}
+
+/** Error message if `prefix` ("assets/a/b/") can't be a folder, else ''. */
+export function folderProblem(prefix) {
+  if (typeof prefix !== 'string' || !prefix.endsWith('/')) return 'a folder path ends with "/"';
+  const parts = prefix.slice(0, -1).split('/');
+  if (parts[0] !== 'posts' && parts[0] !== 'assets') return 'folders go in posts/ or assets/';
+  if (parts.length < 2) return 'posts/ and assets/ always exist';
+  for (const p of parts) if (!SEGMENT_RE.test(p) || p.endsWith('.')) return `invalid folder name "${p}"`;
+  return prefix.length > MAX_KEY_LENGTH - 10 ? 'folder path too long' : '';
 }
 
 /** For posts/<slug>.md, the slug; else null. */

@@ -1,10 +1,12 @@
 // Folder explorer over the stores (the public site and each draft store).
-// Keys are flat; folders are derived from "/" in the keys, and an empty
-// folder exists only in the URL until something is uploaded into it.
+// Keys are flat; folders are derived from "/" in the keys, and a new, empty
+// folder is kept by the Worker (a hidden marker) until files go in it.
 //
-// Each folder lists, in separate sections: sub-folders, posts, images and
-// other files, and (collapsed) generated pages and site code, which can be
-// viewed but not changed.
+// Each folder lists, in separate sections: sub-folders, posts, attachments
+// (any type: images, audio, video, PDFs, HTML...), and (collapsed)
+// generated pages and site code, which can be viewed but not changed.
+// Attachments in a draft store can be copied to the public site one by one;
+// publishing a post offers to copy the ones it uses.
 
 import { api, ApiError } from './client.js';
 import { classify, postSlug } from './paths.js';
@@ -13,8 +15,10 @@ import {
   rebuildSite, reportError, safeName, state, storeLabel, toast,
 } from './shared.js';
 
-const TEXT_EXT = /\.(md|json|css|txt|xml|csv|bib)$/;
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg|ico)$/;
+const TEXT_EXT = /\.(md|json|css|txt|xml|csv|bib|html?|js|tex|ya?ml|vtt)$/;
+export const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg|ico)$/;
+export const AUDIO_EXT = /\.(mp3|m4a|aac|wav|flac|ogg|oga|opus)$/;
+export const VIDEO_EXT = /\.(mp4|webm|mov|m4v|ogv)$/;
 
 export const filesHref = (store, prefix = '') => `#/files/${store}/${prefix}`;
 export const editHref = (store, key) => `#/edit/${store}/${key}`;
@@ -98,6 +102,12 @@ function splitFolder(items, prefix) {
     if (slash === -1) files.push(item);
     else folders.set(rest.slice(0, slash), (folders.get(rest.slice(0, slash)) ?? 0) + 1);
   }
+  // Kept folders, empty or not, at any depth below `prefix`.
+  for (const kept of items.folders ?? []) {
+    if (!kept.startsWith(prefix) || kept === prefix) continue;
+    const name = kept.slice(prefix.length).split('/')[0];
+    if (!folders.has(name)) folders.set(name, 0);
+  }
   files.sort((a, b) => a.key.localeCompare(b.key));
   return { folders: [...folders].sort((a, b) => a[0].localeCompare(b[0])), files };
 }
@@ -146,6 +156,7 @@ export async function showFiles(view, store, prefix) {
   const assets = files.filter((f) => f.kind === 'asset');
   const hidden = files.filter((f) => f.kind === 'generated' || f.kind === 'locked');
   const canUpload = /^(posts\/|assets\/)/.test(prefix);
+  const emptyKept = !files.length && !folders.length && (items.folders ?? []).includes(prefix);
 
   view.innerHTML = `<div class="files">
     <div class="view-head">
@@ -158,6 +169,7 @@ export async function showFiles(view, store, prefix) {
     <div class="toolbar-row">
       ${canUpload ? '<label class="btn btn-primary">Upload<input type="file" id="upload" multiple hidden></label>' : ''}
       <button type="button" class="btn" id="new-folder">New folder</button>
+      ${emptyKept ? '<button type="button" class="btn btn-danger-text" id="remove-folder">Remove folder</button>' : ''}
     </div>
     ${!canUpload ? `<p class="hint">Files go in <a href="${esc(filesHref(store, 'posts/'))}">posts/</a> (next to the posts that use them) or in a folder under <a href="${esc(filesHref(store, 'assets/'))}">assets/</a>.</p>` : ''}
     ${prefix || folders.length ? `<section class="file-section"><h2>Folders</h2>${list([
@@ -165,7 +177,7 @@ export async function showFiles(view, store, prefix) {
       ...folders.map(([name, n]) => `<li class="file-row folder"><a class="file-main" href="${esc(filesHref(store, `${prefix}${name}/`))}"><span class="icon" aria-hidden="true">▸</span><span class="name">${esc(name)}</span><span class="meta">${n} item${n === 1 ? '' : 's'}</span></a></li>`),
     ])}</section>` : ''}
     ${posts.length ? `<section class="file-section"><h2>Posts</h2>${list(posts.map((f) => row(store, f)))}</section>` : ''}
-    ${assets.length ? `<section class="file-section"><h2>Images &amp; files</h2>${list(assets.map((f) => row(store, f)))}</section>` : ''}
+    ${assets.length ? `<section class="file-section"><h2>Attachments</h2>${list(assets.map((f) => row(store, f)))}</section>` : ''}
     ${!posts.length && !assets.length && !folders.length ? '<p class="muted empty">This folder is empty.</p>' : ''}
     ${hidden.length ? `<details class="file-section hidden-files"><summary>Generated pages &amp; site code (${hidden.length})</summary>
       <p class="hint">Rebuilt on every publish, or deployed with the site's code. View only.</p>${list(hidden.map((f) => row(store, f)))}</details>` : ''}
@@ -179,12 +191,26 @@ export async function showFiles(view, store, prefix) {
     if (written.length) showFiles(view, store, prefix);
   });
   view.querySelector('#new-folder').addEventListener('click', async () => {
-    const name = await promptDialog('New folder', `Folder name inside ${prefix || 'the top folder'}`);
+    const name = await promptDialog('New folder', `Folder name inside ${prefix || 'assets/'}`);
     if (!name) return;
     const safe = safeName(name).replace(/\./g, '-');
-    const target = !prefix && safe !== 'posts' && safe !== 'assets' ? `assets/${safe}/` : `${prefix}${safe}/`;
-    location.hash = filesHref(store, target);
-    toast('Empty folder: it is created when you upload the first file.', 'info');
+    // Files live in posts/ and assets/; a top-level folder goes in assets/.
+    const target = !prefix || !canUpload ? `assets/${safe}/` : `${prefix}${safe}/`;
+    try {
+      await api.createFolder(store, target);
+      toast(`Created ${target}`, 'success');
+      location.hash = filesHref(store, target);
+    } catch (err) {
+      reportError(err);
+    }
+  });
+  view.querySelector('#remove-folder')?.addEventListener('click', async () => {
+    try {
+      await api.deleteFolder(store, prefix);
+      location.hash = filesHref(store, prefix.replace(/[^/]+\/$/, ''));
+    } catch (err) {
+      reportError(err);
+    }
   });
   view.querySelector('.files').addEventListener('click', (e) => {
     const btn = e.target.closest('.row-menu');
@@ -194,6 +220,31 @@ export async function showFiles(view, store, prefix) {
   });
 }
 
+/** Markdown that shows or links an attachment at `ref` (relative to the post). */
+export function attachmentMarkdown(ref) {
+  const name = ref.slice(ref.lastIndexOf('/') + 1);
+  const label = name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
+  if (IMAGE_EXT.test(ref)) return `![${label}](${ref})`;
+  if (AUDIO_EXT.test(ref)) return `<audio controls src="${ref}"></audio>`;
+  if (VIDEO_EXT.test(ref)) return `<video controls src="${ref}"></video>`;
+  return `[${name}](${ref})`;
+}
+
+/** Copy one draft-store attachment to the public site, asking before replacing. */
+async function copyToPublic(store, item) {
+  try {
+    const r = await api.copyToSite(store, item.key);
+    toast(r.action === 'identical' ? `${item.key} is already public.` : `Copied ${item.key} to the public site.`, 'success');
+  } catch (err) {
+    if (!(err instanceof ApiError && err.code === 'exists')) throw err;
+    const ok = await confirmDialog('Replace the public file?',
+      `A different ${item.key} is already public. Replace it with this one? Posts using it will show the new file.`, 'Replace');
+    if (!ok) return;
+    await api.copyToSite(store, item.key, { overwrite: true, ifMatch: err.current?.etag });
+    toast(`Replaced the public ${item.key}.`, 'success');
+  }
+}
+
 /** The ⋯ menu: one tidy list of what can be done with a file. */
 async function rowActions(view, store, prefix, item) {
   const name = item.key.slice(item.key.lastIndexOf('/') + 1);
@@ -201,8 +252,9 @@ async function rowActions(view, store, prefix, item) {
   const url = store === 'site' ? publicUrl(item.key.replace(/\.md$/, '.html')) : '';
   const choices = [
     { label: item.kind === 'content' ? 'Edit' : 'Open', value: 'open', kind: 'primary' },
-    ...(IMAGE_EXT.test(item.key) && /^(posts|assets)\//.test(item.key) ? [{ label: 'Copy Markdown', value: 'md' }] : []),
+    ...(item.kind === 'asset' ? [{ label: 'Copy Markdown', value: 'md' }] : []),
     ...(url ? [{ label: 'Open on the blog', value: 'public' }] : []),
+    ...(store !== 'site' && item.kind === 'asset' ? [{ label: 'Copy to public site', value: 'copy' }] : []),
     ...(editable ? [{ label: 'Rename or move', value: 'rename' }, { label: 'Delete', value: 'delete', kind: 'danger' }] : []),
     { label: 'Cancel', value: null },
   ];
@@ -213,10 +265,13 @@ async function rowActions(view, store, prefix, item) {
       location.hash = openHref(store, item);
     } else if (choice === 'public') {
       window.open(url, '_blank', 'noopener');
+    } else if (choice === 'copy') {
+      await copyToPublic(store, item);
     } else if (choice === 'md') {
       const rel = item.key.startsWith('posts/') ? item.key.slice(6) : `../${item.key}`;
-      await navigator.clipboard?.writeText(`![](${rel})`).catch(() => {});
-      toast(`Copied ![](${rel})`, 'success');
+      const snippet = attachmentMarkdown(rel);
+      await navigator.clipboard?.writeText(snippet).catch(() => {});
+      toast(`Copied ${snippet}`, 'success');
     } else if (choice === 'delete') {
       if (!(await confirmDialog('Delete?', published
         ? `Delete the published post ${item.key}? Its page disappears from the blog.`
@@ -250,14 +305,25 @@ export async function showFile(view, store, key) {
   }
   const folder = key.includes('/') ? key.slice(0, key.lastIndexOf('/') + 1) : '';
   const url = store === 'site' ? publicUrl(key) : '';
-  const isImage = IMAGE_EXT.test(key);
+  const src = esc(api.fileUrl(store, key));
+  const isText = TEXT_EXT.test(key) || /^text\//.test(item.contentType);
+  const preview = IMAGE_EXT.test(key) ? `<img class="file-preview" src="${src}" alt="">`
+    : AUDIO_EXT.test(key) ? `<audio class="file-preview" controls src="${src}"></audio>`
+    : VIDEO_EXT.test(key) ? `<video class="file-preview" controls src="${src}"></video>`
+    : isText ? '<pre class="file-text">Loading…</pre>'
+    : '<p class="muted">No preview for this type of file; download it to open it.</p>';
   view.innerHTML = `<div class="file-view">
     <nav class="crumbs">${breadcrumbs(store, folder)}<span aria-hidden="true">/</span><span>${esc(key.slice(folder.length))}</span></nav>
     <p class="meta">${esc(formatSize(item.size))} · ${esc(item.contentType)} · ${esc(formatTime(item.uploaded))}${isDraftStore(store) ? ' · private draft store' : ''}</p>
-    <div class="toolbar-row">${url ? `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Open public URL</a>` : ''}</div>
-    ${isImage ? `<img class="file-preview" src="${esc(api.fileUrl(store, key))}" alt="">` : '<pre class="file-text">Loading…</pre>'}
+    <div class="toolbar-row">
+      <a class="btn" href="${src}" download="${esc(key.slice(folder.length))}">Download</a>
+      ${url ? `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Open public URL</a>` : ''}
+      ${store !== 'site' && item.kind === 'asset' ? '<button type="button" class="btn" data-act="copy">Copy to public site</button>' : ''}
+    </div>
+    ${preview}
   </div>`;
-  if (!isImage) {
+  view.querySelector('[data-act="copy"]')?.addEventListener('click', () => copyToPublic(store, item).catch(reportError));
+  if (isText) {
     const { text } = await api.read(store, key);
     view.querySelector('.file-text').textContent = text.length > 200000 ? `${text.slice(0, 200000)}\n…` : text;
   }
