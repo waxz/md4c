@@ -4,8 +4,9 @@ A small admin app for the blog, usable from a phone. You can browse the
 storage folders, write and edit posts with a live preview in the blog's own
 theme, upload photos, and save drafts, publish, update or unpublish posts.
 Drafts and their photos stay private in one or more draft stores (R2
-buckets, or WebDAV shares such as Nextcloud or a NAS), and are copied to
-the public bucket when you publish.
+buckets, WebDAV shares such as Nextcloud or a NAS, S3-compatible buckets
+or GitHub). Publishing copies them to the public bucket, and the draft stays
+as your working copy.
 It runs as a Cloudflare Worker on its own hostname (for example
 `admin.blog.example.com`), behind Cloudflare Access.
 
@@ -37,8 +38,8 @@ All of these checks happen on the server, whatever the browser sends.
 | Content types | Set by the server from the file extension. The client's claim is ignored. |
 | Create vs update | Creating needs `If-None-Match: *`, and fails with `409 exists` if the file is there. Updating needs `If-Match: <etag>`, and fails with `412 changed` if the file was changed elsewhere, for example from your laptop, since you opened it. A post or asset written without either gets `428`. |
 | Path conflicts | `409 file-in-path`: a parent "folder" is actually a file. `409 folder-exists`: a folder already has that name. |
-| Slug conflicts | A slug lives in exactly one store: it is either published or a draft in a single draft store. `409 published-exists` and `409 draft-exists` are returned on create, rename, publish and unpublish. |
-| Publishing | Drafts go live only through `/api/publish`; a plain move into the site is refused with `use-publish`. Publishing works out which local files the post uses, from its Markdown links and images, HTML `src`/`href`, and front-matter `image:`, and copies them from the draft store to the site before the post itself. A public file with the same name is kept if identical. If it differs, publishing stops with `409 asset-conflict` and lists the files, and nothing is written until you choose to replace them. Afterwards the draft store keeps only files that other drafts still use. |
+| Slug conflicts | A post has at most one draft, in one draft store, and at most one published copy. A new post can't take the slug of another draft (`409 draft-exists`) or of a published post (`409 published-exists`). The exception is the published post's own draft, which the editor creates with `ofPublished=1`. |
+| Publishing | Drafts go live only through `/api/publish`; a plain move into the site is refused with `use-publish`. Publishing works out which local files the post uses, from its Markdown links and images, HTML `src`/`href`, and front-matter `image:`, and copies them from the draft store to the site before the post itself. A public file with the same name is kept if identical. If it differs, publishing stops with `409 asset-conflict` and lists the files, and nothing is written until you choose to replace them. The draft and its files stay in the draft store. Publishing again updates the public copy; if that copy was changed elsewhere since the editor last saw it (`siteIfMatch`), it stops with `412 changed`. |
 | Size | Uploads are limited to `MAX_UPLOAD_MB` (25 MB by default). The editor shrinks photos to 2400 px first. |
 | Reading | Files are served to the admin with a sandboxing CSP, and HTML is served as text, so stored content can never run in the admin's origin. |
 
@@ -169,10 +170,21 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
   - *Preview* shows the post in the blog's theme, with contents box, figures
     and maths.
   - What you type is also kept on the device until it's saved.
-- **Save draft** stores the post privately. **Publish** copies the files it
-  uses to the public bucket, moves the post there and updates the site. **Update** republishes edits.
-  **Unpublish** moves the post back to drafts and removes its page.
-  **Delete** removes it.
+- **The draft is the working copy.**
+  - **Save draft** stores the post privately. A published post isn't
+    changed by it, and shows *changes not live* until you update the site.
+  - **Publish** first saves the draft. It then copies the post, and the
+    files it uses, to the public bucket and updates the site. The draft
+    stays.
+  - **Update site** republishes the draft.
+  - **Unpublish** removes the public copy and its page, and keeps the
+    draft.
+  - **Delete**, for a published post, asks whether to delete only the draft
+    or the draft and the public copy.
+  - **Posts published elsewhere**, for example with `publish.mjs` from a
+    laptop, get a draft the first time you save them in the admin.
+  - **Without any draft store**, posts are written straight to the public
+    bucket.
 - **Changed elsewhere:** if a post was saved from another device while you
   were editing, you choose to overwrite it with your version or load theirs.
 - **Storage:** add, test, edit or remove draft storage (see above).

@@ -8,12 +8,15 @@
 //   GET    /api/file?store=&key=                object body
 //   GET    /api/raw/<store>/<key>               same, by path (previews resolve relative
 //                                               URLs); draft stores fall back to the site
-//   PUT    /api/file?store=&key=                write; If-None-Match: * creates,
-//                                               If-Match: <etag> updates
+//   PUT    /api/file?store=&key=[&ofPublished=1]
+//                                               write; If-None-Match: * creates,
+//                                               If-Match: <etag> updates; ofPublished
+//                                               starts the draft of a published post
 //   DELETE /api/file?store=&key=                delete; If-Match optional
 //   POST   /api/move    {from, to, ifMatch}     rename, move, unpublish
-//   POST   /api/publish {from, ifMatch, overwrite}
-//                                               draft -> site, with the files it uses
+//   POST   /api/publish {from, ifMatch, siteIfMatch, overwrite}
+//                                               copy a draft to the site, with the files
+//                                               it uses; the draft stays (working copy)
 //   POST   /api/indexnow {urls}                 notify IndexNow search engines
 //   GET    /api/storage                         draft stores: deployed and saved in KV
 //                                               (settings only, never secrets)
@@ -29,7 +32,8 @@
 //   exists            the destination already exists
 //   folder-exists     a "folder" (key prefix) already uses that name
 //   file-in-path      a file already uses one of the parent folder names
-//   published-exists  a draft would shadow a published post with that slug
+//   published-exists  a new draft would take the slug of a published post
+//                     (unless it is that post's draft: ofPublished=1)
 //   draft-exists      the slug is already a draft (in any draft store)
 //   asset-conflict    publishing would replace different public files
 // with 412 "changed" when If-Match no longer matches, 428 when a content
@@ -158,14 +162,16 @@ function storeOf(stores, id) {
   return entry;
 }
 
-async function writeFile(request, env, stores, entry, key) {
+async function writeFile(request, env, stores, entry, key, ofPublished) {
   const kind = requireWritable(entry, key);
   const ifMatch = request.headers.get('if-match');
   const ifNoneMatch = request.headers.get('if-none-match');
   const body = await readBody(request, env);
 
   if (ifNoneMatch === '*') {
-    await checkNewKey(stores, entry, key);
+    // The draft of a published post shares its slug with the public copy.
+    const own = ofPublished && entry.role === 'drafts' && postSlug(key) ? { store: 'site', key } : undefined;
+    await checkNewKey(stores, entry, key, own);
     return json(info(entry, await entry.store.put(key, body, putOpts(key))), 201);
   }
   if (ifMatch) {
@@ -244,23 +250,14 @@ async function sameBytes(a, b) {
   return u.every((n, i) => n === v[i]);
 }
 
-/** Keys of files the remaining drafts in `entry` still refer to. */
-async function stillReferenced(entry) {
-  const keys = new Set();
-  for (const item of await listAll(entry, 'posts/')) {
-    if (!postSlug(item.key)) continue;
-    const obj = await entry.store.get(item.key);
-    if (obj) for (const k of referencedKeys(new TextDecoder().decode(obj.body), item.key)) keys.add(k);
-  }
-  return keys;
-}
-
 /**
  * Publish a draft: copy the files it uses (images, PDFs, …) from its draft
- * store to the site, then move the post. Nothing is written unless every
- * check passes. A file that is already public is kept when identical; a
- * different one is a conflict unless listed in `overwrite`. Afterwards the
- * draft store keeps only files other drafts still use.
+ * store to the site, then copy the post. The draft and its files stay in the
+ * draft store as the working copy; publishing again updates the public copy
+ * (`siteIfMatch` = the public copy's etag the editor last saw, if any).
+ * Nothing is written unless every check passes. A file that is already
+ * public is kept when identical; a different one is a conflict unless
+ * listed in `overwrite`.
  */
 async function publish(request, stores) {
   const body = await request.json().catch(() => ({}));
@@ -269,6 +266,7 @@ async function publish(request, stores) {
   const src = storeOf(stores, from.store);
   const site = stores.get('site');
   if (src.role !== 'drafts') throw new ApiError(400, 'Only drafts can be published', { code: 'bad-path' });
+  if (!['undefined', 'string'].includes(typeof body.siteIfMatch)) throw new ApiError(400, 'siteIfMatch must be a string');
   if (!postSlug(from.key)) throw new ApiError(400, 'Only posts (posts/<slug>.md) can be published', { code: 'bad-path' });
   const overwrite = new Set(Array.isArray(body.overwrite) ? body.overwrite : []);
 
@@ -278,7 +276,13 @@ async function publish(request, stores) {
     throw new ApiError(412, `${from.key} was changed elsewhere since you opened it`,
       { code: 'changed', current: info(src, post.meta) });
   }
-  await checkNewKey(stores, site, from.key, from);
+  const live = await site.store.head(from.key);
+  if (!live) {
+    await checkNewKey(stores, site, from.key, from);
+  } else if (body.siteIfMatch && stripQuotes(body.siteIfMatch) !== live.etag) {
+    throw new ApiError(412, `The published ${from.key} was changed elsewhere since you opened it`,
+      { code: 'changed', current: info(site, live), published: true });
+  }
 
   // Plan the files: copy, keep (identical), or conflict.
   const plan = [];
@@ -315,21 +319,13 @@ async function publish(request, stores) {
     const written = await site.store.put(step.key, step.body, putOpts(step.key, step.ifMatch));
     if (!written) throw new ApiError(412, `${step.key} changed on the site during publishing; try again`, { code: 'changed' });
   }
-  const published = await site.store.put(from.key, post.body, putOpts(from.key));
-  await src.store.delete(from.key);
-
-  const keep = await stillReferenced(src);
-  const removed = [];
-  for (const step of plan) {
-    if (!keep.has(step.key)) {
-      await src.store.delete(step.key);
-      removed.push(step.key);
-    }
-  }
+  const published = await site.store.put(from.key, post.body, putOpts(from.key, live && body.siteIfMatch ? live.etag : undefined));
+  if (!published) throw new ApiError(412, `The published ${from.key} changed during publishing; try again`, { code: 'changed', published: true });
   return json({
     post: info(site, published),
+    draft: info(src, post.meta),
+    updated: Boolean(live),
     files: Object.fromEntries(['copy', 'identical', 'overwrite'].map((a) => [a, plan.filter((p) => p.action === a).map((p) => p.key)])),
-    removedFromDrafts: removed,
   });
 }
 
@@ -550,7 +546,7 @@ export async function handleApi(request, env, user) {
       case 'GET /api/file':
         return await readFile(stores, storeParam, q('key'), false);
       case 'PUT /api/file':
-        return await writeFile(request, env, stores, storeOf(stores, storeParam), q('key'));
+        return await writeFile(request, env, stores, storeOf(stores, storeParam), q('key'), q('ofPublished') === '1');
       case 'DELETE /api/file':
         return await deleteFile(request, storeOf(stores, storeParam), q('key'));
       case 'POST /api/move':

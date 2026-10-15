@@ -113,9 +113,10 @@ export const api = {
   /** Path-style URL: relative links inside a post resolve against it. */
   rawUrl: (store, key) => new URL(`api/raw/${store}/${key.split('/').map(encodeURIComponent).join('/')}`, location.href).href,
 
-  /** Create (etag null) or update (etag of the version being replaced). */
-  write(store, key, body, etag) {
-    return request('PUT', `file?${q({ store, key })}`, {
+  /** Create (etag null) or update (etag of the version being replaced).
+   *  `ofPublished`: the new file is the draft of the published post at `key`. */
+  write(store, key, body, etag, { ofPublished = false } = {}) {
+    return request('PUT', `file?${q({ store, key, ...(ofPublished ? { ofPublished: '1' } : {}) })}`, {
       body,
       headers: etag === undefined ? {} : etag === null ? { 'if-none-match': '*' } : { 'if-match': `"${etag}"` },
     });
@@ -132,10 +133,11 @@ export const api = {
     });
   },
 
-  /** Publish a draft with the files it uses; `overwrite` lists public files to replace. */
-  publish(from, etag, overwrite = []) {
+  /** Copy a draft to the site with the files it uses (the draft stays).
+   *  `overwrite` lists public files to replace; `siteEtag` = the public copy last seen. */
+  publish(from, etag, overwrite = [], siteEtag) {
     return request('POST', 'publish', {
-      body: JSON.stringify({ from, ...(etag ? { ifMatch: etag } : {}), overwrite }),
+      body: JSON.stringify({ from, ...(etag ? { ifMatch: etag } : {}), ...(siteEtag ? { siteIfMatch: siteEtag } : {}), overwrite }),
       headers: { 'content-type': 'application/json' },
     });
   },

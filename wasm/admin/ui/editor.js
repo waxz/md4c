@@ -1,6 +1,11 @@
 // Post editor: front matter fields, Markdown with a live preview in the
 // blog's own theme, and the save / publish / update / unpublish flows. All
 // conflict rules are enforced by the Worker; this view explains them.
+//
+// A post's draft (in a draft store) is its working copy. Publishing copies
+// it, with the files it uses, to the site; the draft stays. A published post
+// without a draft (e.g. published from a laptop) gets one on its first save.
+// Without any draft store, posts are written to the site directly.
 
 import { api, ApiError } from './client.js';
 import { parseFrontMatter, SLUG_RE } from './lib/post-format.js';
@@ -66,18 +71,46 @@ function prefixLines(ta, prefix) {
   ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+/** The draft store holding a draft of `key`, if any. */
+async function findDraft(stores, key) {
+  for (const s of stores) {
+    const items = await api.listAll(s.id, key).catch(() => []);
+    if (items.some((i) => i.key === key)) return s.id;
+  }
+  return null;
+}
+
+/** { key, etag, text } of the published copy of `key`, or null. */
+async function readPublished(key) {
+  const items = await api.listAll('site', key);
+  if (!items.some((i) => i.key === key)) return null;
+  const { text, etag } = await api.read('site', key);
+  return { key, etag, text };
+}
+
 /**
  * Open the editor. `store`/`key` = an existing post (posts/<slug>.md in the
  * site or a draft store); omit both for a new post (`newStore` = the draft
- * store to start it in).
+ * store to start it in). A published post opens its draft when it has one.
  */
 export async function showEditor(view, store, key, newStore) {
+  const stores = draftStores();
+  const direct = !stores.length; // no draft stores: write the site directly
   const isNew = !key;
   let etag = null;
+  let published = null;
   let source = `---\ntitle: \ndate: ${today()}\ntags: \n---\n\n`;
   if (!isNew) {
     try {
+      if (store === 'site' && !direct) {
+        const draft = await findDraft(stores, key);
+        if (draft) {
+          history.replaceState(null, '', editHref(draft, key));
+          return showEditor(view, draft, key);
+        }
+      }
       ({ text: source, etag } = await api.read(store, key));
+      if (!direct) published = store === 'site' ? { key, etag, text: source } : await readPublished(key);
     } catch (err) {
       view.innerHTML = `<p class="error">${esc(err.message)}</p><p><a href="#/posts">Back to posts</a></p>`;
       return;
@@ -85,20 +118,27 @@ export async function showEditor(view, store, key, newStore) {
   }
   const { meta, body } = parseFrontMatter(source);
   const extra = Object.fromEntries(Object.entries(meta).filter(([k]) => !KNOWN.includes(k)));
-  const stores = draftStores();
+  const noDraftYet = isNew || (store === 'site' && !direct);
   const ed = {
-    store: isNew ? null : store,
+    // The draft (or, without draft stores, the site copy); null until saved.
+    store: noDraftYet ? null : store,
     key: isNew ? null : key,
-    etag,
-    // Where a new post (and its photos) will be saved.
-    target: isNew ? (stores.find((s) => s.id === newStore) ?? stores[0])?.id ?? 'site' : store,
+    etag: noDraftYet ? null : etag,
+    // The published copy: { key, etag, text } or null.
+    published,
+    // Where a new draft (and its photos) will be saved.
+    target: (stores.find((s) => s.id === (newStore ?? store)) ?? stores[0])?.id ?? 'site',
     slugTouched: !isNew,
     dirty: false,
     saved: source,
   };
   current = ed;
   const home = () => ed.store ?? ed.target;
-  const status = () => (ed.store === 'site' ? 'Published' : ed.store ? 'Draft' : 'New');
+  const status = () => {
+    if (direct) return ed.store ? 'Published' : 'New';
+    if (ed.published) return ed.store && (ed.dirty || ed.saved !== ed.published.text) ? 'Published · changes not live' : 'Published';
+    return ed.store ? 'Draft' : 'New';
+  };
 
   view.innerHTML = `<form class="editor" autocomplete="off" novalidate>
     <div class="editor-head">
@@ -117,7 +157,7 @@ export async function showEditor(view, store, key, newStore) {
         <label class="field span-2"><span>Tags (comma separated)</span><input name="tags" autocapitalize="off"></label>
         <label class="field span-2"><span>Description for search results (optional)</span><input name="description" maxlength="300"></label>
         <label class="field span-2"><span>Social preview image (optional, e.g. photo.jpg)</span><input name="image" autocapitalize="off" spellcheck="false"></label>
-        ${isNew && stores.length > 1 ? `<label class="field span-2"><span>Keep the draft in</span><select name="target">${stores.map((s) =>
+        ${noDraftYet && stores.length > 1 ? `<label class="field span-2"><span>Keep the draft in</span><select name="target">${stores.map((s) =>
           `<option value="${esc(s.id)}"${s.id === ed.target ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select></label>` : ''}
       </div>
     </details>
@@ -169,22 +209,26 @@ export async function showEditor(view, store, key, newStore) {
 
   // ---- Actions ----
   const actions = form.querySelector('.editor-actions');
-  function renderActions() {
+  function renderStatus() {
     const badge = form.querySelector('.status-badge');
     badge.textContent = status();
-    badge.dataset.status = status().toLowerCase();
-    form.querySelector('.where').textContent = ed.store === 'site' ? '' : `in ${storeLabel(home())}`;
-    const live = ed.store === 'site' ? publicUrl(`posts/${ed.key.slice(6, -3)}.html`) : '';
+    badge.dataset.status = ed.published || (direct && ed.store) ? 'published' : ed.store ? 'draft' : 'new';
+    form.querySelector('.where').textContent = direct ? ''
+      : ed.store ? `draft in ${storeLabel(ed.store)}` : `the draft will be kept in ${storeLabel(home())}`;
+  }
+  function renderActions() {
+    renderStatus();
+    const liveKey = direct ? (ed.store ? ed.key : null) : ed.published?.key;
+    const live = liveKey ? publicUrl(`posts/${liveKey.slice(6, -3)}.html`) : '';
+    const isLive = Boolean(liveKey);
     actions.innerHTML = [
-      ed.store === 'site'
-        ? '<button type="button" class="btn btn-primary" data-act="update">Update</button>'
-        : '<button type="button" class="btn btn-primary" data-act="publish">Publish</button>',
-      stores.length && ed.store !== 'site' ? '<button type="button" class="btn" data-act="draft">Save draft</button>' : '',
-      stores.length && ed.store === 'site' ? '<button type="button" class="btn" data-act="unpublish">Unpublish</button>' : '',
+      `<button type="button" class="btn btn-primary" data-act="publish">${isLive ? 'Update site' : 'Publish'}</button>`,
+      direct ? '' : '<button type="button" class="btn" data-act="draft">Save draft</button>',
+      !direct && ed.published ? '<button type="button" class="btn" data-act="unpublish">Unpublish</button>' : '',
       live ? `<a class="btn" href="${esc(live)}" target="_blank" rel="noopener">View</a>` : '',
-      ed.store ? '<button type="button" class="btn btn-danger-text" data-act="delete">Delete</button>' : '',
+      ed.store || ed.published ? '<button type="button" class="btn btn-danger-text" data-act="delete">Delete</button>' : '',
     ].join('');
-    form.querySelector('.slug-note').textContent = ed.store === 'site'
+    form.querySelector('.slug-note').textContent = isLive
       ? 'Changing the address of a published post breaks existing links.' : '';
   }
   renderActions();
@@ -192,6 +236,7 @@ export async function showEditor(view, store, key, newStore) {
   function setDirty(d) {
     ed.dirty = d;
     form.querySelector('.save-state').textContent = d ? 'Unsaved changes' : (ed.etag ? 'Saved' : '');
+    renderStatus();
   }
 
   // ---- Preview ----
@@ -323,6 +368,14 @@ export async function showEditor(view, store, key, newStore) {
 
   /** Resolve a 412: keep mine (overwrite), load theirs, or cancel. */
   async function onChanged(err) {
+    if (err.published) {
+      const ok = await confirmDialog('Changed elsewhere',
+        `The published post was changed somewhere else${err.current ? ` (${formatTime(err.current.uploaded)})` : ''} after you opened it. Replace it with this version?`,
+        'Replace', 'danger');
+      if (!ok) return 'stop';
+      if (ed.published && err.current) ed.published.etag = err.current.etag;
+      return 'retry';
+    }
     const when = err.current ? ` (${formatTime(err.current.uploaded)})` : '';
     const choice = await dialog({
       title: 'Changed elsewhere',
@@ -344,7 +397,7 @@ export async function showEditor(view, store, key, newStore) {
     return 'stop';
   }
 
-  /** Move the open post (rename within its store, or unpublish to a draft store). */
+  /** Rename the open post within its store. */
   async function relocate(toStore, newKey) {
     const moved = await api.move({ store: ed.store, key: ed.key }, { store: toStore, key: newKey }, ed.etag);
     Object.assign(ed, { store: toStore, key: newKey, etag: moved.etag });
@@ -355,9 +408,8 @@ export async function showEditor(view, store, key, newStore) {
     let overwrite = [];
     for (;;) {
       try {
-        const r = await api.publish({ store: ed.store, key: ed.key }, ed.etag, overwrite);
-        Object.assign(ed, { store: 'site', etag: r.post.etag });
-        return r;
+        const siteEtag = ed.published?.key === ed.key ? ed.published.etag : undefined;
+        return await api.publish({ store: ed.store, key: ed.key }, ed.etag, overwrite, siteEtag);
       } catch (err) {
         if (!(err instanceof ApiError && err.code === 'asset-conflict')) throw err;
         const ul = document.createElement('div');
@@ -372,13 +424,12 @@ export async function showEditor(view, store, key, newStore) {
     }
   }
 
-  async function chooseDraftStore() {
-    if (stores.length === 1) return stores[0].id;
-    return dialog({
-      title: 'Unpublish to which draft store?',
-      body: 'The post leaves the blog and is kept as a draft.',
-      buttons: [...stores.map((s) => ({ label: s.label, value: s.id })), { label: 'Cancel', value: null }],
-      stacked: true,
+  /** Delete the published copy, unless it is already gone. */
+  async function removePublished(p) {
+    await api.remove('site', p.key, p.etag).catch((err) => {
+      if (err instanceof ApiError && err.status === 404) return;
+      if (err instanceof ApiError && err.code === 'changed') err.published = true;
+      throw err;
     });
   }
 
@@ -386,22 +437,31 @@ export async function showEditor(view, store, key, newStore) {
     if (!validate()) return;
     const newKey = `posts/${slug()}.md`;
     const content = text();
-    const wasPublished = ed.store === 'site';
-    let toStore = null;
-    if (act === 'unpublish') {
-      toStore = await chooseDraftStore();
-      if (!toStore) return;
-    }
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         actions.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-        let published = null;
+        if (direct) {
+          // No draft stores: the site copy is the only copy.
+          if (!ed.store) {
+            const created = await api.write('site', newKey, content, null);
+            Object.assign(ed, { store: 'site', key: newKey, etag: created.etag });
+          } else {
+            if (ed.key !== newKey) await relocate('site', newKey);
+            ed.etag = (await api.write('site', ed.key, content, ed.etag)).etag;
+          }
+          ed.saved = content;
+          dropLocal(local);
+          setDirty(false);
+          history.replaceState(null, '', editHref(ed.store, ed.key));
+          await rebuildSite();
+          toast('Published.', 'success');
+          return;
+        }
+
+        // 1. Save the draft: the working copy, kept whatever happens next.
         if (!ed.store) {
-          // New: save it in its draft store (or straight to the site when
-          // there are none); the Worker refuses slugs already in use.
-          const target = stores.length ? ed.target : 'site';
-          const created = await api.write(target, newKey, content, null);
-          Object.assign(ed, { store: target, key: newKey, etag: created.etag });
+          const created = await api.write(ed.target, newKey, content, null, { ofPublished: ed.published?.key === newKey });
+          Object.assign(ed, { store: ed.target, key: newKey, etag: created.etag });
         } else {
           if (ed.key !== newKey) await relocate(ed.store, newKey);
           ed.etag = (await api.write(ed.store, ed.key, content, ed.etag)).etag;
@@ -410,28 +470,40 @@ export async function showEditor(view, store, key, newStore) {
         dropLocal(local);
         setDirty(false);
         schedulePreview();
-        if (act === 'publish' && ed.store !== 'site') {
-          published = await publishDraft();
-          if (!published) {
+        history.replaceState(null, '', editHref(ed.store, ed.key));
+
+        if (act === 'draft') {
+          toast(`Draft saved in ${storeLabel(ed.store)}${ed.published ? '; the published post is unchanged until you update the site' : ''}.`, 'success');
+          return;
+        }
+
+        if (act === 'publish') {
+          // 2. Copy it, with its files, to the site.
+          const r = await publishDraft();
+          if (!r) {
             toast('Saved as a draft; not published.', 'info');
             return;
           }
-        }
-        if (act === 'unpublish' && ed.store === 'site') await relocate(toStore, ed.key);
-        history.replaceState(null, '', editHref(ed.store, ed.key));
-        renderActions();
-        if (ed.store === 'site' || wasPublished) {
+          const renamedFrom = ed.published && ed.published.key !== ed.key ? ed.published : null;
+          ed.published = { key: ed.key, etag: r.post.etag, text: content };
+          if (renamedFrom) await removePublished(renamedFrom);
+          renderActions();
           await rebuildSite();
           const url = publicUrl(`posts/${slug()}.html`);
-          if (ed.store === 'site' && state.site.indexNowKey && state.site.url && url) {
+          if (state.site.indexNowKey && state.site.url && url) {
             api.indexNow([url, publicUrl('index.html')]).catch((err) => console.warn('IndexNow:', err));
           }
-          const copied = published ? published.files.copy.length + published.files.overwrite.length : 0;
-          toast(ed.store === 'site'
-            ? `Published${copied ? ` with ${copied} file(s)` : ''}.`
-            : `Unpublished; kept as a draft in ${storeLabel(ed.store)}.`, 'success');
-        } else {
-          toast(`Draft saved in ${storeLabel(ed.store)}.`, 'success');
+          const copied = r.files.copy.length + r.files.overwrite.length;
+          toast(`${r.updated ? 'Site updated' : 'Published'}${copied ? ` with ${copied} file(s)` : ''}. The draft stays in ${storeLabel(ed.store)}.`, 'success');
+          return;
+        }
+
+        if (act === 'unpublish' && ed.published) {
+          await removePublished(ed.published);
+          ed.published = null;
+          renderActions();
+          await rebuildSite();
+          toast(`Unpublished. The draft stays in ${storeLabel(ed.store)}.`, 'success');
         }
         return;
       } catch (err) {
@@ -452,17 +524,35 @@ export async function showEditor(view, store, key, newStore) {
   }
 
   async function remove() {
-    const published = ed.store === 'site';
-    if (!(await confirmDialog('Delete post?', published
-      ? 'Delete this published post? Its page is removed from the blog.'
-      : `Delete this draft from ${storeLabel(ed.store)}? This cannot be undone.`))) return;
+    const p = direct ? null : ed.published;
+    let what;
+    if (direct) {
+      what = await confirmDialog('Delete post?', 'Delete this published post? Its page is removed from the blog.') ? 'draft' : null;
+    } else if (ed.store && p) {
+      what = await dialog({
+        title: 'Delete post?',
+        body: `This post is published, and its draft is in ${storeLabel(ed.store)}.`,
+        buttons: [
+          { label: 'Delete the draft only', value: 'draft' },
+          { label: 'Delete the draft and unpublish', value: 'both', kind: 'danger' },
+          { label: 'Cancel', value: null },
+        ],
+        stacked: true,
+      });
+    } else if (ed.store) {
+      what = await confirmDialog('Delete draft?', `Delete this draft from ${storeLabel(ed.store)}? This cannot be undone.`) ? 'draft' : null;
+    } else {
+      what = await confirmDialog('Delete post?', 'Delete this published post? Its page is removed from the blog.') ? 'site' : null;
+    }
+    if (!what) return;
     try {
-      await api.remove(ed.store, ed.key, ed.etag);
+      if (what !== 'site') await api.remove(ed.store, ed.key, ed.etag);
+      if (what !== 'draft') await removePublished(p);
       ed.dirty = false;
       dropLocal(local);
-      if (published) await rebuildSite();
+      if (direct || what !== 'draft') await rebuildSite();
       toast('Deleted.', 'success');
-      location.hash = '#/posts';
+      location.hash = what === 'draft' && p ? editHref('site', p.key) : '#/posts';
     } catch (err) {
       if (err instanceof ApiError && err.code === 'changed') await onChanged(err);
       else reportError(err);

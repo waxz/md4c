@@ -389,28 +389,49 @@ describe('publishing with files', () => {
     assert.deepEqual(r.data.files.copy.sort(), ['assets/docs/paper.pdf', 'posts/cover.png', 'posts/photo.png']);
     assert.equal(await read('site', 'posts/photo.png'), 'PNG-1');
     assert.equal(await read('site', 'assets/docs/paper.pdf'), 'PDF');
-    assert.ok(await read('site', 'posts/trip.md'));
-    assert.equal(await read('nas', 'posts/trip.md'), null, 'draft removed');
-    assert.equal(await read('nas', 'posts/photo.png'), null, 'copied files leave the draft store');
-    assert.equal(await read('nas', 'posts/unused.png'), 'UNUSED', 'unrelated files stay');
+    assert.equal(await read('site', 'posts/trip.md'), await read('nas', 'posts/trip.md'), 'published copy = draft');
+    assert.equal(r.data.updated, false);
+    assert.equal(await read('nas', 'posts/photo.png'), 'PNG-1', 'the draft keeps its files');
     assert.equal(await read('site', 'posts/unused.png'), null);
   });
 
-  test('files other drafts still use stay in the draft store', async () => {
+  test('publishing again updates the public copy; the draft stays the working copy', async () => {
     await create('drafts', 'posts/shared.png', 'SHARED');
-    await create('drafts', 'posts/a1.md', md('![s](shared.png)'));
+    const a1 = await create('drafts', 'posts/a1.md', md('![s](shared.png) one'));
+    assert.equal((await publish('drafts', 'posts/a1.md')).status, 200);
     await create('drafts', 'posts/a2.md', md('![s](shared.png)'));
-    const r = await publish('drafts', 'posts/a1.md');
-    assert.equal(r.status, 200, JSON.stringify(r.data));
-    assert.equal(await read('site', 'posts/shared.png'), 'SHARED');
-    assert.equal(await read('drafts', 'posts/shared.png'), 'SHARED', 'a2 still needs it');
     const r2 = await publish('drafts', 'posts/a2.md');
     assert.deepEqual(r2.data.files.identical, ['posts/shared.png'], 'already public and identical: not copied again');
-    assert.equal(await read('drafts', 'posts/shared.png'), null, 'now unused, so cleaned up');
+    assert.equal(await read('drafts', 'posts/shared.png'), 'SHARED');
+
+    const site1 = (await call('GET', '/api/list?store=site&prefix=posts/a1.md')).data.items[0];
+    const edited = await put('drafts', 'posts/a1.md', md('![s](shared.png) two'), { 'if-match': `"${a1.data.etag}"` });
+    assert.equal(edited.status, 200);
+    assert.match(await read('site', 'posts/a1.md'), /one/, 'saving the draft does not touch the site');
+    assert.equal((await publish('drafts', 'posts/a1.md', { siteIfMatch: 'stale' })).data.published, true, 'site copy changed elsewhere');
+    const again = await publish('drafts', 'posts/a1.md', { siteIfMatch: site1.etag });
+    assert.equal(again.status, 200, JSON.stringify(again.data));
+    assert.equal(again.data.updated, true);
+    assert.match(await read('site', 'posts/a1.md'), /two/);
+    assert.match(await read('drafts', 'posts/a1.md'), /two/);
+  });
+
+  test('a post published elsewhere gets its draft only on purpose', async () => {
+    assert.equal((await create('site', 'posts/solo.md', md('from the laptop'))).status, 201);
+    assert.equal((await create('drafts', 'posts/solo.md', md('edit'))).data.code, 'published-exists', 'a new post may not take its slug');
+    const own = await call('PUT', '/api/file?store=drafts&key=posts/solo.md&ofPublished=1',
+      { body: md('edit'), headers: { 'if-none-match': '*' } });
+    assert.equal(own.status, 201, JSON.stringify(own.data));
+    assert.equal((await call('PUT', '/api/file?store=nas&key=posts/solo.md&ofPublished=1',
+      { body: 'x', headers: { 'if-none-match': '*' } })).data.code, 'draft-exists', 'still one draft per slug');
+    const r = await publish('drafts', 'posts/solo.md');
+    assert.equal(r.data.updated, true);
+    assert.match(await read('site', 'posts/solo.md'), /edit/);
   });
 
   test('a different public file with the same name is a conflict until overwrite is chosen', async () => {
-    await create('nas', 'posts/photo.png', 'PNG-2');
+    const cur = (await call('GET', '/api/list?store=nas&prefix=posts/photo.png')).data.items[0];
+    assert.equal((await put('nas', 'posts/photo.png', 'PNG-2', { 'if-match': `"${cur.etag}"` })).status, 200);
     await create('nas', 'posts/trip2.md', md('![p](photo.png)'));
     const r = await publish('nas', 'posts/trip2.md');
     assert.equal(r.status, 409);
@@ -427,15 +448,18 @@ describe('publishing with files', () => {
   test('publish checks the slug, the etag and the source', async () => {
     await create('nas', 'posts/d1x.md', md('x'));
     assert.equal((await publish('nas', 'posts/d1x.md', { ifMatch: '"stale"' })).status, 412);
-    await create('nas', 'posts/trip.md', md('again')).then((r) => assert.equal(r.data.code, 'published-exists'));
+    await create('drafts', 'posts/trip.md', md('again')).then((r) => assert.equal(r.data.code, 'published-exists'));
+    const second = await call('PUT', '/api/file?store=drafts&key=posts/trip.md&ofPublished=1',
+      { body: 'x', headers: { 'if-none-match': '*' } });
+    assert.equal(second.data.code, 'draft-exists', 'trip already has its draft in nas');
     assert.equal((await publish('site', 'posts/trip.md')).status, 400, 'only drafts publish');
     assert.equal((await publish('nas', 'posts/nothing.md')).status, 404);
   });
 
   test('previews read draft files, falling back to the public copy', async () => {
     const r = await call('GET', '/api/raw/nas/posts/photo.png');
-    assert.equal(r.status, 200, 'photo.png is now only on the site');
-    assert.equal(r.data, 'PNG-2');
+    assert.equal(r.status, 200);
+    assert.equal(r.data, 'PNG-2', 'the draft store copy');
     assert.equal((await call('GET', '/api/raw/nas/posts/unused.png')).data, 'UNUSED');
     assert.equal((await call('GET', '/api/raw/nas/index.html')).status, 404, 'no fallback for non-assets');
   });

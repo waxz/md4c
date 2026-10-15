@@ -1,19 +1,24 @@
 // Posts: the admin's home. Drafts (from every draft store) and published
-// posts in separate sections, one card per post.
+// posts in separate sections, one card per post. A published post's draft
+// (its working copy) is shown on the published card, which opens it.
 
 import { api } from './client.js';
 import { draftStores, esc, formatTime, publicUrl, state, storeLabel } from './shared.js';
 
 const editHref = (store, key) => `#/edit/${store}/${key}`;
 
-function card(p) {
+function card(p, draft) {
   const live = p.status === 'published' ? publicUrl(p.key.replace(/\.md$/, '.html')) : '';
   const tags = p.tags.split(',').map((t) => t.trim()).filter(Boolean);
+  const open = draft ?? p;
+  // Publishing copies the draft, so a draft saved later has changes not yet live.
+  const pending = draft && draft.uploaded > p.uploaded;
   return `<li class="post-card">
-    <a class="post-card-main" href="${esc(editHref(p.store, p.key))}">
-      <span class="post-title">${esc(p.title)}</span>
+    <a class="post-card-main" href="${esc(editHref(open.store, open.key))}">
+      <span class="post-title">${esc((draft ?? p).title)}</span>
       <span class="post-meta">
-        ${p.status === 'draft' && draftStores().length > 1 ? `<span class="chip">${esc(storeLabel(p.store))}</span>` : ''}
+        ${pending ? '<span class="chip chip-warn">changes not live</span>' : ''}
+        ${open.status === 'draft' && draftStores().length > 1 ? `<span class="chip">${esc(storeLabel(open.store))}</span>` : ''}
         <span>${esc(p.date || formatTime(p.uploaded))}</span>
         ${tags.length ? `<span class="post-tags">${tags.map(esc).join(' · ')}</span>` : ''}
       </span>
@@ -22,10 +27,10 @@ function card(p) {
   </li>`;
 }
 
-function section(title, posts, empty) {
+function section(title, posts, empty, drafts = new Map()) {
   return `<section class="post-section">
     <h2>${title} <span class="count">${posts.length}</span></h2>
-    ${posts.length ? `<ul class="post-cards">${posts.map(card).join('')}</ul>` : `<p class="muted empty">${empty}</p>`}
+    ${posts.length ? `<ul class="post-cards">${posts.map((p) => card(p, drafts.get(p.key))).join('')}</ul>` : `<p class="muted empty">${empty}</p>`}
   </section>`;
 }
 
@@ -33,8 +38,10 @@ export async function showPosts(view) {
   view.innerHTML = '<p class="muted">Loading posts…</p>';
   const { posts, problems = [] } = await api.posts();
   const order = (a, b) => (b.date || b.uploaded).localeCompare(a.date || a.uploaded);
-  const drafts = posts.filter((p) => p.status === 'draft').sort(order);
   const published = posts.filter((p) => p.status === 'published').sort(order);
+  const live = new Set(published.map((p) => p.key));
+  const draftOf = new Map(posts.filter((p) => p.status === 'draft' && live.has(p.key)).map((p) => [p.key, p]));
+  const drafts = posts.filter((p) => p.status === 'draft' && !live.has(p.key)).sort(order);
 
   view.innerHTML = `<div class="posts-view">
     <div class="view-head">
@@ -53,7 +60,7 @@ export async function showPosts(view) {
       (state.session.stores.some((s) => s.role === 'drafts')
         ? section('Drafts', drafts.filter(match), 'No drafts. Start one with “New post”.')
         : '') +
-      section('Published', published.filter(match), 'Nothing published yet.');
+      section('Published', published.filter(match), 'Nothing published yet.', draftOf);
   };
   view.querySelector('.search').addEventListener('input', (e) => render(e.target.value));
   render();
