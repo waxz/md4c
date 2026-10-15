@@ -455,6 +455,60 @@ describe('WebDAV servers that answer differently', () => {
     assert.equal(t.data.wrote, true);
   });
 
+  test('a server that nests uploads (CloudPaste + GitHub mount) works as if it did not', async () => {
+    // PUT a/b.png is stored as a/b.png/b.png, like CloudPaste's GitHub driver does.
+    const nester = createServer((req, res) => {
+      const forward = (path, method = req.method, body = req) => new Promise((done) => {
+        const headers = { ...req.headers };
+        if (body === null) {
+          delete headers['content-length'];
+          delete headers['content-type'];
+        }
+        const up = httpRequest({ host: '127.0.0.1', port: davPort, path, method, headers }, (r) => {
+          done(r);
+        });
+        if (body === null) up.end();
+        else body.pipe(up);
+      });
+      const m = /^(.*\/)([^/]+\.[a-z0-9]+)$/i.exec(req.url);
+      (async () => {
+        let r;
+        if (req.method === 'PUT' && m) {
+          (await forward(`${m[1]}${m[2]}`, 'MKCOL', null)).resume();
+          r = await forward(`${m[1]}${m[2]}/${m[2]}`);
+        } else {
+          r = await forward(req.url);
+        }
+        res.writeHead(r.statusCode, r.headers);
+        r.pipe(res);
+      })();
+    });
+    await new Promise((r) => nester.listen(0, '127.0.0.1', r));
+    try {
+      const store = { id: 'nester', label: 'CloudPaste', type: 'webdav', baseUrl: `http://127.0.0.1:${nester.address().port}/remote.php/dav/files/me`,
+        root: '/g1', folder: 'post_drafts', username: 'me', secrets: { password: 'secret' } };
+      const checked = (await postJson('/api/storage/test', { store, location: 'browser', check: true })).data.store;
+      const headers = { cookie: `md4c_stores_0=${cookieFor([checked])}` };
+      const req = (method, path, body, extra = {}) => call(method, path, { body, headers: { ...headers, ...extra } });
+
+      const created = await req('PUT', '/api/file?store=nester&key=posts/img_0852.png', 'PNG', { 'if-none-match': '*' });
+      assert.equal(created.status, 201, JSON.stringify(created.data));
+      const list = await req('GET', '/api/list?store=nester');
+      assert.deepEqual(list.data.items.map((i) => i.key), ['posts/img_0852.png'], 'listed as a file, not a folder');
+      assert.equal((await req('GET', '/api/file?store=nester&key=posts/img_0852.png')).data, 'PNG');
+      const replaced = await req('PUT', '/api/file?store=nester&key=posts/img_0852.png', 'PNG2', { 'if-match': `"${created.data.etag}"` });
+      assert.equal(replaced.status, 200, JSON.stringify(replaced.data));
+      assert.equal((await req('GET', '/api/file?store=nester&key=posts/img_0852.png')).data, 'PNG2');
+      assert.equal((await req('DELETE', '/api/file?store=nester&key=posts/img_0852.png')).status, 204);
+      assert.deepEqual((await req('GET', '/api/list?store=nester')).data.items, [], 'the extra folder is gone too');
+
+      const t = await postJson('/api/storage/test', { store, location: 'browser' });
+      assert.equal(t.data.ok, true, JSON.stringify(t.data));
+    } finally {
+      nester.close();
+    }
+  });
+
   test('Test connection names the step and the server path that failed', async () => {
     const store = { id: 'nowhere', label: 'Wrong URL', type: 'webdav', baseUrl: `${base}/no-such-dir`, root: '/', folder: 'blog', username: 'me', secrets: { password: 'secret' } };
     const t = await postJson('/api/storage/test', { store, location: 'browser' });

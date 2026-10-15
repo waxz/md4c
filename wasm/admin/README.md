@@ -104,7 +104,13 @@ file-lookup request's word that a file is missing:
 - it checks the folder listing, which is what the explorer shows;
 - it reads, replaces and deletes the file at the path the server reports;
 - after an upload or a delete, it checks the result, and an error names
-  the server address if the server disagrees.
+  the server address if the server disagrees;
+- some servers store an upload to `posts/a.png` as `posts/a.png/a.png`.
+  CloudPaste does this when the mount is a GitHub repository, because its
+  GitHub driver joins the path and the file name. The admin treats a folder
+  named like a file, holding only that file, as the file itself, so
+  listing, reading, replacing and deleting still work. Deleting also
+  removes the extra folder.
 
 A store that can't be reached doesn't stop the rest of the admin. The
 Posts page shows the error for that store, and writes to it fail with

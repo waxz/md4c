@@ -142,7 +142,11 @@ export function storagesdkStore(storage, { isFile, prefix = '' } = {}) {
  *   - the file is then read, replaced and deleted at the path the server
  *     itself reported, not only at the path we computed;
  *   - after an upload or a delete, the result is checked, and an error
- *     names the exact server path if the server disagrees.
+ *     names the exact server path if the server disagrees;
+ *   - some servers store an upload to a/b.png as a/b.png/b.png (CloudPaste
+ *     with a GitHub mount does: it joins the path and the file name). A
+ *     folder named like a file and holding only that file is treated as
+ *     the file itself: listed, read, replaced and deleted as a/b.png.
  */
 export function webdavStore(storage, { baseUrl, folderPath }) {
   const client = storage.raw;
@@ -160,9 +164,18 @@ export function webdavStore(storage, { baseUrl, folderPath }) {
     path: st.filename ?? pathOf(key), // where the server says it is
   });
 
+  const nameOf = (key) => key.slice(key.lastIndexOf('/') + 1);
+  /** Where a server that nests uploads keeps `key`: a/b.png/b.png. */
+  const nestedKey = (key) => `${key}/${nameOf(key)}`;
+
   /** The file at `key` as the server reports it, or null. */
   const locate = async (key) => {
-    const path = pathOf(key);
+    const direct = await locateAt(key, pathOf(key));
+    if (direct) return direct;
+    const nested = await locateAt(key, pathOf(nestedKey(key)));
+    return nested ? { ...nested, nested: true } : null;
+  };
+  const locateAt = async (key, path) => {
     try {
       const st = await client.stat(path);
       if (st?.type === 'file') return meta(key, st);
@@ -184,7 +197,7 @@ export function webdavStore(storage, { baseUrl, folderPath }) {
       .find((e) => e.type === 'file' && (e.basename === name || decodeURIComponent(e.basename ?? '') === name));
     return found ? meta(key, found) : null;
   };
-  const strip = ({ path, ...rest }) => rest;
+  const strip = ({ path, nested, ...rest }) => rest;
   const head = async (key) => {
     const m = await locate(key);
     return m ? strip(m) : null;
@@ -216,25 +229,46 @@ export function webdavStore(storage, { baseUrl, folderPath }) {
       if (!m) return;
       try {
         await client.deleteFile(m.path);
+        // A nested upload leaves its folder (a/b.png/) behind: remove it too.
+        if (m.nested) await client.deleteFile(pathOf(key));
       } catch (err) {
         if (status(err) !== 404) throw err;
       }
       if (await locate(key)) throw new Error(`the server did not delete ${where(key)}`);
     },
     async list(sub = '', cursor) {
-      let page;
+      // The adapter walks the whole drafts folder whatever the prefix, so
+      // list everything once, fold nested uploads back, then filter.
+      const raw = [];
+      let next;
       try {
-        page = await storage.list({ prefix: sub, limit: 1000, ...(cursor ? { cursor } : {}) });
+        do {
+          const page = await storage.list({ limit: 100000, ...(next ? { cursor: next } : {}) });
+          raw.push(...page.items);
+          next = page.cursor;
+        } while (next);
       } catch (err) {
         if (err instanceof StorageError && (err.code === 'NotFound' || err.code === 'InvalidArgument')) return { items: [] };
         throw err;
       }
-      return {
-        items: page.items.map((m) => ({
-          key: m.path, size: m.size, etag: etagOf(m.etag), uploaded: m.lastModified, contentType: m.contentType ?? '',
-        })),
-        ...(page.cursor ? { cursor: page.cursor } : {}),
-      };
+      const under = new Map();
+      for (const m of raw) {
+        const dir = m.path.slice(0, m.path.lastIndexOf('/'));
+        under.set(dir, (under.get(dir) ?? 0) + 1);
+      }
+      const items = raw.map((m) => {
+        const dir = m.path.slice(0, m.path.lastIndexOf('/'));
+        // a/b.png/b.png, alone in its folder: the server nested an upload of a/b.png.
+        const nested = dir.includes('.') && nameOf(dir) === nameOf(m.path) && under.get(dir) === 1 && !under.has(m.path);
+        return {
+          key: nested ? dir : m.path,
+          size: m.size, etag: etagOf(m.etag), uploaded: m.lastModified, contentType: m.contentType ?? '',
+        };
+      }).filter((m) => m.key.startsWith(sub)).sort((a, b) => a.key.localeCompare(b.key));
+      const start = cursor ? items.findIndex((m) => m.key > cursor) : 0;
+      const page = start < 0 ? [] : items.slice(start, start + 1000);
+      const more = start >= 0 && start + 1000 < items.length;
+      return { items: page, ...(more ? { cursor: page[page.length - 1].key } : {}) };
     },
     where,
   };
