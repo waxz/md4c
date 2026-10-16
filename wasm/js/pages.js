@@ -9,6 +9,8 @@
 //                       canonical URL, Open Graph/Twitter cards, JSON-LD
 //                       (ScholarlyArticle or BlogPosting) and Google Scholar
 //                       citation_* tags
+//   graph.html          the links between posts as a graph (drawn by
+//                       app.js from index.json), with a plain list too
 //   theme.css           accent color and background image from "site"
 //   feed.xml            Atom feed            (needs site.url)
 //   sitemap.xml         all pages + lastmod  (needs site.url)
@@ -107,6 +109,7 @@ export function themeCss(site) {
 
 function masthead(site, root) {
   const links = [`<a href="${root}index.html">Articles</a>`]
+    .concat(site.graph ? [`<a href="${root}graph.html">Graph</a>`] : [])
     .concat(site.links.map((l) => {
       const href = siteLinkHref(l.href, root);
       return `<a href="${esc(href)}"${/^https?:/.test(href) ? ' rel="noopener noreferrer"' : ''}>${esc(l.label)}</a>`;
@@ -336,6 +339,23 @@ ${html}
     description, canonical: url, head: locked ? '' : head, main,
     // Search engines would only see the unlock form.
     robots: locked ? 'noindex' : '',
+  });
+}
+
+/**
+ * graph.html: app.js draws the posts and the links between them from
+ * index.json. Not for search engines, which already have every link.
+ */
+export function graphPage(site) {
+  const main = `<p class="section-label sc">Graph</p>
+<p class="graph-help muted">Each dot is an article; lines are links between articles. Drag to move, scroll or pinch to zoom, click to open.</p>
+<div id="graph-view"><noscript><p>The graph needs JavaScript. <a href="index.html">All articles</a></p></noscript></div>`;
+  return documentHtml({
+    site, root: '', page: 'graph',
+    title: `Graph · ${site.title}`,
+    description: `How the articles of ${site.title} link to each other`,
+    canonical: site.url ? `${site.url}graph.html` : '',
+    main, robots: 'noindex, follow',
   });
 }
 

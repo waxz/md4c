@@ -46,6 +46,12 @@ export function applySite(site) {
   home.href = `${siteRoot}index.html`;
   home.textContent = 'Articles';
   nav.replaceChildren(home);
+  if (site.graph) {
+    const graph = document.createElement('a');
+    graph.href = `${siteRoot}graph.html`;
+    graph.textContent = 'Graph';
+    nav.append(graph);
+  }
   for (const l of site.links) {
     const a = document.createElement('a');
     a.href = siteLinkHref(l.href, siteRoot);

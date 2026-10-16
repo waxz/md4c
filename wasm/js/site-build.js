@@ -11,14 +11,14 @@
 // full rebuild is requested.
 
 import { StorageError } from '@storagesdk/core';
-import { linkPostsForStaticPage, PARSER_FLAGS } from './blog-render.js';
+import { linkPostsForStaticPage, PARSER_FLAGS, postLinks } from './blog-render.js';
 import { isDraft, parseFrontMatter, postMetadata, SLUG_RE } from './post-format.js';
-import { atomFeed, homePage, postPage, protectedArticle, robotsTxt, siteRelative, sitemap, themeCss } from './pages.js';
+import { atomFeed, graphPage, homePage, postPage, protectedArticle, robotsTxt, siteRelative, sitemap, themeCss } from './pages.js';
 import { readProtected, wantsPassword } from './protect.js';
 import { normalizeSite } from './site-config.js';
 
 /** Bump when js/pages.js output changes, so the next build redoes every page. */
-export const BUILD_VERSION = 5;
+export const BUILD_VERSION = 6;
 export const INDEX = 'index.json';
 export const CACHE_FILES = 'public, max-age=300';
 // Pages, posts and indexes change in place (an edit, a new password), so
@@ -114,12 +114,14 @@ export async function build(storage, md4c, opts = {}) {
     const page = `posts/${slug}.html`;
     const prior = known.get(item.path);
     let metadata;
+    let links = [];
     const etag = item.etag;
     let size = item.size;
     let lastModified = item.lastModified;
 
-    if (!full && prior && prior.etag === item.etag && htmlNames.has(page)) {
+    if (!full && prior && prior.etag === item.etag && htmlNames.has(page) && Array.isArray(prior.links)) {
       metadata = prior.metadata; // unchanged since the last build
+      links = prior.links;
     } else {
       const fileItem = await storage.download(item.path);
       const source = new TextDecoder().decode(fileItem.body);
@@ -152,6 +154,7 @@ export async function build(storage, md4c, opts = {}) {
         const html = linkPostsForStaticPage(render(parseFrontMatter(source).body));
         htmlBySlug.set(slug, html);
         sources.set(slug, source);
+        links = postLinks(html, site.url).filter((s) => s !== slug);
         await put(page, postPage(site, { slug, page, ...metadata }, html), 'text/html; charset=utf-8', CACHE_PAGES);
       }
       rendered.push(slug);
@@ -165,6 +168,7 @@ export async function build(storage, md4c, opts = {}) {
       etag,
       lastModified: new Date(lastModified).toISOString(),
       metadata,
+      links,
     });
   }
 
@@ -199,6 +203,12 @@ export async function build(storage, md4c, opts = {}) {
   await put('index.html', homePage(site, posts), 'text/html; charset=utf-8', CACHE_INDEX);
   await put('theme.css', themeCss(site), 'text/css; charset=utf-8');
   await put('robots.txt', robotsTxt(site), 'text/plain; charset=utf-8');
+  if (site.graph) {
+    await put('graph.html', graphPage(site), 'text/html; charset=utf-8', CACHE_INDEX);
+  } else if (await storage.head('graph.html').then(() => true, () => false)) {
+    log('delete graph.html');
+    await storage.delete('graph.html');
+  }
   if (site.url) {
     await put('sitemap.xml', sitemap(site, posts), 'application/xml', CACHE_INDEX);
     await put('feed.xml', atomFeed(site, posts, htmlBySlug), 'application/atom+xml', CACHE_INDEX);

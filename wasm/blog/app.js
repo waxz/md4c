@@ -7,7 +7,9 @@
 //                       that searches the posts' full text on Google
 //                       (site.search; Enter in the search box opens it)
 //   posts/<slug>.html   contents box, figures, citation, math; for a
-//                       password-protected post, the unlock form first
+//                       password-protected post, the unlock form first;
+//                       then "Linked from" (backlinks) and a local graph
+//   graph.html          every post and the links between them (graph.js)
 //   index.html#/post/x  old links: go to posts/x.html, or render x.md live
 //                       if it was uploaded but not built yet
 //
@@ -29,6 +31,7 @@ const app = document.getElementById('app');
 const HOME_TITLE = document.title;
 let fs;
 let site;
+let indexDoc = {};
 
 /* ---------- Data ---------- */
 
@@ -239,6 +242,95 @@ async function showLivePost(slug) {
     title: meta.title, date: meta.date, author: meta.author, slug,
     url: `${SITE_ROOT}index.html#/post/${slug}`,
   });
+  await showConnections(article, slug);
+}
+
+/* ---------- Links between posts: backlinks and graphs ---------- */
+
+const indexItems = () => (Array.isArray(indexDoc.items) ? indexDoc.items : [])
+  .filter((e) => e && typeof e === 'object' && e.metadata && /^posts\/[^/]+\.md$/.test(e.path ?? ''));
+const slugOfItem = (e) => e.path.slice('posts/'.length, -'.md'.length);
+const hrefOfPost = (slug, item) =>
+  (item?.page ? new URL(item.page, SITE_ROOT).href : `${SITE_ROOT}index.html#/post/${slug}`);
+
+/**
+ * Under an article: the posts that link to it, and a graph of its
+ * neighbours (posts it links to and posts linking to it), as in Obsidian.
+ */
+async function showConnections(article, slug) {
+  if (!site.graph || !slug) return;
+  const items = indexItems();
+  const backlinks = items
+    .filter((e) => slugOfItem(e) !== slug && Array.isArray(e.links) && e.links.includes(slug))
+    .sort((a, b) => String(b.metadata.date).localeCompare(String(a.metadata.date)));
+  const { graphData, neighbourhood, drawGraph } = await import('./graph.js');
+  const local = neighbourhood(graphData(items, { postHref: hrefOfPost }), `p:${slug}`, 1);
+  if (local.nodes.length < 2) return; // links nowhere, and nothing links here
+  const box = document.createElement('section');
+  box.className = 'connections';
+  box.setAttribute('aria-labelledby', 'linked-from');
+  box.innerHTML = `<h2 class="sc" id="linked-from">Linked from</h2>
+  ${backlinks.length ? `<ul class="backlinks">${backlinks.map((e) => `<li><a href="${esc(hrefOfPost(slugOfItem(e), e))}">${esc(e.metadata.title || slugOfItem(e))}</a>${
+    e.metadata.date ? ` <time class="sc muted" datetime="${esc(e.metadata.date)}">${esc(formatDate(e.metadata.date, 'short'))}</time>` : ''}</li>`).join('')}</ul>`
+    : '<p class="muted">No other article links here yet.</p>'}
+  <div class="graph-box local-graph"></div>
+  <p class="graph-more sc"><a href="${SITE_ROOT}graph.html">Open the full graph</a></p>`;
+  article.after(box);
+  drawGraph(box.querySelector('.graph-box'), local, { focus: `p:${slug}`, label: 'always' });
+}
+
+/** graph.html: every post, the links between them, and the same as a list. */
+async function showGraph() {
+  const view = document.getElementById('graph-view');
+  if (!site.graph) {
+    view.innerHTML = '<p class="muted">The graph is turned off for this blog. <a href="index.html">All articles</a></p>';
+    return;
+  }
+  const items = indexItems();
+  const { graphData, drawGraph } = await import('./graph.js');
+  view.innerHTML = `<div class="graph-controls sc">
+    <label><input type="checkbox" id="graph-tags"> Show tags</label>
+    <span class="graph-count muted"></span>
+  </div>
+  <div class="graph-box full-graph"></div>
+  <details class="graph-list"><summary>All links as a list</summary><ul></ul></details>`;
+  const box = view.querySelector('.graph-box');
+  let drawn = null;
+  const render = () => {
+    const tags = view.querySelector('#graph-tags').checked;
+    const g = graphData(items, {
+      postHref: hrefOfPost, tags, tagHref: (t) => `${SITE_ROOT}index.html?tag=${encodeURIComponent(t)}`,
+    });
+    drawn?.destroy();
+    drawn = drawGraph(box, g);
+    const posts = g.nodes.filter((n) => n.kind === 'post').length;
+    const links = g.edges.filter(([a, b]) => a.startsWith('p:') && b.startsWith('p:')).length;
+    view.querySelector('.graph-count').textContent =
+      `${posts} article${posts === 1 ? '' : 's'} · ${links} link${links === 1 ? '' : 's'}`;
+  };
+  view.querySelector('#graph-tags').addEventListener('change', render);
+  render();
+
+  // The same links as text, for keyboards and screen readers.
+  const bySlug = new Map(items.map((e) => [slugOfItem(e), e]));
+  const title = (slug) => bySlug.get(slug)?.metadata.title || slug;
+  const link = (slug) => (bySlug.has(slug)
+    ? `<a href="${esc(hrefOfPost(slug, bySlug.get(slug)))}">${esc(title(slug))}</a>`
+    : `<span class="muted">${esc(slug)} (not written yet)</span>`);
+  const backlinks = new Map();
+  for (const e of items) for (const t of Array.isArray(e.links) ? e.links : []) {
+    if (!backlinks.has(t)) backlinks.set(t, []);
+    backlinks.get(t).push(slugOfItem(e));
+  }
+  view.querySelector('.graph-list ul').innerHTML = items
+    .map(slugOfItem)
+    .sort((a, b) => title(a).localeCompare(title(b)))
+    .map((slug) => {
+      const out = bySlug.get(slug).links ?? [];
+      const into = backlinks.get(slug) ?? [];
+      return `<li>${link(slug)}${out.length ? `<br><span class="muted">links to</span> ${out.map(link).join(', ')}` : ''}${
+        into.length ? `<br><span class="muted">linked from</span> ${into.map(link).join(', ')}` : ''}</li>`;
+    }).join('');
 }
 
 /* ---------- Password-protected posts ---------- */
@@ -302,6 +394,7 @@ async function main() {
       console.error('index.json:', err);
       return {};
     });
+    indexDoc = doc ?? {};
     site = normalizeSite(doc.site, fs.baseUrl);
     applySite(site);
 
@@ -316,6 +409,11 @@ async function main() {
       if (article.querySelector('.protected')) await unlock(article);
       const canonical = document.querySelector('link[rel="canonical"]')?.href;
       await finishArticle(article, site, { ...article.dataset, url: canonical || location.href.split('#')[0] });
+      await showConnections(article, article.dataset.slug);
+      return;
+    }
+    if (page === 'graph') {
+      await showGraph();
       return;
     }
     const live = /^#\/post\/([^/?#]+)/.exec(location.hash);

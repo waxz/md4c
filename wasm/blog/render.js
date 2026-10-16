@@ -80,6 +80,29 @@ export function renderLive(md4cFs, markdown, { postUrl, storageBase, postHref })
 
 /* ---------- Typesetting (both kinds of post) ---------- */
 
+/**
+ * Anchor ids keep letters of every script ("sec-安装-g"), so headings in
+ * Chinese or Japanese get readable, distinct anchors.
+ */
+function headingId(text) {
+  return String(text).toLowerCase().normalize('NFC').replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
+/**
+ * Body headings start at <h2>: the title is the page's <h1>. Pages built
+ * since demoteHeadings() already are; this covers live posts and older pages.
+ */
+function demoteHeadingElements(root) {
+  if (!root.querySelector('h1')) return;
+  for (const h of [...root.querySelectorAll('h1, h2, h3, h4, h5')].reverse()) {
+    const next = document.createElement(`h${Number(h.tagName[1]) + 1}`);
+    for (const a of h.attributes) next.setAttribute(a.name, a.value);
+    next.append(...h.childNodes);
+    h.replaceWith(next);
+  }
+}
+
 /** Figures from lone images, scrollable tables, heading anchors, lazy images. */
 export function typeset(root) {
   for (const p of root.querySelectorAll('p')) {
@@ -102,9 +125,10 @@ export function typeset(root) {
     table.replaceWith(wrap);
     wrap.append(table);
   }
+  demoteHeadingElements(root);
   const used = new Set();
-  for (const h of root.querySelectorAll('h1, h2, h3, h4')) {
-    let id = `sec-${slugify(h.textContent) || 'section'}`;
+  for (const h of root.querySelectorAll('h2, h3, h4, h5, h6')) {
+    let id = `sec-${headingId(h.textContent) || 'section'}`;
     for (let i = 2; used.has(id); i++) id = id.replace(/(-\d+)?$/, `-${i}`);
     used.add(id);
     h.id = id;
@@ -115,9 +139,18 @@ export function typeset(root) {
   }
 }
 
+/**
+ * The "Contents" box: the article's two highest heading levels present
+ * (usually h2 and h3), once it has at least three such headings. Headings
+ * inside quotes, lists or details are left out.
+ */
 export function buildToc(prose, site) {
-  const heads = [...prose.querySelectorAll(':scope > h2, :scope > h3')];
-  if (!site.toc || prose.querySelectorAll(':scope > h2').length < 3) return null;
+  if (!site.toc) return null;
+  const all = [...prose.querySelectorAll(':scope > h2, :scope > h3, :scope > h4')].filter((h) => h.id);
+  const levels = [...new Set(all.map((h) => Number(h.tagName[1])))].sort();
+  const [topLevel, subLevel] = levels;
+  const heads = all.filter((h) => Number(h.tagName[1]) <= (subLevel ?? topLevel));
+  if (heads.length < 3) return null;
   const nav = document.createElement('nav');
   nav.className = 'toc';
   nav.setAttribute('aria-label', 'Contents');
@@ -127,16 +160,22 @@ export function buildToc(prose, site) {
   for (const h of heads) {
     const li = document.createElement('li');
     const a = document.createElement('a');
-    a.href = `#${h.id}`;
+    a.href = `#${encodeURIComponent(h.id)}`;
     a.textContent = h.textContent;
     li.append(a);
-    if (h.tagName === 'H2') {
+    if (Number(h.tagName[1]) === topLevel) {
       top.append(li);
       sub = null;
     } else {
       if (!sub) {
         sub = document.createElement('ol');
-        (top.lastElementChild ?? top).append(sub);
+        let parent = top.lastElementChild;
+        if (!parent) {
+          // Sub-headings before the first heading of the top level.
+          parent = document.createElement('li');
+          top.append(parent);
+        }
+        parent.append(sub);
       }
       sub.append(li);
     }
@@ -289,6 +328,7 @@ export async function enhanceCode(container) {
 export async function finishArticle(article, site, info) {
   const prose = article.querySelector('.prose');
   typeset(prose);
+  article.querySelector('.toc')?.remove(); // finishing again (the editor's preview)
   // Authors who number their own headings keep their numbers, unduplicated.
   const manual = [...prose.querySelectorAll(':scope > h2')].some((h) => /^\s*\d+(\.\d+)*[.)]?\s/.test(h.textContent));
   prose.classList.toggle('manual-numbers', manual);

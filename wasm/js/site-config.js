@@ -19,6 +19,8 @@
 //       "stylesheet": "assets/custom.css",
 //       "numberedHeadings": true,     // 1, 1.1, ... in posts
 //       "toc": true,                  // "Contents" box for longer posts
+//       "graph": true,                // links between posts: a Graph page,
+//                                     // and "Linked from" under each post
 //       "citation": true,             // "How to cite this post" box
 //       "math": true,                 // render $...$ / $$...$$ with KaTeX
 //       "footer": "© 2026 Your Name. CC BY 4.0.",
@@ -62,6 +64,7 @@ export const DEFAULT_SITE = Object.freeze({
   stylesheet: '',
   numberedHeadings: true,
   toc: true,
+  graph: true,
   citation: true,
   math: true,
   footer: '',
@@ -153,6 +156,7 @@ export function normalizeSite(raw, base) {
     stylesheet: safeUrl(r.stylesheet, base),
     numberedHeadings: bool(r.numberedHeadings, DEFAULT_SITE.numberedHeadings),
     toc: bool(r.toc, DEFAULT_SITE.toc),
+    graph: bool(r.graph, DEFAULT_SITE.graph),
     citation: bool(r.citation, DEFAULT_SITE.citation),
     math: bool(r.math, DEFAULT_SITE.math),
     footer: text(r.footer, 300),

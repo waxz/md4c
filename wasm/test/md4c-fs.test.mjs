@@ -485,3 +485,67 @@ describe('front matter (YAML), titles, banners and backgrounds', () => {
       ['assets/paper.jpg', 'posts/banner.jpg'], 'publishing copies the banner and background');
   });
 });
+
+describe('links between posts (graph) and section headings', () => {
+  let dir;
+  const read = (p) => readFile(join(dir, 'public', p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-graph-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({ title: 'G', url: 'https://g.example/blog/' }));
+    const post = (slug, body) => writeFile(join(dir, 'posts', `${slug}.md`), `---\ntitle: ${slug}\ndate: 2026-10-01\n---\n\n${body}\n`);
+    await post('alpha', 'See [[Beta]], [gamma](gamma.md#x), [again](https://g.example/blog/posts/beta.html), '
+      + '[live](../index.html#/post/gamma), [[Not Written]], [self](alpha.md), [elsewhere](https://other.example/posts/x.html) and ![](pic.png).');
+    await post('beta', '# Install\n\nText.\n\n## Step 1\n\n```sh\n# not a heading\n```\n\n# Use\n\nBack to [alpha](alpha.md).');
+    await post('gamma', 'No links.');
+    await writeFile(join(dir, 'posts', 'locked.md'), '---\ntitle: Locked\ndate: 2026-10-02\npassword: pw\n---\n\nSecret [[Alpha]] link.\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('index.json lists the posts each post links to', async () => {
+    const items = JSON.parse(await read('index.json')).items;
+    const links = Object.fromEntries(items.map((i) => [i.path, i.links]));
+    assert.deepEqual(links['posts/alpha.md'], ['beta', 'gamma', 'not-written']);
+    assert.deepEqual(links['posts/beta.md'], ['alpha']);
+    assert.deepEqual(links['posts/gamma.md'], []);
+    assert.deepEqual(links['posts/locked.md'], [], 'a protected post keeps its links secret');
+  });
+
+  test('a Graph page, linked from every page', async () => {
+    const graph = await read('graph.html');
+    assert.match(graph, /data-page="graph"/);
+    assert.match(graph, /id="graph-view"/);
+    assert.match(graph, /name="robots" content="noindex, follow"/);
+    assert.match(await read('posts/alpha.html'), /<a href="\.\.\/graph\.html">Graph<\/a>/);
+    assert.match(await read('index.html'), /<a href="graph\.html">Graph<\/a>/);
+  });
+
+  test('"# Section" headings in the body become h2, so posts get contents and numbers', async () => {
+    const beta = await read('posts/beta.html');
+    assert.match(beta, /<h2>Install<\/h2>/);
+    assert.match(beta, /<h3>Step 1<\/h3>/);
+    assert.match(beta, /<h2>Use<\/h2>/);
+    assert.match(beta, /# not a heading/, 'code is left alone');
+    assert.equal((beta.match(/<h1[\s>]/g) ?? []).length, 1, 'the title is the only h1');
+  });
+
+  test('graphData and neighbourhood', async () => {
+    const { graphData, neighbourhood } = await import('../blog/graph.js');
+    const items = JSON.parse(await read('index.json')).items;
+    const g = graphData(items, { postHref: (s) => `${s}.html` });
+    assert.deepEqual(g.nodes.map((n) => `${n.id}:${n.kind}`).sort(),
+      ['p:alpha:post', 'p:beta:post', 'p:gamma:post', 'p:locked:post', 'p:not-written:missing']);
+    assert.deepEqual(g.edges.map((e) => e.join('-')).sort(),
+      ['p:alpha-p:beta', 'p:alpha-p:gamma', 'p:alpha-p:not-written'], 'links both ways are one edge');
+    const near = neighbourhood(g, 'p:gamma', 1);
+    assert.deepEqual(near.nodes.map((n) => n.id).sort(), ['p:alpha', 'p:gamma'], 'backlinks count');
+    assert.equal(neighbourhood(g, 'p:gamma', 2).nodes.length, 4);
+    const tagged = graphData([{ path: 'posts/a.md', metadata: { title: 'A', tags: 'x, y' }, links: [] }],
+      { postHref: (s) => s, tags: true });
+    assert.deepEqual(tagged.nodes.map((n) => n.id), ['p:a', 't:x', 't:y']);
+  });
+});

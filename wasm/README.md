@@ -158,6 +158,7 @@ Every field is optional:
     "stylesheet": "assets/custom.css",
     "numberedHeadings": true,
     "toc": true,
+    "graph": true,
     "citation": true,
     "math": true,
     "footer": "© 2026 Your Name · Text licensed under CC BY 4.0",
@@ -176,7 +177,8 @@ Every field is optional:
 | `backgroundImage` | image URL, relative to the bucket. `backgroundMode` is `hero` (a banner behind the title) or `page` (the whole page, with the text on a paper card). |
 | `stylesheet` | your own CSS file in the bucket, loaded after the built-in styles |
 | `numberedHeadings` | number sections 1, 1.1, … (posts that number their own headings keep their numbers) |
-| `toc` | show a "Contents" box on posts with three or more sections |
+| `toc` | show a "Contents" box on posts with three or more sections. A post's `# Heading`s (after the title) count as sections: in the body they become second-level headings, since the title is the page's only first-level one. |
+| `graph` | links between posts, as in Obsidian: a **Graph** page (graph.html, in the menu) with every post as a dot and every link as a line, and under each post the posts that link to it ("Linked from") with a small graph of its neighbours. Links are `[[Wiki links]]` (`[[Kyoto trip]]` → posts/kyoto-trip) and ordinary links to other posts (`[text](kyoto.md)`). Links to posts not written yet show as faint dots. Password-protected posts keep their links secret. |
 | `citation` | show a "How to cite" box with a reference and BibTeX |
 | `math` | typeset `$…$` and `$$…$$` with KaTeX, loaded only on posts that use them |
 | `links` | extra navigation links: `#/post/<slug>` or an http(s) URL |
