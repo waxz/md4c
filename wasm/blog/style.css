@@ -475,3 +475,12 @@ main.page:focus { outline: none; }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
 @media print { .code-bar { display: none; } .code-block > pre { padding-top: .95rem; } }
+
+/* Banners: front matter "banner" above an article; site "banner" on the home page */
+.post-banner, .home-banner { margin: 0 0 1.75rem; }
+.post-banner img, .home-banner img {
+  display: block; width: 100%; max-height: 22rem; object-fit: cover;
+  border-radius: 4px; border: 1px solid var(--rule); background: var(--code-bg);
+}
+.home-banner img { max-height: 18rem; }
+@media print { .home-banner { display: none; } }

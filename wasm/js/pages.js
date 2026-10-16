@@ -70,12 +70,29 @@ function hrefFrom(root, url) {
 
 /** Social preview image for a post: front matter `image` resolves next to the post. */
 function postImage(site, post) {
-  if (post.image) {
-    const resolved = new URL(post.image, 'https://site.invalid/posts/');
+  const own = post.image || post.banner;
+  if (own) {
+    const resolved = new URL(own, 'https://site.invalid/posts/');
     if (resolved.protocol !== 'https:' && resolved.protocol !== 'http:') return '';
     return resolved.host === 'site.invalid' ? abs(site, resolved.pathname.slice(1)) : resolved.href;
   }
   return site.backgroundImage ? abs(site, site.backgroundImage) : '';
+}
+
+/**
+ * An image a post names in its front matter (relative to posts/, or an
+ * http(s) URL), as an href from a page at `root`; '' if not usable.
+ */
+function postAssetHref(ref, root) {
+  if (!ref) return '';
+  let resolved;
+  try {
+    resolved = new URL(ref, 'https://site.invalid/posts/');
+  } catch {
+    return '';
+  }
+  if (resolved.protocol !== 'https:' && resolved.protocol !== 'http:') return '';
+  return resolved.host === 'site.invalid' ? `${root}${resolved.pathname.slice(1)}` : resolved.href;
 }
 
 export function themeCss(site) {
@@ -227,7 +244,8 @@ export function homePage(site, posts) {
       })),
     })}</script>`,
   ].filter(Boolean).join('\n') + '\n';
-  const main = `<p class="section-label sc">Latest articles</p>
+  const banner = site.banner ? hrefFrom('', site.banner) : '';
+  const main = `${banner ? `<figure class="home-banner"><img src="${esc(banner)}" alt="" decoding="async"></figure>\n` : ''}<p class="section-label sc">Latest articles</p>
 <div id="filters"></div>
 <div id="entries">
 ${list}
@@ -296,8 +314,12 @@ export function postPage(site, post, html) {
     })}</script>`,
   ].filter(Boolean).join('\n') + '\n';
 
+  const banner = locked ? '' : postAssetHref(post.banner, root);
+  const background = locked ? '' : postAssetHref(post.background, root);
   const main = `<a class="back-link sc" href="${root}index.html">← All articles</a>
-<article data-slug="${esc(post.slug)}" data-title="${esc(post.title)}" data-date="${esc(post.date)}" data-author="${esc(post.author ?? '')}">
+<article data-slug="${esc(post.slug)}" data-title="${esc(post.title)}" data-date="${esc(post.date)}" data-author="${esc(post.author ?? '')}"${
+  background ? ` data-background="${esc(background)}" data-background-mode="${esc(post.backgroundMode || 'page')}"` : ''}>
+  ${banner ? `<figure class="post-banner"><img src="${esc(banner)}" alt="" decoding="async"></figure>` : ''}
   <header class="article-header">
     <h1 class="article-title">${esc(post.title)}</h1>
     <p class="byline sc">${author ? `<span class="author">${esc(author)}</span> · ` : ''}<time datetime="${esc(post.date)}">${esc(formatDate(post.date))}</time>${post.updated ? ` · updated <time datetime="${esc(post.updated)}">${esc(formatDate(post.updated))}</time>` : ''}${locked ? ' · 🔒' : ` · ${Math.max(1, Math.round(words / 230))} min read`}</p>

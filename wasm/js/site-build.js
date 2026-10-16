@@ -18,7 +18,7 @@ import { readProtected, wantsPassword } from './protect.js';
 import { normalizeSite } from './site-config.js';
 
 /** Bump when js/pages.js output changes, so the next build redoes every page. */
-export const BUILD_VERSION = 4;
+export const BUILD_VERSION = 5;
 export const INDEX = 'index.json';
 export const CACHE_FILES = 'public, max-age=300';
 // Pages, posts and indexes change in place (an edit, a new password), so
@@ -66,6 +66,7 @@ export function siteSettings(raw) {
   const base = first.url || placeholder;
   const site = first.url ? normalizeSite(raw, base) : first;
   site.backgroundImage = siteRelative(site.backgroundImage, base);
+  site.banner = siteRelative(site.banner, base);
   site.stylesheet = siteRelative(site.stylesheet, base);
   return site;
 }
@@ -141,6 +142,9 @@ export async function build(storage, md4c, opts = {}) {
         metadata = postMetadata(source, () => '', slug);
         delete metadata.description;
         delete metadata.image;
+        delete metadata.banner;
+        delete metadata.background;
+        delete metadata.backgroundMode;
         metadata.protected = 'true';
         await put(page, postPage(site, { slug, page, ...metadata }, protectedArticle(locked.envelope)), 'text/html; charset=utf-8', CACHE_PAGES);
       } else {

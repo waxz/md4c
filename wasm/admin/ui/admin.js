@@ -15,6 +15,7 @@ import { hasUnsavedChanges, showEditor, showTextEditor } from './editor.js';
 import { showFile, showFiles } from './explorer.js';
 import { showPosts } from './posts.js';
 import { showStorage } from './storage.js';
+import { uploadFiles } from './explorer.js';
 import { DEFAULT_SITE, normalizeSite } from './lib/site-config.js';
 import { dialog, esc, init, publicUrl, rebuildSite, reportError, state, toast } from './shared.js';
 
@@ -54,8 +55,22 @@ async function showSettings() {
   const raw = JSON.stringify(state.rawSite ?? {}, null, 2);
   view.innerHTML = `<div class="settings">
     <h1>Site settings</h1>
-    <p class="hint">The <code>site</code> section of <code>index.json</code>: title, slogan, theme, colours, background image,
-      search-engine verification and more (see the deploy guide). Saving re-renders every page.</p>
+    <div class="settings-form grid">
+      <label class="field"><span>Title</span><input data-key="title" maxlength="120"></label>
+      <label class="field"><span>Slogan</span><input data-key="slogan" maxlength="200"></label>
+      <label class="field"><span>Author</span><input data-key="author" maxlength="120"></label>
+      <div class="field"><span>Home page banner (wide image above the articles)</span><span class="field-row">
+        <input data-key="banner" aria-label="Home page banner" autocapitalize="off" spellcheck="false" placeholder="assets/banner.jpg">
+        <label class="btn btn-small">Upload<input type="file" accept="image/*" data-upload="banner" hidden></label></span></div>
+      <div class="field"><span>Background image</span><span class="field-row">
+        <input data-key="backgroundImage" aria-label="Background image" autocapitalize="off" spellcheck="false" placeholder="assets/background.jpg">
+        <label class="btn btn-small">Upload<input type="file" accept="image/*" data-upload="backgroundImage" hidden></label></span></div>
+      <label class="field"><span>Background shown</span><select data-key="backgroundMode">
+        <option value="hero">behind the title (masthead)</option><option value="page">behind the whole page</option></select></label>
+    </div>
+    <p class="hint">Everything else is in the <code>site</code> section of <code>index.json</code> below: theme, colours, links,
+      search-engine verification, full-text search engine and more (see the deploy guide). Saving re-renders every page.
+      A post can set its own <code>banner</code> and <code>background</code> in its front matter.</p>
     <textarea name="site" spellcheck="false" aria-label="Site settings (JSON)"></textarea>
     <p class="settings-check muted" aria-live="polite"></p>
     <div class="editor-actions">
@@ -85,8 +100,50 @@ async function showSettings() {
       return null;
     }
   };
-  ta.addEventListener('input', parse);
+  ta.addEventListener('input', () => {
+    parse();
+    fillForm();
+  });
+  // The form edits the same JSON: each field is one key of "site".
+  const formFields = [...view.querySelectorAll('.settings-form [data-key]')];
+  const fillForm = () => {
+    let obj = {};
+    try {
+      obj = JSON.parse(ta.value || '{}') ?? {};
+    } catch {
+      return;
+    }
+    for (const el of formFields) {
+      if (document.activeElement !== el) el.value = obj[el.dataset.key] ?? (el.tagName === 'SELECT' ? 'hero' : '');
+    }
+  };
+  const setKey = (key, value) => {
+    let obj;
+    try {
+      obj = JSON.parse(ta.value || '{}') ?? {};
+    } catch {
+      toast('Fix the JSON below first.', 'error');
+      return;
+    }
+    if (value === '') delete obj[key];
+    else obj[key] = value;
+    ta.value = JSON.stringify(obj, null, 2);
+    parse();
+  };
+  for (const el of formFields) el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => setKey(el.dataset.key, el.value.trim()));
+  for (const input of view.querySelectorAll('.settings-form input[data-upload]')) {
+    input.addEventListener('change', async (e) => {
+      const files = [...e.target.files];
+      e.target.value = '';
+      // Site images are public: they go to assets/ in the published site.
+      const [key] = await uploadFiles('site', 'assets/', files);
+      if (!key) return;
+      setKey(input.dataset.upload, key);
+      fillForm();
+    });
+  }
   parse();
+  fillForm();
   view.querySelector('.settings').addEventListener('click', async (e) => {
     const act = e.target.closest('button[data-act]')?.dataset.act;
     if (!act) return;

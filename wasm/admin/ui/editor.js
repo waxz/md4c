@@ -19,7 +19,7 @@ import {
   storeLabel, toast,
 } from './shared.js';
 
-const KNOWN = ['title', 'date', 'tags', 'description', 'image', 'password'];
+const KNOWN = ['title', 'date', 'tags', 'author', 'description', 'image', 'banner', 'background', 'password'];
 let current = null; // the open editor, for the leave-page guard
 
 export function hasUnsavedChanges() {
@@ -34,12 +34,19 @@ function clean(v) {
   return String(v ?? '').replace(/[\r\n]+/g, ' ').trim();
 }
 
+/** A front matter value, quoted when YAML would otherwise read it differently. */
+function yamlValue(v) {
+  const s = clean(v);
+  return /^["'[{|>&*!%@`]|^-\s|:\s|\s#/.test(s) ? JSON.stringify(s) : s;
+}
+
 function compose(fields, extra, body) {
-  const lines = ['---', `title: ${clean(fields.title)}`, `date: ${clean(fields.date)}`, `tags: ${clean(fields.tags)}`];
-  if (clean(fields.description)) lines.push(`description: ${clean(fields.description)}`);
-  if (clean(fields.image)) lines.push(`image: ${clean(fields.image)}`);
+  const lines = ['---', `title: ${yamlValue(fields.title)}`, `date: ${clean(fields.date)}`, `tags: ${yamlValue(fields.tags)}`];
+  for (const k of ['author', 'description', 'image', 'banner', 'background']) {
+    if (clean(fields[k])) lines.push(`${k}: ${yamlValue(fields[k])}`);
+  }
   if (clean(fields.password)) lines.push(`password: ${clean(fields.password)}`);
-  for (const [k, v] of Object.entries(extra)) if (k !== 'draft') lines.push(`${k}: ${clean(v)}`);
+  for (const [k, v] of Object.entries(extra)) if (k !== 'draft') lines.push(`${k}: ${yamlValue(v)}`);
   lines.push('---', '', body.replace(/^\s+/, ''));
   return lines.join('\n');
 }
@@ -163,7 +170,10 @@ export async function showEditor(view, store, key, newStore) {
         <label class="field"><span>Date</span><input name="date" type="date" required></label>
         <label class="field span-2"><span>Tags (comma separated)</span><input name="tags" autocapitalize="off"></label>
         <label class="field span-2"><span>Description for search results (optional)</span><input name="description" maxlength="300"></label>
-        <label class="field span-2"><span>Social preview image (optional, e.g. photo.jpg)</span><input name="image" autocapitalize="off" spellcheck="false"></label>
+        <label class="field span-2"><span>Author (optional; default: the site's author)</span><input name="author" maxlength="120"></label>
+        <div class="field span-2"><span>Banner image above the article (optional)</span><span class="field-row"><input name="banner" aria-label="Banner image" autocapitalize="off" spellcheck="false" placeholder="e.g. banner.jpg"><label class="btn btn-small">Upload<input type="file" accept="image/*" data-image-for="banner" hidden></label></span></div>
+        <div class="field span-2"><span>Page background image (optional)</span><span class="field-row"><input name="background" aria-label="Page background image" autocapitalize="off" spellcheck="false" placeholder="e.g. paper.jpg"><label class="btn btn-small">Upload<input type="file" accept="image/*" data-image-for="background" hidden></label></span></div>
+        <label class="field span-2"><span>Social preview image (optional; default: the banner)</span><input name="image" autocapitalize="off" spellcheck="false"></label>
         <label class="field span-2"><span>🔒 Password (optional): readers must type it to read the post</span><input name="password" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="200"><small class="password-note"></small></label>
         ${noDraftYet && stores.length > 1 ? `<label class="field span-2"><span>Keep the draft in</span><select name="target">${stores.map((s) =>
           `<option value="${esc(s.id)}"${s.id === ed.target ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select></label>` : ''}
@@ -202,6 +212,9 @@ export async function showEditor(view, store, key, newStore) {
   f.tags.value = meta.tags ?? '';
   f.description.value = meta.description ?? meta.summary ?? '';
   f.image.value = meta.image ?? '';
+  f.author.value = meta.author ?? '';
+  f.banner.value = meta.banner || meta.cover || '';
+  f.background.value = meta.background ?? '';
   f.password.value = meta.password ?? '';
   f.body.value = body;
   f.target?.addEventListener('change', () => {
@@ -211,7 +224,10 @@ export async function showEditor(view, store, key, newStore) {
   });
 
   const text = () => compose(
-    { title: f.title.value, date: f.date.value, tags: f.tags.value, description: f.description.value, image: f.image.value, password: f.password.value },
+    {
+      title: f.title.value, date: f.date.value, tags: f.tags.value, author: f.author.value, description: f.description.value,
+      image: f.image.value, banner: f.banner.value, background: f.background.value, password: f.password.value,
+    },
     extra, f.body.value
   );
   const slug = () => f.slug.value.trim();
@@ -265,8 +281,35 @@ export async function showEditor(view, store, key, newStore) {
     root.dataset.numbered = String(state.site.numberedHeadings);
     if (state.site.accent) root.style.setProperty('--accent-base', state.site.accent);
     doc.querySelector('.article-title').textContent = f.title.value || 'Untitled';
-    doc.querySelector('.byline').textContent = [state.site.author, f.date.value].filter(Boolean).join(' · ');
+    doc.querySelector('.byline').textContent = [f.author.value.trim() || state.site.author, f.date.value].filter(Boolean).join(' · ');
     const article = doc.querySelector('article');
+    // Banner and background as the published page shows them; relative
+    // names resolve next to the post, through the Worker.
+    const imageUrl = (ref) => {
+      const v = ref.trim();
+      if (!v) return '';
+      if (/^https?:\/\//.test(v)) return v;
+      return api.rawUrl(home(), v.startsWith('/') ? v.slice(1) : `posts/${v.replace(/^\.\//, '')}`);
+    };
+    article.querySelector('.post-banner')?.remove();
+    const bannerUrl = imageUrl(f.banner.value);
+    if (bannerUrl) {
+      const fig = doc.createElement('figure');
+      fig.className = 'post-banner';
+      const img = doc.createElement('img');
+      img.src = bannerUrl;
+      img.alt = '';
+      fig.append(img);
+      article.prepend(fig);
+    }
+    const bgUrl = imageUrl(f.background.value);
+    if (bgUrl) {
+      root.style.setProperty('--bg-image', `url(${JSON.stringify(bgUrl)})`);
+      root.dataset.bg = 'page';
+    } else {
+      root.style.removeProperty('--bg-image');
+      delete root.dataset.bg;
+    }
     article.querySelector('.toc')?.remove();
     const prose = doc.querySelector('.prose');
     const s = slug() || 'untitled';
@@ -319,6 +362,19 @@ export async function showEditor(view, store, key, newStore) {
   });
   // Photos go where the post is: a draft's stay private in its draft store
   // and are copied to the site when it is published.
+  // Banner and background images: uploaded next to the post, then named.
+  for (const input of form.querySelectorAll('input[data-image-for]')) {
+    input.addEventListener('change', async (e) => {
+      const files = [...e.target.files];
+      e.target.value = '';
+      const [key] = await uploadFiles(home(), 'posts/', files);
+      if (!key) return;
+      f[input.dataset.imageFor].value = key.slice('posts/'.length);
+      form.dispatchEvent(new Event('input', { bubbles: true }));
+      schedulePreview();
+    });
+  }
+
   // Attachments go next to the post (posts/ in its draft store) and are
   // linked from it: images as figures, audio and video as players, other
   // files as links. Publishing offers to copy them to the site.
@@ -356,6 +412,9 @@ export async function showEditor(view, store, key, newStore) {
         f.tags.value = r.meta.tags ?? '';
         f.description.value = r.meta.description ?? '';
         f.image.value = r.meta.image ?? '';
+        f.author.value = r.meta.author ?? '';
+        f.banner.value = r.meta.banner || r.meta.cover || '';
+        f.background.value = r.meta.background ?? '';
         f.body.value = r.body;
         if (isNew && stash.slug) f.slug.value = stash.slug;
         setDirty(true);

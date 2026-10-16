@@ -276,3 +276,7 @@ code { font-family: var(--mono); font-size: .9em; }
 .file-choices .check { align-items: flex-start; }
 .file-choices code { overflow-wrap: anywhere; }
 audio.file-preview { width: 100%; }
+.field-row { display: flex; gap: .5rem; align-items: center; }
+.field-row input { flex: 1; min-width: 0; }
+.settings-form { display: grid; gap: .75rem; margin: .75rem 0; }
+@media (min-width: 720px) { .settings-form { grid-template-columns: 1fr 1fr; } }

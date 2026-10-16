@@ -504,18 +504,6 @@ async function readFile(stores, storeId, key, fallbackToSite) {
   return bodyResponse(key, obj);
 }
 
-function frontMatter(text) {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-  const meta = {};
-  if (m) {
-    for (const line of m[1].split(/\r?\n/)) {
-      const kv = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line);
-      if (kv) meta[kv[1].toLowerCase()] = kv[2].trim().replace(/^["']|["']$/g, '');
-    }
-  }
-  return meta;
-}
-
 /** Every post in every store, with the front matter the posts list shows. */
 async function listPosts(stores) {
   const out = [];
@@ -543,7 +531,7 @@ async function listPosts(stores) {
       let meta = entry.role === 'site' && siteMeta.get(item.key)?.etag === item.etag ? siteMeta.get(item.key).metadata : null;
       if (!meta) {
         const obj = await entry.store.get(item.key);
-        meta = obj ? frontMatter(new TextDecoder().decode(obj.body)) : {};
+        meta = obj ? parseFrontMatter(new TextDecoder().decode(obj.body)).meta : {};
       }
       out.push({
         ...info(entry, item),

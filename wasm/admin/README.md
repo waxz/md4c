@@ -191,7 +191,9 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
     rename or move, and delete. In a draft store it also has *Copy to
     public site*, which asks before replacing a different public file.
 - **New post:** fill in the title (the address is derived from it), date,
-  tags, and optionally a search description and social image. Then write.
+  tags, and optionally an author, a banner image above the article, a page
+  background, a search description and a social image. The banner and
+  background have their own upload buttons. Then write.
   - The toolbar inserts Markdown.
     - *Image* uploads photos from the camera roll and inserts them as
       figures.
@@ -227,7 +229,9 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
 - **Changed elsewhere:** if a post was saved from another device while you
   were editing, you choose to overwrite it with your version or load theirs.
 - **Storage:** add, test, edit or remove draft storage (see above).
-- **Settings:** edit the `site` section of `index.json` (title, theme,
+- **Settings:** the title, slogan, author, home-page banner and background
+  (with upload buttons) are simple fields. Everything else is in the
+  `site` section of `index.json` below them (theme,
   colours, background, `url`, search-engine verification…). Saving rebuilds
   every page. *Notify search engines* submits the pages to IndexNow when
   `indexNowKey` is set.

@@ -430,3 +430,58 @@ test('full-text search of the blog on a web search engine', async () => {
   assert.equal(webSearch(normalizeSite({ search: 'none' }, 'https://x/'), 'q', 'x.org'), null);
   assert.equal(normalizeSite({ search: 'evil.example' }, 'https://x/').search, 'google', 'unknown engines are ignored');
 });
+
+describe('front matter (YAML), titles, banners and backgrounds', () => {
+  let dir;
+  const read = (p) => readFile(join(dir, 'public', p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-yaml-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({ title: 'Y', url: 'https://y.example', banner: 'assets/home.jpg' }));
+    await writeFile(join(dir, 'posts', 'yaml.md'), [
+      '---', '# a comment', 'title: "C++ tips: a + b"', 'date: 2026-10-16', 'tags: [c++, "g++", compilers]',
+      'author: \'O\'\'Brien\'', 'banner: banner.jpg', 'background: /assets/paper.jpg', 'backgroundMode: page',
+      'summary: |', '  two', '  lines', '---', '', 'Body text.', '',
+    ].join('\n'));
+    await writeFile(join(dir, 'posts', 'heading.md'), '# C# & C++ notes\n\nFirst paragraph.\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('YAML values: quotes, lists, block text, comments', async () => {
+    const { parseFrontMatter } = await import('../js/post-format.js');
+    const { meta } = parseFrontMatter(await readFile(join(dir, 'posts', 'yaml.md'), 'utf8'));
+    assert.equal(meta.title, 'C++ tips: a + b');
+    assert.equal(meta.tags, 'c++, g++, compilers');
+    assert.equal(meta.author, "O'Brien");
+    assert.equal(meta.summary, 'two\nlines');
+    assert.equal(parseFrontMatter('---\ntags:\n  - a\n  - "b c"\n---\n').meta.tags, 'a, b c');
+    assert.equal(parseFrontMatter('---\ntitle: Issue #42\n---\n').meta.title, 'Issue #42', '"#" inside a value is kept');
+  });
+
+  test('the title keeps every character, and a leading "# Heading" is the title', async () => {
+    const yaml = await read('posts/yaml.html');
+    assert.match(yaml, /<h1 class="article-title">C\+\+ tips: a \+ b<\/h1>/);
+    assert.match(yaml, /rel="tag">c\+\+</);
+    assert.match(yaml, /class="author">O&#39;Brien</);
+    const heading = await read('posts/heading.html');
+    assert.match(heading, /<h1 class="article-title">C# &amp; C\+\+ notes<\/h1>/);
+    assert.equal((heading.match(/C# &amp; C\+\+ notes<\/h1>/g) ?? []).length, 1, 'the heading is not repeated in the body');
+    assert.equal(JSON.parse(await read('index.json')).items.find((i) => i.path === 'posts/heading.md').metadata.title, 'C# & C++ notes');
+  });
+
+  test('post banner and background, and the home page banner', async () => {
+    const yaml = await read('posts/yaml.html');
+    assert.match(yaml, /<figure class="post-banner"><img src="\.\.\/posts\/banner\.jpg"/);
+    assert.match(yaml, /data-background="\.\.\/assets\/paper\.jpg" data-background-mode="page"/);
+    assert.match(yaml, /og:image" content="https:\/\/y\.example\/posts\/banner\.jpg"/, 'the banner is the social image');
+    assert.match(await read('index.html'), /<figure class="home-banner"><img src="assets\/home\.jpg"/);
+    const { referencedKeys } = await import('../admin/src/paths.js');
+    assert.deepEqual(referencedKeys(await readFile(join(dir, 'posts', 'yaml.md'), 'utf8'), 'posts/yaml.md').sort(),
+      ['assets/paper.jpg', 'posts/banner.jpg'], 'publishing copies the banner and background');
+  });
+});

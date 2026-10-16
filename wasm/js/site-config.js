@@ -15,6 +15,7 @@
 //       "font": "serif",              // serif | sans (default: per theme)
 //       "backgroundImage": "assets/header.jpg",
 //       "backgroundMode": "hero",     // hero (masthead) | page (whole page)
+//       "banner": "assets/banner.jpg", // wide image at the top of the home page
 //       "stylesheet": "assets/custom.css",
 //       "numberedHeadings": true,     // 1, 1.1, ... in posts
 //       "toc": true,                  // "Contents" box for longer posts
@@ -57,6 +58,7 @@ export const DEFAULT_SITE = Object.freeze({
   font: '',
   backgroundImage: '',
   backgroundMode: 'hero',
+  banner: '',
   stylesheet: '',
   numberedHeadings: true,
   toc: true,
@@ -146,6 +148,7 @@ export function normalizeSite(raw, base) {
     accent: color(r.accent),
     font: oneOf(r.font, FONTS, ''),
     backgroundImage: safeUrl(r.backgroundImage, base),
+    banner: safeUrl(r.banner, base),
     backgroundMode: oneOf(r.backgroundMode, BG_MODES, DEFAULT_SITE.backgroundMode),
     stylesheet: safeUrl(r.stylesheet, base),
     numberedHeadings: bool(r.numberedHeadings, DEFAULT_SITE.numberedHeadings),

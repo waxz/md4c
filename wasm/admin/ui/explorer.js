@@ -10,6 +10,7 @@
 
 import { api, ApiError } from './client.js';
 import { classify, postSlug } from './paths.js';
+import { parseFrontMatter } from './lib/post-format.js';
 import {
   confirmDialog, dialog, esc, formatSize, formatTime, isDraftStore, promptDialog, publicUrl,
   rebuildSite, reportError, safeName, state, storeLabel, toast,
@@ -64,6 +65,22 @@ async function postFileName(file) {
   return `${slug}.md`;
 }
 
+/**
+ * A Markdown upload with no title (no `title:` and no "# Heading") keeps
+ * its original file name as the title, e.g. "C++ tips", which the address
+ * (c-tips) can't spell. Returns the file unchanged when it has one.
+ */
+async function withTitle(file) {
+  const text = await file.text();
+  if (parseFrontMatter(text).meta.title) return file;
+  const title = JSON.stringify(file.name.replace(/\.(md|markdown)$/i, '').trim());
+  const fm = /^\uFEFF?---\r?\n/.exec(text);
+  const out = fm
+    ? `${fm[0]}title: ${title}\n${text.slice(fm[0].length)}`
+    : `---\ntitle: ${title}\ndate: ${new Date().toISOString().slice(0, 10)}\n---\n\n${text}`;
+  return new File([out], file.name, { type: 'text/markdown' });
+}
+
 /** Upload files into `prefix` of `store`. Name clashes ask first. Returns the keys written. */
 export async function uploadFiles(store, prefix, files) {
   const written = [];
@@ -78,7 +95,7 @@ export async function uploadFiles(store, prefix, files) {
       continue;
     }
     if (isPost && name !== file.name) toast(`${file.name} is saved as ${name}: a post's address uses lowercase letters, digits and dashes.`, 'info');
-    const body = await resizeImage(file);
+    const body = isPost ? await withTitle(file) : await resizeImage(file);
     try {
       try {
         await api.write(store, key, body, null);

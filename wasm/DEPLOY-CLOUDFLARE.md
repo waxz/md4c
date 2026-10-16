@@ -62,11 +62,13 @@ letters, digits and dashes, and becomes the post's address,
 
 ```markdown
 ---
-title: A weekend in Kyoto
+title: "A weekend in Kyoto: temples + gardens"
 date: 2026-10-14
-tags: travel, japan
+tags: [travel, japan]
+author: A. Traveller
 description: Two days of temples, gardens and a very good bookshop.
-image: kyoto-temple.jpg
+banner: kyoto-banner.jpg
+background: /assets/paper.jpg
 ---
 
 Text in **Markdown**.
@@ -76,10 +78,32 @@ Text in **Markdown**.
 See also [my first post](hello.md).
 ```
 
-`title`, `date` (YYYY-MM-DD) and `tags` drive the home page's filters.
-`description` (optional) is what search engines show; otherwise the first
-paragraph is used. `image` (optional) is the picture shown when the post is
-shared on social media. `author` and `updated` are also understood.
+The front matter is YAML.
+- **Values:** plain, `'single'` or `"double"` quoted. Quote a value that
+  starts with a quote or bracket, or contains `: ` (as in the title above).
+  Characters such as `+`, `#` and `&` are kept as written.
+- **Lists:** written as `[a, b]`, as `a, b`, or as `- item` lines.
+- **Also:** `|` and `>` multi-line text, and `#` comment lines.
+
+The fields:
+- **`title`.** If it's missing, a first line `# Heading` becomes the title,
+  and isn't shown twice. If there's neither, the file name is used.
+- **`date`** (YYYY-MM-DD) **and `tags`** drive the home page's filters.
+- **`author`** (optional) overrides the site's author for this post.
+- **`description`** (optional) is what search engines show. Otherwise the
+  first paragraph is used.
+- **`banner`** (optional; `cover` works too) is a wide image above the
+  article. It's also the social-media picture unless `image` is set.
+- **`background`** (optional) is this post's page background.
+  `backgroundMode: hero` puts it behind the title instead of the whole
+  page.
+- **`image`** (optional) is the picture shown when the post is shared on
+  social media.
+- **`updated`** (optional) marks the date of the last revision. Other
+  fields, like `draft` and `password`, are covered below.
+
+Publishing from the admin copies the banner and background to the site,
+with the post's other files.
 
 Put images and other files anywhere in the bucket. Relative paths in a post
 resolve against the post's own location, so `kyoto-temple.jpg` above loads
@@ -233,6 +257,7 @@ Every field is optional:
 | `accent` | any CSS colour, used for links and highlights |
 | `font` | `serif` or `sans`; the default depends on the theme |
 | `backgroundImage` | image URL, relative to the bucket. `backgroundMode` is `hero` (a banner behind the title) or `page` (the whole page, with the text on a paper card). |
+| `banner` | image URL, relative to the bucket: a wide picture at the top of the home page, above the articles |
 | `stylesheet` | your own CSS file in the bucket, loaded after the built-in styles |
 | `numberedHeadings` | number sections 1, 1.1, … (posts that number their own headings keep their numbers) |
 | `toc` | show a "Contents" box on posts with three or more sections |

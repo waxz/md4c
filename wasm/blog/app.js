@@ -307,6 +307,12 @@ async function main() {
 
     if (page === 'post') {
       const article = document.querySelector('article');
+      if (article.dataset.background) {
+        // The post's own background (front matter "background"), set through
+        // CSSOM like the site's, so the CSP needs no inline styles.
+        document.documentElement.style.setProperty('--bg-image', `url(${JSON.stringify(new URL(article.dataset.background, location.href).href)})`);
+        document.documentElement.dataset.bg = article.dataset.backgroundMode === 'hero' ? 'hero' : 'page';
+      }
       if (article.querySelector('.protected')) await unlock(article);
       const canonical = document.querySelector('link[rel="canonical"]')?.href;
       await finishArticle(article, site, { ...article.dataset, url: canonical || location.href.split('#')[0] });
