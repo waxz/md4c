@@ -34,9 +34,48 @@ function section(title, posts, empty, drafts = new Map()) {
   </section>`;
 }
 
+// The last posts list, shown at once while a fresh one loads; kept for the
+// browser session so a reload is instant too.
+const CACHE_KEY = 'md4c-admin-posts';
+let lastPosts = null;
+function cachedPosts() {
+  if (lastPosts) return lastPosts;
+  try {
+    return JSON.parse(sessionStorage.getItem(CACHE_KEY) ?? 'null');
+  } catch {
+    return null;
+  }
+}
+function rememberPosts(data) {
+  lastPosts = data;
+  try {
+    sessionStorage.setItem(CACHE_KEY, JSON.stringify(data));
+  } catch {}
+}
+
 export async function showPosts(view) {
-  view.innerHTML = '<p class="muted">Loading posts…</p>';
-  const { posts, problems = [] } = await api.posts();
+  const route = location.hash;
+  const cached = cachedPosts();
+  if (cached) renderPosts(view, cached, true);
+  else view.innerHTML = '<p class="muted">Loading posts…</p>';
+  let fresh;
+  try {
+    fresh = await api.posts();
+  } catch (err) {
+    if (!cached) throw err;
+    view.querySelector('.refreshing')?.replaceChildren('Could not refresh: showing the last list.');
+    return;
+  }
+  rememberPosts(fresh);
+  if (location.hash !== route && !(route === '' && location.hash === '#/posts')) return;
+  if (!cached || JSON.stringify(cached) !== JSON.stringify(fresh)) renderPosts(view, fresh, false);
+  else view.querySelector('.refreshing')?.remove();
+}
+
+function renderPosts(view, { posts, problems = [] }, stale) {
+  const oldSearch = view.querySelector('.posts-view .search');
+  const query = oldSearch?.value ?? '';
+  const typing = oldSearch && document.activeElement === oldSearch;
   const order = (a, b) => (b.date || b.uploaded).localeCompare(a.date || a.uploaded);
   const published = posts.filter((p) => p.status === 'published').sort(order);
   const live = new Set(published.map((p) => p.key));
@@ -46,6 +85,7 @@ export async function showPosts(view) {
   view.innerHTML = `<div class="posts-view">
     <div class="view-head">
       <h1>Posts</h1>
+      ${stale ? '<span class="refreshing muted" aria-live="polite">Updating…</span>' : ''}
       <a class="btn btn-primary" href="#/new">New post</a>
     </div>
     ${problems.map((p) => `<p class="notice error">${esc(p.error)} <a href="#/storage">Check storage</a></p>`).join('')}
@@ -62,6 +102,9 @@ export async function showPosts(view) {
         : '') +
       section('Published', published.filter(match), 'Nothing published yet.', draftOf);
   };
-  view.querySelector('.search').addEventListener('input', (e) => render(e.target.value));
-  render();
+  const search = view.querySelector('.search');
+  search.value = query;
+  search.addEventListener('input', (e) => render(e.target.value));
+  render(query);
+  if (typing) search.focus(); // the fresh list arrived while typing
 }

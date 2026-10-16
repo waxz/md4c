@@ -498,6 +498,44 @@ describe('WebDAV servers that answer differently', () => {
   });
 });
 
+describe('fast listings', () => {
+  test('a folder lists one level: its files and sub-folders', async () => {
+    await create('drafts', 'assets/fast/a.png', 'A');
+    await create('drafts', 'assets/fast/deep/b.png', 'B');
+    await create('drafts', 'assets/fast/deeper/x/c.png', 'C');
+    const r = await call('GET', '/api/list?store=drafts&prefix=assets/fast/&shallow=1');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.data.items.map((i) => i.key), ['assets/fast/a.png']);
+    assert.deepEqual(r.data.folders, ['assets/fast/deep/', 'assets/fast/deeper/']);
+    assert.equal(r.data.exists, true);
+    // WebDAV: one PROPFIND of the folder.
+    await create('nas', 'assets/fast/n.png', 'N');
+    await create('nas', 'assets/fast/sub/m.png', 'M');
+    const d = await call('GET', '/api/list?store=nas&prefix=assets/fast/&shallow=1');
+    assert.deepEqual(d.data.items.map((i) => i.key), ['assets/fast/n.png']);
+    assert.deepEqual(d.data.folders, ['assets/fast/sub/']);
+    const missing = await call('GET', '/api/list?store=nas&prefix=assets/nothing-here/&shallow=1');
+    assert.deepEqual([missing.data.items, missing.data.folders, missing.data.exists], [[], [], false]);
+  });
+
+  test('R2 posts carry their summary, so the posts list reads no drafts', async () => {
+    await create('drafts', 'posts/summary-one.md', '---\ntitle: "C++: fast"\ndate: 2026-10-16\ntags: [a, b]\n---\n\nBody');
+    const head = await env.DRAFTS.head('posts/summary-one.md');
+    assert.deepEqual({ ...head.customMetadata }, { s: '1', title: 'C++: fast', date: '2026-10-16', tags: 'a, b' });
+    let gets = 0;
+    const realGet = env.DRAFTS.get;
+    env.DRAFTS.get = (...a) => { gets++; return realGet.apply(env.DRAFTS, a); };
+    try {
+      const r = await call('GET', '/api/posts');
+      const p = r.data.posts.find((x) => x.key === 'posts/summary-one.md');
+      assert.deepEqual([p.title, p.date, p.tags], ['C++: fast', '2026-10-16', 'a, b']);
+      assert.equal(gets, 0, 'no draft in the R2 store was read');
+    } finally {
+      env.DRAFTS.get = realGet;
+    }
+  });
+});
+
 describe('publishing with files', () => {
   const md = (body) => `---\ntitle: Trip\ndate: 2026-10-14\nimage: cover.png\n---\n\n${body}\n`;
 

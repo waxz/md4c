@@ -129,28 +129,11 @@ export async function uploadFiles(store, prefix, files) {
       reportError(err, `Uploading ${name} failed`);
     }
   }
-  if (written.length) toast(`Uploaded ${written.length} file(s) to ${storeLabel(store)}.`, 'success');
+  if (written.length) {
+    invalidateFolders(store);
+    toast(`Uploaded ${written.length} file(s) to ${storeLabel(store)}.`, 'success');
+  }
   return written;
-}
-
-function splitFolder(items, prefix) {
-  const folders = new Map();
-  const files = [];
-  for (const item of items) {
-    if (!item.key.startsWith(prefix)) continue;
-    const rest = item.key.slice(prefix.length);
-    const slash = rest.indexOf('/');
-    if (slash === -1) files.push(item);
-    else folders.set(rest.slice(0, slash), (folders.get(rest.slice(0, slash)) ?? 0) + 1);
-  }
-  // Kept folders, empty or not, at any depth below `prefix`.
-  for (const kept of items.folders ?? []) {
-    if (!kept.startsWith(prefix) || kept === prefix) continue;
-    const name = kept.slice(prefix.length).split('/')[0];
-    if (!folders.has(name)) folders.set(name, 0);
-  }
-  files.sort((a, b) => a.key.localeCompare(b.key));
-  return { folders: [...folders].sort((a, b) => a[0].localeCompare(b[0])), files };
 }
 
 function breadcrumbs(store, prefix) {
@@ -185,19 +168,40 @@ function row(store, f) {
 
 const list = (rows) => `<ul class="file-list">${rows.join('')}</ul>`;
 
+// The last listing of each folder: shown at once on the next visit while a
+// fresh one loads (folders are listed one level at a time, see /api/list).
+const folderCache = new Map();
+const cacheKey = (store, prefix) => `${store}\n${prefix}`;
+
+/** Forget cached listings of `store` (after a change made in this tab). */
+export function invalidateFolders(store) {
+  for (const k of folderCache.keys()) if (k.startsWith(`${store}\n`)) folderCache.delete(k);
+}
+
 export async function showFiles(view, store, prefix) {
   if (!state.session.stores.some((s) => s.id === store)) {
     view.innerHTML = `<p class="error">No store “${esc(store)}”.</p>`;
     return;
   }
-  view.innerHTML = '<p class="muted">Loading…</p>';
-  const items = await api.listAll(store);
-  const { folders, files } = splitFolder(items, prefix);
+  const key = cacheKey(store, prefix);
+  const route = location.hash;
+  const cached = folderCache.get(key);
+  if (cached) renderFiles(view, store, prefix, cached);
+  else view.innerHTML = '<p class="muted">Loading…</p>';
+  const fresh = await api.listFolder(store, prefix);
+  folderCache.set(key, fresh);
+  if (location.hash !== route) return; // moved on meanwhile
+  if (!cached || JSON.stringify(cached) !== JSON.stringify(fresh)) renderFiles(view, store, prefix, fresh);
+}
+
+function renderFiles(view, store, prefix, listing) {
+  const files = listing.items;
+  const folders = listing.folders.map((f) => [f.slice(prefix.length).replace(/\/$/, ''), null]);
   const posts = files.filter((f) => f.kind === 'content');
   const assets = files.filter((f) => f.kind === 'asset');
   const hidden = files.filter((f) => f.kind === 'generated' || f.kind === 'locked');
   const canUpload = /^(posts\/|assets\/)/.test(prefix);
-  const emptyKept = !files.length && !folders.length && (items.folders ?? []).includes(prefix);
+  const emptyKept = Boolean(prefix) && listing.exists && !files.length && !folders.length;
 
   view.innerHTML = `<div class="files">
     <div class="view-head">
@@ -215,7 +219,7 @@ export async function showFiles(view, store, prefix) {
     ${!canUpload ? `<p class="hint">Files go in <a href="${esc(filesHref(store, 'posts/'))}">posts/</a> (next to the posts that use them) or in a folder under <a href="${esc(filesHref(store, 'assets/'))}">assets/</a>.</p>` : ''}
     ${prefix || folders.length ? `<section class="file-section"><h2>Folders</h2>${list([
       ...(prefix ? [`<li class="file-row folder"><a class="file-main" href="${esc(filesHref(store, prefix.replace(/[^/]+\/$/, '')))}"><span class="icon" aria-hidden="true">↰</span><span class="name">Up</span></a></li>`] : []),
-      ...folders.map(([name, n]) => `<li class="file-row folder"><a class="file-main" href="${esc(filesHref(store, `${prefix}${name}/`))}"><span class="icon" aria-hidden="true">▸</span><span class="name">${esc(name)}</span><span class="meta">${n} item${n === 1 ? '' : 's'}</span></a></li>`),
+      ...folders.map(([name, n]) => `<li class="file-row folder"><a class="file-main" href="${esc(filesHref(store, `${prefix}${name}/`))}"><span class="icon" aria-hidden="true">▸</span><span class="name">${esc(name)}</span></a></li>`),
     ])}</section>` : ''}
     ${posts.length ? `<section class="file-section"><h2>Posts</h2>${list(posts.map((f) => row(store, f)))}</section>` : ''}
     ${assets.length ? `<section class="file-section"><h2>Attachments</h2>${list(assets.map((f) => row(store, f)))}</section>` : ''}
@@ -229,7 +233,10 @@ export async function showFiles(view, store, prefix) {
   });
   view.querySelector('#upload')?.addEventListener('change', async (e) => {
     const written = await uploadFiles(store, prefix, [...e.target.files]);
-    if (written.length) showFiles(view, store, prefix);
+    if (written.length) {
+      invalidateFolders(store);
+      showFiles(view, store, prefix);
+    }
   });
   view.querySelector('#new-folder').addEventListener('click', async () => {
     const name = await promptDialog('New folder', `Folder name inside ${prefix || 'assets/'}`);
@@ -239,6 +246,7 @@ export async function showFiles(view, store, prefix) {
     const target = !prefix || !canUpload ? `assets/${safe}/` : `${prefix}${safe}/`;
     try {
       await api.createFolder(store, target);
+      invalidateFolders(store);
       toast(`Created ${target}`, 'success');
       location.hash = filesHref(store, target);
     } catch (err) {
@@ -248,6 +256,7 @@ export async function showFiles(view, store, prefix) {
   view.querySelector('#remove-folder')?.addEventListener('click', async () => {
     try {
       await api.deleteFolder(store, prefix);
+      invalidateFolders(store);
       location.hash = filesHref(store, prefix.replace(/[^/]+\/$/, ''));
     } catch (err) {
       reportError(err);
@@ -273,6 +282,7 @@ export function attachmentMarkdown(ref) {
 
 /** Copy one draft-store attachment to the public site, asking before replacing. */
 async function copyToPublic(store, item) {
+  invalidateFolders('site');
   try {
     const r = await api.copyToSite(store, item.key);
     toast(r.action === 'identical' ? `${item.key} is already public.` : `Copied ${item.key} to the public site.`, 'success');
@@ -318,6 +328,7 @@ async function rowActions(view, store, prefix, item) {
         ? `Delete the published post ${item.key}? Its page disappears from the blog.`
         : `Delete ${item.key} from ${storeLabel(store)}? This cannot be undone.`))) return;
       await api.remove(store, item.key, item.etag);
+      invalidateFolders(store);
       toast(`Deleted ${name}.`, 'success');
       if (published) await rebuildSite();
       showFiles(view, store, prefix);
@@ -328,6 +339,7 @@ async function rowActions(view, store, prefix, item) {
         `Renaming a published post changes its address; links to ${item.key.replace(/\.md$/, '.html')} stop working.`,
         'Rename', 'primary'))) return;
       await api.move({ store, key: item.key }, { store, key: to }, item.etag);
+      invalidateFolders(store);
       toast(`Moved to ${to}.`, 'success');
       if (published) await rebuildSite();
       showFiles(view, store, prefix);

@@ -103,6 +103,9 @@ export const api = {
     return items;
   },
 
+  /** One folder: { items, folders: ["a/b/"], exists }, listed one level deep. */
+  listFolder: (store, prefix = '') => request('GET', `list?${q({ store, prefix, shallow: '1' })}`),
+
   /** Keep a folder ("assets/talks/"), so it exists before anything is in it. */
   createFolder: (store, prefix) => request('POST', 'folder', {
     body: JSON.stringify({ store, prefix }),

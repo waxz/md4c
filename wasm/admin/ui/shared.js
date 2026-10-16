@@ -13,15 +13,20 @@ export const state = {
 };
 
 export async function init() {
+  // Session, Markdown engine and site settings load side by side.
+  const md4c = loadMd4c(new URL('./lib/md4c.wasm', import.meta.url));
+  const index = readIndex(adminStorage('site'));
   state.session = await api.session();
-  state.md4c = await loadMd4c(new URL('./lib/md4c.wasm', import.meta.url));
-  await refreshSite();
+  [state.md4c] = await Promise.all([md4c, index.then(applySiteIndex)]);
+}
+
+function applySiteIndex(index) {
+  state.rawSite = index?.site ?? null;
+  state.site = normalizeSite(state.rawSite, state.session.publicUrl || location.href);
 }
 
 export async function refreshSite() {
-  const index = await readIndex(adminStorage('site'));
-  state.rawSite = index?.site ?? null;
-  state.site = normalizeSite(state.rawSite, state.session.publicUrl || location.href);
+  applySiteIndex(await readIndex(adminStorage('site')));
 }
 
 export const draftStores = () => state.session.stores.filter((s) => s.role === 'drafts');

@@ -4,8 +4,10 @@
 //
 //   GET    /api/session                         who is signed in; the stores
 //   GET    /api/posts                           posts in every store, with title/date/tags
-//   GET    /api/list?store=&prefix=&cursor=     objects (flat; the UI builds folders),
-//                                               plus `folders`: kept empty folders
+//   GET    /api/list?store=&prefix=&cursor=[&shallow=1]
+//                                               objects (flat), plus `folders`: kept
+//                                               empty folders. shallow=1: only this
+//                                               folder's files and sub-folders (fast)
 //   POST   /api/folder {store, prefix}          keep an (empty) folder: posts/… or assets/…
 //   DELETE /api/folder?store=&prefix=           forget an empty folder
 //   GET    /api/file?store=&key=                object body
@@ -52,7 +54,7 @@ import {
 } from './paths.js';
 import {
   normalizeStore, openStore, openStores, publicStore, readSaved, STORE_TYPES,
-  StoreAccessError, StoreConfigError, writeSaved,
+  PEEK_BYTES, postSummary, StoreAccessError, StoreConfigError, writeSaved,
 } from './stores.js';
 import { parseFrontMatter } from '../../js/post-format.js';
 import { PROTECTED_MARK, readProtected, wantsPassword } from '../../js/protect.js';
@@ -77,6 +79,7 @@ function stripQuotes(etag) {
 
 function info(entry, meta) {
   return {
+    ...(meta.summary ? { summary: meta.summary } : {}),
     store: entry.id,
     key: meta.key,
     size: meta.size,
@@ -504,44 +507,110 @@ async function readFile(stores, storeId, key, fallbackToSite) {
   return bodyResponse(key, obj);
 }
 
+/**
+ * One folder of a store: its files, its direct sub-folders ("a/b/"), and
+ * whether the folder itself exists (kept, or a real WebDAV folder). Uses
+ * the store's one-level listing when it has one; otherwise lists below the
+ * prefix and folds the result.
+ */
+async function listFolder(entry, prefix) {
+  if (prefix && !prefix.endsWith('/')) throw new ApiError(400, 'A folder path ends with "/"', { code: 'bad-path' });
+  const items = [];
+  const folders = new Set();
+  let exists = !prefix;
+  let cursor;
+  do {
+    const page = await entry.store.list(prefix, cursor, { shallow: true });
+    for (const m of page.items) {
+      const rest = m.key.slice(prefix.length);
+      const slash = rest.indexOf('/');
+      if (slash !== -1) {
+        // A store without one-level listing: fold deeper keys into folders.
+        folders.add(prefix + rest.slice(0, slash + 1));
+      } else if (rest === FOLDER_MARKER) {
+        exists = true;
+      } else if (visible(m)) {
+        items.push(info(entry, m));
+      }
+    }
+    for (const f of page.folders ?? []) if (f !== prefix && !f.split('/').some((seg) => seg.startsWith('.'))) folders.add(f);
+    if (page.exists) exists = true;
+    cursor = page.cursor;
+  } while (cursor);
+  if (items.length || folders.size) exists = true;
+  return { items, folders: [...folders].sort(), exists };
+}
+
+/** Run `fn` over `list` with at most `limit` at a time. */
+async function inBatches(list, limit, fn) {
+  const queue = [...list];
+  await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, async () => {
+    while (queue.length) await fn(queue.shift());
+  }));
+}
+
+// Post summaries already read, by store, key and version: a post is read
+// once per Worker isolate, not on every visit to the posts list.
+const summaryCache = new Map();
+const SUMMARY_CACHE_MAX = 5000;
+
+/** A post's { title, date, tags } with as little reading as the store allows. */
+async function summaryOf(entry, item, siteMeta) {
+  if (item.summary) return item.summary; // R2: stored with the post
+  const fromIndex = entry.role === 'site' && siteMeta.get(item.key);
+  if (fromIndex && fromIndex.etag === item.etag) return fromIndex.metadata;
+  const cacheKey = `${entry.id}\n${item.key}\n${item.etag}`;
+  const cached = summaryCache.get(cacheKey);
+  if (cached) return cached;
+  // The front matter is at the start: read that much, all of it only if needed.
+  let text = entry.store.peek ? await entry.store.peek(item.key, PEEK_BYTES) : null;
+  if (text !== null && text.length >= PEEK_BYTES - 4 && !/^\uFEFF?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)/.test(text) && /^\uFEFF?---/.test(text)) text = null;
+  if (text === null) {
+    const obj = await entry.store.get(item.key);
+    text = obj ? new TextDecoder().decode(obj.body) : '';
+  }
+  const summary = postSummary(text);
+  if (summaryCache.size >= SUMMARY_CACHE_MAX) summaryCache.delete(summaryCache.keys().next().value);
+  summaryCache.set(cacheKey, summary);
+  return summary;
+}
+
 /** Every post in every store, with the front matter the posts list shows. */
 async function listPosts(stores) {
   const out = [];
   let siteMeta = new Map();
   const site = stores.get('site');
-  const index = await site.store.get('index.json').catch(() => null);
-  if (index) {
+  const problems = [...stores.problems];
+  // All stores at once; within a store, a few reads at a time.
+  const loadIndex = site.store.get('index.json').catch(() => null).then((index) => {
+    if (!index) return;
     try {
       const doc = JSON.parse(new TextDecoder().decode(index.body));
       siteMeta = new Map((doc.items ?? []).filter((e) => e?.path && e.metadata).map((e) => [e.path, e]));
     } catch {}
-  }
-  const problems = [...stores.problems];
-  for (const entry of stores.values()) {
+  });
+  await Promise.all([...stores.values()].map(async (entry) => {
     let items;
     try {
-      items = (await listAll(entry, 'posts/')).filter((i) => postSlug(i.key));
+      items = (await listFolder(entry, 'posts/')).items.filter((i) => postSlug(i.key));
     } catch (err) {
       // One unreachable draft store must not hide every other post.
       if (!(err instanceof StoreAccessError) || entry.role === 'site') throw err;
       problems.push({ store: entry.id, error: err.message });
-      continue;
+      return;
     }
-    await Promise.all(items.map(async (item) => {
-      let meta = entry.role === 'site' && siteMeta.get(item.key)?.etag === item.etag ? siteMeta.get(item.key).metadata : null;
-      if (!meta) {
-        const obj = await entry.store.get(item.key);
-        meta = obj ? parseFrontMatter(new TextDecoder().decode(obj.body)).meta : {};
-      }
+    if (entry.role === 'site') await loadIndex;
+    await inBatches(items, 8, async (item) => {
+      const meta = await summaryOf(entry, item, siteMeta);
       out.push({
-        ...info(entry, item),
+        ...item,
         status: entry.role === 'site' ? 'published' : 'draft',
         title: String(meta.title || postSlug(item.key)).slice(0, 200),
         date: /^\d{4}-\d{2}-\d{2}/.test(meta.date ?? '') ? meta.date.slice(0, 10) : '',
         tags: String(meta.tags ?? ''),
       });
-    }));
-  }
+    });
+  }));
   return json({ posts: out, problems });
 }
 
@@ -695,6 +764,7 @@ export async function handleApi(request, env, user) {
         return await listPosts(stores);
       case 'GET /api/list': {
         const entry = storeOf(stores, storeParam);
+        if (q('shallow') === '1') return json(await listFolder(entry, q('prefix') ?? ''));
         const page = await entry.store.list(q('prefix') ?? '', q('cursor') || undefined);
         return json({
           items: page.items.filter(visible).map((m) => info(entry, m)),

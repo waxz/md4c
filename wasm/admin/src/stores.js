@@ -23,10 +23,34 @@
 //   put(key, body, { contentType, cacheControl, ifMatch })
 //                                 -> Meta, or null when ifMatch no longer matches
 //   delete(key)
-//   list(prefix, cursor)          -> { items: Meta[], cursor? }
-// with Meta = { key, size, etag, uploaded: Date, contentType }.
+//   list(prefix, cursor, { shallow })
+//                                 -> { items: Meta[], folders?, cursor? }
+//                                    shallow: only this folder's level, with
+//                                    its sub-folders as "a/b/" prefixes (a
+//                                    store without it lists everything and
+//                                    the API folds the result)
+//   peek(key, bytes)              -> the first bytes of a file as text, or null
+// with Meta = { key, size, etag, uploaded: Date, contentType, summary? }.
+// `summary` ({ title, date, tags }) is what the posts list shows; R2 keeps
+// it as custom metadata, written with each post, so listing needs no reads.
 
 import { Storage, StorageError } from '@storagesdk/core';
+import { parseFrontMatter } from '../../js/post-format.js';
+
+const POST_KEY = /^posts\/[a-z0-9][a-z0-9-]{0,79}\.md$/;
+
+/** The posts list's view of a post: { title, date, tags } from its front matter. */
+export function postSummary(text) {
+  const { meta } = parseFrontMatter(text);
+  return {
+    title: String(meta.title ?? '').slice(0, 200),
+    date: /^\d{4}-\d{2}-\d{2}/.test(meta.date ?? '') ? meta.date.slice(0, 10) : '',
+    tags: String(meta.tags ?? '').slice(0, 300),
+  };
+}
+
+/** Front matter is at the start of a post: this much is enough to read it. */
+export const PEEK_BYTES = 8192;
 
 /** A store over a Workers R2 binding; conditional writes are native. */
 export function r2Store(bucket) {
@@ -36,6 +60,9 @@ export function r2Store(bucket) {
     etag: o.etag,
     uploaded: o.uploaded,
     contentType: o.httpMetadata?.contentType ?? '',
+    ...(o.customMetadata?.s === '1'
+      ? { summary: { title: o.customMetadata.title ?? '', date: o.customMetadata.date ?? '', tags: o.customMetadata.tags ?? '' } }
+      : {}),
   });
   return {
     async head(key) {
@@ -47,8 +74,13 @@ export function r2Store(bucket) {
       return o ? { meta: meta(o), body: await o.arrayBuffer() } : null;
     },
     async put(key, body, { contentType, cacheControl, ifMatch } = {}) {
+      // A post carries its summary, so the posts list never has to read it.
+      const summary = POST_KEY.test(key)
+        ? postSummary(new TextDecoder().decode(new Uint8Array(body, 0, Math.min(body.byteLength, PEEK_BYTES * 2))))
+        : null;
       const o = await bucket.put(key, body, {
         httpMetadata: { contentType, ...(cacheControl ? { cacheControl } : {}) },
+        ...(summary ? { customMetadata: { s: '1', ...summary } } : {}),
         ...(ifMatch ? { onlyIf: { etagMatches: ifMatch } } : {}),
       });
       return o ? meta(o) : null;
@@ -56,9 +88,19 @@ export function r2Store(bucket) {
     async delete(key) {
       await bucket.delete(key);
     },
-    async list(prefix = '', cursor) {
-      const page = await bucket.list({ prefix, cursor, limit: 1000, include: ['httpMetadata'] });
-      return { items: page.objects.map(meta), ...(page.truncated && page.cursor ? { cursor: page.cursor } : {}) };
+    async list(prefix = '', cursor, { shallow = false } = {}) {
+      const page = await bucket.list({
+        prefix, cursor, limit: 1000, include: ['httpMetadata', 'customMetadata'], ...(shallow ? { delimiter: '/' } : {}),
+      });
+      return {
+        items: page.objects.map(meta),
+        ...(shallow ? { folders: page.delimitedPrefixes ?? [] } : {}),
+        ...(page.truncated && page.cursor ? { cursor: page.cursor } : {}),
+      };
+    },
+    async peek(key, bytes = PEEK_BYTES) {
+      const o = await bucket.get(key, { range: { offset: 0, length: bytes } });
+      return o ? new TextDecoder().decode(await o.arrayBuffer()) : null;
     },
   };
 }
@@ -115,6 +157,15 @@ export function storagesdkStore(storage, { isFile, prefix = '' } = {}) {
       await storage.delete(prefix + key).catch((err) => {
         if (!notFound(err)) throw err;
       });
+    },
+    async peek(key, bytes = PEEK_BYTES) {
+      try {
+        const item = await storage.download(prefix + key, { range: { offset: 0, length: bytes } });
+        return new TextDecoder().decode(item.body);
+      } catch (err) {
+        if (notFound(err)) return null;
+        throw err;
+      }
     },
     async list(sub = '', cursor) {
       let page;
@@ -267,7 +318,41 @@ export function webdavStore(storage, { baseUrl, folderPath }) {
       }
       if (await locate(key)) throw new Error(`the server did not delete ${where(key)}`);
     },
-    async list(sub = '', cursor) {
+    async peek(key, bytes = PEEK_BYTES) {
+      try {
+        // Most servers honour Range; one that doesn't sends the whole file.
+        const data = await client.getFileContents(pathOf(key), { format: 'binary', headers: { Range: `bytes=0-${bytes - 1}` } });
+        const u8 = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        return new TextDecoder().decode(u8.subarray(0, bytes));
+      } catch (err) {
+        if (status(err) === 404) return null;
+        throw err;
+      }
+    },
+    async list(sub = '', cursor, { shallow = false } = {}) {
+      if (shallow) {
+        // One PROPFIND (Depth 1) of the folder being viewed.
+        const dir = sub.slice(0, sub.lastIndexOf('/') + 1);
+        let entries;
+        try {
+          entries = await client.getDirectoryContents(`${base}/${dir}`.replace(/\/+$/, '') || '/');
+        } catch (err) {
+          if ([404, 403, 405, 409].includes(status(err))) return { items: [], folders: [], exists: false };
+          throw err;
+        }
+        const items = [];
+        const folders = [];
+        for (const e of Array.isArray(entries) ? entries : []) {
+          const f = String(e.filename ?? '').replace(/\/+$/, '');
+          if (!f.startsWith(`${base}/`)) continue;
+          const rel = f.slice(base.length + 1);
+          if (!rel.startsWith(sub) || rel.split('/').some((seg) => seg.startsWith('.storagesdk'))) continue;
+          if (e.type === 'directory') folders.push(`${rel}/`);
+          else items.push(strip(meta(rel, e)));
+        }
+        items.sort((a, b) => a.key.localeCompare(b.key));
+        return { items, folders: folders.sort(), exists: true };
+      }
       const { files, folders } = await walk(sub);
       const items = files.filter((m) => m.key.startsWith(sub)).sort((a, b) => a.key.localeCompare(b.key));
       const start = cursor ? items.findIndex((m) => m.key > cursor) : 0;
