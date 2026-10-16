@@ -182,9 +182,12 @@ export function rebuildSite(opts = {}) {
       return {};
     });
     for (const key of moved) log(`private ${key} (removed from the public bucket)`);
+    // The blog code's versions, deployed with the admin (site-assets.json).
+    const assets = await fetch(new URL('./site-assets.json', import.meta.url))
+      .then((r) => (r.ok ? r.json() : undefined), () => undefined);
     step(merged.full ? 'Rendering every page…' : 'Rendering changed pages…');
     const result = await build(adminStorage('site'), md4c, {
-      ...merged, privateSources: Boolean(state.session?.privateSources),
+      ...merged, ...(assets ? { assets } : {}), privateSources: Boolean(state.session?.privateSources),
       log: (line) => {
         log(line);
         if (/^(upload|delete) /.test(line)) step(line);

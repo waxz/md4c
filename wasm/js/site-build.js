@@ -76,7 +76,7 @@ export function siteSettings(raw) {
  *
  * @param {import('@storagesdk/core').Storage} storage
  * @param {{ toHtml: Function }} md4c
- * @param {{ site?: object, defaultSite?: object, full?: boolean, privateSources?: boolean,
+ * @param {{ site?: object, defaultSite?: object, full?: boolean, privateSources?: boolean, assets?: object,
  *           log?: (msg: string) => void }} [opts]
  *        `privateSources`: posts/<slug>.md reach `storage` from a private
  *        place (recorded, so a build without them is refused rather than
@@ -101,8 +101,10 @@ export async function build(storage, md4c, opts = {}) {
       + 'Rebuild it from the admin, or run publish.mjs with --sources-bucket <the private bucket>.');
   }
   const rawSite = opts.site ?? previous?.site ?? opts.defaultSite;
-  const site = siteSettings(rawSite);
-  const siteHash = fnv1a(JSON.stringify(rawSite ?? null));
+  // The site's own files' versions (assets.json): pages link app.js?v=…
+  const site = { ...siteSettings(rawSite), assets: opts.assets ?? previous?.build?.assets ?? {} };
+  // New versions of the site's code mean every page links new addresses.
+  const siteHash = fnv1a(JSON.stringify([rawSite ?? null, site.assets]));
   const full = Boolean(opts.full) || previous?.build?.version !== BUILD_VERSION || previous?.build?.site !== siteHash;
   const known = new Map((previous?.items ?? [])
     .filter((e) => e && typeof e === 'object' && e.page && e.etag && e.metadata)
@@ -210,7 +212,10 @@ export async function build(storage, md4c, opts = {}) {
   const index = {
     version: 1,
     generated: new Date().toISOString(),
-    build: { version: BUILD_VERSION, site: siteHash, ...(opts.privateSources ? { sources: 'private' } : {}) },
+    build: {
+      version: BUILD_VERSION, site: siteHash, ...(opts.privateSources ? { sources: 'private' } : {}),
+      ...(Object.keys(site.assets).length ? { assets: site.assets } : {}),
+    },
     ...(rawSite ? { site: rawSite } : {}),
     items,
   };

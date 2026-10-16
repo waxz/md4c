@@ -312,7 +312,13 @@ if (!args['no-posts']) await uploadPosts(storage, resolve(args.posts));
 if (dry) {
   console.log('Done (dry run): index.json and pages would be rebuilt.');
 } else {
+  // The site code's versions (dist/blog/assets.json, from the assemble step).
+  let assets;
+  try {
+    assets = JSON.parse(await readFile(join(root, 'dist', 'blog', 'assets.json'), 'utf8'));
+  } catch {}
   const { site, posts, rendered, removed, full } = await build(storage, md4c, {
+    ...(assets ? { assets } : {}),
     ...(await siteOptions(storage)),
     full: args.full,
     privateSources: Boolean(storage.migrate),

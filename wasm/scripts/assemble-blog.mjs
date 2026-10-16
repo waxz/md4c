@@ -18,8 +18,9 @@
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homePage, themeCss } from '../js/pages.js';
 import { siteSettings } from '../js/site-build.js';
+import { versionAssets } from './version-assets.mjs';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -100,9 +101,24 @@ await mkdir(hljsOut, { recursive: true });
 await cp(join(hljsDir, 'es', 'highlight.min.js'), join(hljsOut, 'highlight.min.js'));
 await cp(join(hljsDir, 'LICENSE'), join(hljsOut, 'LICENSE'));
 
+// Content-hashed module URLs (see version-assets.mjs). The pages link to
+// app.js, style.css and unlock.js with their versions too: those are kept
+// in assets.json for the site build (publish.mjs, the admin).
+const jsFiles = async (dir) => {
+  const found = [];
+  for (const ent of await readdir(dir, { withFileTypes: true, recursive: true })) {
+    if (ent.isFile() && ent.name.endsWith('.js')) found.push(join(ent.parentPath ?? ent.path, ent.name));
+  }
+  return found.filter((f) => !f.includes(`${sep}vendor${sep}`));
+};
+const blogVersion = await versionAssets(out, await jsFiles(out));
+const assets = {};
+for (const name of ['app.js', 'style.css', 'unlock.js']) assets[name] = await blogVersion(name);
+await writeFile(join(out, 'assets.json'), `${JSON.stringify(assets, null, 2)}\n`);
+
 // A starter home page and theme (no posts yet); publish.mjs rebuilds both.
 const rawSite = JSON.parse(await readFile(join(root, 'blog', 'site.json'), 'utf8'));
-const site = siteSettings(rawSite);
+const site = { ...siteSettings(rawSite), assets };
 await writeFile(join(out, 'index.html'), homePage(site, []));
 await writeFile(join(out, 'theme.css'), themeCss(site));
 
@@ -117,5 +133,13 @@ await cp(join(root, 'admin', 'ui'), adminOut, { recursive: true });
 await cp(join(out, 'lib'), join(adminOut, 'lib'), { recursive: true });
 await cp(join(out, 'vendor'), join(adminOut, 'vendor'), { recursive: true });
 for (const f of ['render.js', 'style.css']) await cp(join(root, 'blog', f), join(adminOut, f));
+// The blog's versions, for the pages the admin builds.
+await cp(join(out, 'assets.json'), join(adminOut, 'site-assets.json'));
 await cp(join(root, 'admin', 'src', 'paths.js'), join(adminOut, 'paths.js'));
+// The admin's modules get content-hashed URLs too, and its page links them.
+const adminVersion = await versionAssets(adminOut, await jsFiles(adminOut));
+const adminHtml = join(adminOut, 'index.html');
+let html = await readFile(adminHtml, 'utf8');
+for (const file of ['admin.js', 'admin.css']) html = html.replace(`="${file}"`, `="${file}?v=${await adminVersion(file)}"`);
+await writeFile(adminHtml, html);
 console.log(`Admin app assembled in ${adminOut}`);

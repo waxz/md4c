@@ -133,6 +133,16 @@ function footer(site) {
 </footer>`;
 }
 
+/**
+ * The address of one of the site's own files, with its content version
+ * (site.assets, from assets.json made by scripts/assemble-blog.mjs): a
+ * changed file gets a new address, so no browser keeps an old copy.
+ */
+function asset(site, root, name) {
+  const v = site.assets?.[name];
+  return `${root}${name}${v && /^[0-9a-f]{6,64}$/.test(v) ? `?v=${v}` : ''}`;
+}
+
 /** A complete HTML document sharing one head/masthead/footer layout. */
 function documentHtml({ site, root, page, title, description, canonical, head = '', main, robots }) {
   const html = document_attrs(site);
@@ -150,9 +160,9 @@ ${robots ? `<meta name="robots" content="${robots}">\n` : ''}${canonical ? `<lin
 <link rel="preload" href="${root}vendor/source-serif-4/files/source-serif-4-latin-opsz-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="${root}vendor/source-serif-4/opsz.css">
 <link rel="stylesheet" href="${root}vendor/source-serif-4/opsz-italic.css">
-<link rel="stylesheet" href="${root}style.css">
+<link rel="stylesheet" href="${asset(site, root, 'style.css')}">
 <link rel="stylesheet" href="${root}theme.css">
-${site.stylesheet ? `<link rel="stylesheet" href="${esc(hrefFrom(root, site.stylesheet))}">\n` : ''}${head}<script type="module" src="${root}app.js"></script>
+${site.stylesheet ? `<link rel="stylesheet" href="${esc(hrefFrom(root, site.stylesheet))}">\n` : ''}${head}<script type="module" src="${asset(site, root, 'app.js')}"></script>
 </head>
 <body data-page="${page}">
 <a class="skip-link" href="#app">Skip to content</a>
@@ -344,7 +354,7 @@ ${html}
     title: `${post.title} · ${site.title}`,
     description, canonical: url,
     // unlock.js guards the unlock form even if app.js cannot run.
-    head: locked ? `<script src="${root}unlock.js"></script>\n` : head, main,
+    head: locked ? `<script src="${asset(site, root, 'unlock.js')}"></script>\n` : head, main,
     // Search engines would only see the unlock form.
     robots: locked ? 'noindex' : '',
   });
