@@ -29,6 +29,8 @@
 //       "links": [ { "label": "About", "href": "#/post/about" } ],
 //       "verification": { "google": "...", "bing": "..." },  // search consoles
 //       "indexNowKey": "0123456789abcdef0123456789abcdef",    // publish --indexnow
+//       "googleTag": "G-XXXXXXXXXX",  // Google tag (gtag.js) on every page:
+//                                     // Analytics, and Search Console checks
 //       "search": "google"            // full-text search of the posts on the
 //                                     // web: google | bing | duckduckgo | none
 //     },
@@ -48,6 +50,15 @@ const THEMES = ['academic', 'modern'];
 const SCHEMES = ['auto', 'light', 'dark'];
 const FONTS = ['serif', 'sans'];
 const BG_MODES = ['hero', 'page'];
+
+/**
+ * A Google tag ID ("G-…", "GT-…", "AW-…", "DC-…"), also found in Google's
+ * whole pasted snippet; '' when there is none.
+ */
+export function googleTagId(v) {
+  const m = /\b((?:G|GT|AW|DC)-[A-Z0-9]{4,20})\b/.exec(String(v ?? '').toUpperCase());
+  return m ? m[1] : '';
+}
 
 export const DEFAULT_SITE = Object.freeze({
   title: 'MD4C Blog',
@@ -73,6 +84,7 @@ export const DEFAULT_SITE = Object.freeze({
   links: [],
   verification: {},
   indexNowKey: '',
+  googleTag: '',
   search: 'google',
 });
 
@@ -175,6 +187,7 @@ export function normalizeSite(raw, base) {
         .map((k) => [k, verification[k]])
     ),
     indexNowKey: /^[A-Za-z0-9-]{8,128}$/.test(r.indexNowKey ?? '') ? r.indexNowKey : '',
+    googleTag: googleTagId(r.googleTag),
     search: r.search === 'none' || SEARCH_ENGINES[r.search] ? r.search : DEFAULT_SITE.search,
   };
 }

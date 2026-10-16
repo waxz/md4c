@@ -27,6 +27,30 @@ export const CSP =
   "img-src 'self' https: data:; media-src 'self' https:; connect-src 'self'; object-src 'none'; " +
   "base-uri 'none'; form-action 'none'";
 
+// What the Google tag needs (Google's documented CSP for gtag.js / GA4).
+const GOOGLE_TAG_CSP = {
+  script: 'https://*.googletagmanager.com',
+  connect: 'https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com',
+};
+
+/** The pages' CSP: CSP, plus Google's hosts when the site has a Google tag. */
+export function cspFor(site) {
+  if (!site.googleTag) return CSP;
+  return CSP
+    .replace("script-src 'self' 'wasm-unsafe-eval'", `script-src 'self' 'wasm-unsafe-eval' ${GOOGLE_TAG_CSP.script}`)
+    .replace("connect-src 'self'", `connect-src 'self' ${GOOGLE_TAG_CSP.connect}`);
+}
+
+/** Google's tag: its loader, then gtag.js (the setup, which CSP keeps out of inline script). */
+function googleTag(site, root) {
+  if (!site.googleTag) return '';
+  const id = encodeURIComponent(site.googleTag);
+  return `<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>
+<script src="${asset(site, root, 'gtag.js')}" data-id="${esc(site.googleTag)}"></script>
+`;
+}
+
 const FAVICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%238b1e2d'/%3E%3Cpath d='M4.5 12V4h2.2c2.2 0 3.3 1.3 3.3 4s-1.1 4-3.3 4z' stroke='white' fill='none' stroke-width='1.3'/%3E%3C/svg%3E";
 
 export function esc(s) {
@@ -151,8 +175,8 @@ function documentHtml({ site, root, page, title, description, canonical, head = 
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="${CSP}">
-<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta http-equiv="Content-Security-Policy" content="${cspFor(site)}">
+${googleTag(site, root)}<meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="color-scheme" content="${site.colorScheme === 'auto' ? 'light dark' : site.colorScheme}">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">

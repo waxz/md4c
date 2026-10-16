@@ -668,3 +668,25 @@ test('uploads to R2/S3 keep their Cache-Control (storagesdk drops it)', async ()
     server.close();
   }
 });
+
+test('a Google tag in the site settings goes in every page, allowed by the CSP', async () => {
+  const { googleTagId, normalizeSite } = await import('../js/site-config.js');
+  const { homePage, postPage, graphPage, CSP } = await import('../js/pages.js');
+  const snippet = `<!-- Google tag (gtag.js) -->\n<script async src="https://www.googletagmanager.com/gtag/js?id=G-M75SMCS8TE"></script>\n<script>gtag('config', 'G-M75SMCS8TE');</script>`;
+  assert.equal(googleTagId(snippet), 'G-M75SMCS8TE', 'the whole snippet may be pasted');
+  assert.equal(googleTagId('nonsense'), '');
+  const site = { ...normalizeSite({ url: 'https://b.example/', googleTag: 'G-M75SMCS8TE' }, 'https://b.example/'), assets: { 'gtag.js': 'abc1234567' } };
+  const post = { slug: 'p', page: 'posts/p.html', title: 'P', date: '2026-10-16', tags: '' };
+  for (const html of [homePage(site, []), postPage(site, post, '<p>x</p>'), postPage(site, { ...post, protected: 'true' }, ''), graphPage(site)]) {
+    const head = html.slice(html.indexOf('<head>'), html.indexOf('</head>'));
+    assert.equal((head.match(/googletagmanager\.com\/gtag\/js\?id=G-M75SMCS8TE/g) ?? []).length, 1, 'exactly one tag');
+    assert.match(head, /gtag\.js\?v=abc1234567" data-id="G-M75SMCS8TE"/);
+    assert.ok(head.indexOf('Content-Security-Policy') < head.indexOf('googletagmanager'), 'after the CSP, which only covers what follows');
+    assert.match(head, /script-src 'self' 'wasm-unsafe-eval' https:\/\/\*\.googletagmanager\.com/);
+    assert.match(head, /connect-src 'self' https:\/\/\*\.google-analytics\.com/);
+    assert.doesNotMatch(head, /<script>/, 'no inline script');
+  }
+  const plain = homePage(normalizeSite({}, 'https://b.example/'), []);
+  assert.doesNotMatch(plain, /googletagmanager/);
+  assert.match(plain, new RegExp(CSP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'without a tag the CSP is unchanged');
+});

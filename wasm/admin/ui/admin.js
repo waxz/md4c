@@ -18,7 +18,7 @@ let editorModule = null;
 const editor = async () => (editorModule ??= await import('./editor.js'));
 const explorer = () => import('./explorer.js');
 const hasUnsavedChanges = () => editorModule?.hasUnsavedChanges() ?? false;
-import { DEFAULT_SITE, normalizeSite } from './lib/site-config.js';
+import { DEFAULT_SITE, googleTagId, normalizeSite } from './lib/site-config.js';
 import { dialog, esc, init, publicUrl, rebuildSite, reportError, state, toast } from './shared.js';
 
 const view = document.getElementById('view');
@@ -67,6 +67,8 @@ async function showSettings() {
       <div class="field"><span>Background image</span><span class="field-row">
         <input data-key="backgroundImage" aria-label="Background image" autocapitalize="off" spellcheck="false" placeholder="assets/background.jpg">
         <label class="btn btn-small">Upload<input type="file" accept="image/*" data-upload="backgroundImage" hidden></label></span></div>
+      <label class="field"><span>Google tag ID (paste the ID or Google's whole snippet; empty: none)</span>
+        <input data-key="googleTag" aria-label="Google tag ID" autocapitalize="characters" spellcheck="false" placeholder="G-XXXXXXXXXX"></label>
       <label class="field"><span>Background shown</span><select data-key="backgroundMode">
         <option value="hero">behind the title (masthead)</option><option value="page">behind the whole page</option></select></label>
       <fieldset class="field span-2 checks"><legend>In every post (a post's front matter can say otherwise)</legend>
@@ -141,7 +143,14 @@ async function showSettings() {
   };
   for (const el of formFields) {
     if (el.type === 'checkbox') el.addEventListener('change', () => setKey(el.dataset.key, el.checked));
-    else el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => setKey(el.dataset.key, el.value.trim()));
+    else if (el.dataset.key === 'googleTag') {
+      // Google's whole snippet may be pasted: keep only its ID.
+      el.addEventListener('input', () => {
+        const id = googleTagId(el.value);
+        if (id && id !== el.value.trim()) el.value = id;
+        setKey('googleTag', id || (el.value.trim() ? el.value.trim() : ''));
+      });
+    } else el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => setKey(el.dataset.key, el.value.trim()));
   }
   for (const input of view.querySelectorAll('.settings-form input[data-upload]')) {
     input.addEventListener('change', async (e) => {
