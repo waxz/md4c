@@ -192,6 +192,20 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
 
 - **Posts** (the home screen) lists drafts, labelled by their store, and
   published posts in separate sections, with search.
+  - Each card's **⋯** menu has the post's actions: *Edit*, *Publish* or
+    *Update site*, *Unpublish*, *View on the blog* and *Delete…*.
+- **Work runs in the background.** Publishing, updating the site,
+  unpublishing and deleting never block the page: you can keep writing or
+  move around the admin while they run.
+  - The **Activity** button in the header shows how many tasks are running.
+    It opens a side panel (a bottom sheet on a phone) with each task's
+    progress, details, outcome and a link to the published page.
+  - A card shows *Publish…* or *Unpublish…* while its task runs, and the
+    list refreshes when it is done.
+  - Only questions are asked in a dialog: which files go public, whether to
+    replace different public files, what to delete.
+  - Site updates run one at a time. Requests made while one waits join it.
+  - Closing the tab while a task runs asks first.
 - **Files** browses one store at a time; choose it from the menu at the top.
   - Each folder lists sub-folders, posts and attachments separately.
     Generated pages and site code are folded away and can only be viewed.
@@ -246,8 +260,12 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
     files it uses, to the public bucket and updates the site. The draft
     stays.
   - **Update site** republishes the draft.
+  - The editor has *Publish* / *Update site* and *Save draft*; publishing
+    runs in the background. Unpublishing and deleting are in the **⋯** menu
+    on the post's card in *Posts*.
   - **Unpublish** removes the public copy and its page, and keeps the
-    draft.
+    draft. A published post without a draft is moved into the first draft
+    store instead, so nothing is lost.
   - **Delete**, for a published post, asks whether to delete only the draft
     or the draft and the public copy.
   - **Posts published elsewhere**, for example with `publish.mjs` from a

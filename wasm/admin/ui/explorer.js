@@ -330,7 +330,7 @@ async function rowActions(view, store, prefix, item) {
       await api.remove(store, item.key, item.etag);
       invalidateFolders(store);
       toast(`Deleted ${name}.`, 'success');
-      if (published) await rebuildSite();
+      if (published) rebuildSite().catch(() => {}); // in the background (Activity)
       showFiles(view, store, prefix);
     } else if (choice === 'rename') {
       const to = await promptDialog('Rename or move', 'New path', item.key);
@@ -341,7 +341,7 @@ async function rowActions(view, store, prefix, item) {
       await api.move({ store, key: item.key }, { store, key: to }, item.etag);
       invalidateFolders(store);
       toast(`Moved to ${to}.`, 'success');
-      if (published) await rebuildSite();
+      if (published) rebuildSite().catch(() => {}); // in the background (Activity)
       showFiles(view, store, prefix);
     }
   } catch (err) {

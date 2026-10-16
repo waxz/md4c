@@ -9,14 +9,15 @@
 
 import { api, ApiError } from './client.js';
 import { flag, parseFrontMatter, SLUG_RE } from './lib/post-format.js';
-import { linkPostsForStaticPage, PARSER_FLAGS } from './lib/blog-render.js';
-import { digest, protectPost, readProtected } from './lib/protect.js';
+import { digest, readProtected } from './lib/protect.js';
 import { slugify } from './lib/blog-render.js';
 import { finishArticle, renderLive } from './render.js';
 import { attachSourceSync } from './sync.js';
+import { publishPost } from './post-actions.js';
+import { Cancelled } from './tasks.js';
 import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
 import {
-  confirmDialog, dialog, draftStores, esc, formatSize, formatTime, getMd4c, publicUrl, rebuildSite, reportError, state,
+  confirmDialog, dialog, draftStores, esc, formatTime, getMd4c, publicUrl, rebuildSite, reportError, state,
   storeLabel, toast,
 } from './shared.js';
 
@@ -293,9 +294,8 @@ export async function showEditor(view, store, key, newStore) {
     actions.innerHTML = [
       `<button type="button" class="btn btn-primary" data-act="publish">${isLive ? 'Update site' : 'Publish'}</button>`,
       direct ? '' : '<button type="button" class="btn" data-act="draft">Save draft</button>',
-      !direct && ed.published ? '<button type="button" class="btn" data-act="unpublish">Unpublish</button>' : '',
       live ? `<a class="btn" href="${esc(live)}" target="_blank" rel="noopener">View</a>` : '',
-      ed.store || ed.published ? '<button type="button" class="btn btn-danger-text" data-act="delete">Delete</button>' : '',
+      ed.store || ed.published ? '<a class="more-actions muted" href="#/posts">Unpublish or delete: ⋯ in Posts</a>' : '',
     ].join('');
     form.querySelector('.slug-note').textContent = isLive
       ? 'Changing the address of a published post breaks existing links.' : '';
@@ -525,71 +525,6 @@ export async function showEditor(view, store, key, newStore) {
     Object.assign(ed, { store: toStore, key: newKey, etag: moved.etag });
   }
 
-  /**
-   * Which of the files the post uses go public: lists them with checkboxes
-   * (new files ticked; different public files unticked, ticking replaces
-   * them). Returns { skip, overwrite }, or null when cancelled.
-   */
-  async function chooseFiles(files, locked) {
-    const open = files.filter((x) => x.action === 'copy' || x.action === 'conflict');
-    if (!open.length) return { skip: [], overwrite: [] };
-    const body = document.createElement('div');
-    body.innerHTML = `<p>This post uses these files from ${esc(storeLabel(ed.store))}. Tick the ones to copy to the public site;
-      unticked files stay private (their links won't work on the blog).</p>
-      ${locked ? '<p class="warn">The post is password-protected, but its files are not encrypted: anyone with a file\'s address can open it. They are unticked.</p>' : ''}
-      <ul class="file-choices">${open.map((x) => `<li><label class="check">
-        <input type="checkbox" value="${esc(x.key)}" ${x.action === 'copy' && !locked ? 'checked' : ''}>
-        <span><code>${esc(x.key)}</code> <span class="muted">${esc(formatSize(x.size ?? 0))}${x.action === 'conflict'
-          ? ' · <b>replaces</b> a different public file' : ''}</span></span></label></li>`).join('')}</ul>`;
-    const ok = await dialog({ title: 'Files to publish', body, buttons: [
-      { label: 'Cancel', value: false }, { label: 'Publish', value: true, kind: 'primary' },
-    ] });
-    if (!ok) return null;
-    const ticked = new Set([...body.querySelectorAll('input:checked')].map((i) => i.value));
-    return {
-      skip: open.filter((x) => !ticked.has(x.key)).map((x) => x.key),
-      overwrite: open.filter((x) => x.action === 'conflict' && ticked.has(x.key)).map((x) => x.key),
-    };
-  }
-
-  /** Publish the draft with the files chosen; asks before replacing different public files. */
-  async function publishDraft() {
-    const from = { store: ed.store, key: ed.key };
-    const siteEtag = () => (ed.published?.key === ed.key ? ed.published.etag : undefined);
-    const plan = await api.publish(from, ed.etag, [], siteEtag(), { dryRun: true });
-    const choice = await chooseFiles(plan.files, plan.protected);
-    if (!choice) return null;
-    // Encrypted here, in the browser: the password never leaves the draft.
-    const postBody = plan.protected
-      ? await protectPost(ed.saved, (md) => linkPostsForStaticPage(state.md4c.toHtml(md, { parserFlags: PARSER_FLAGS })))
-      : undefined;
-    let overwrite = choice.overwrite;
-    for (;;) {
-      try {
-        return await api.publish(from, ed.etag, overwrite, siteEtag(), { skip: choice.skip, postBody });
-      } catch (err) {
-        if (!(err instanceof ApiError && err.code === 'asset-conflict')) throw err;
-        const ul = document.createElement('div');
-        ul.innerHTML = `<p>These files already exist on the public site with different content:</p><ul>${err.assets
-          .map((a) => `<li><code>${esc(a.key)}</code></li>`).join('')}</ul><p>Replace them with this draft's versions? Other posts using them will show the new files.</p>`;
-        const ok = await dialog({ title: 'Replace public files?', body: ul, buttons: [
-          { label: 'Cancel', value: false }, { label: 'Replace', value: true, kind: 'danger' },
-        ] });
-        if (!ok) return null;
-        overwrite = err.assets.map((a) => a.key);
-      }
-    }
-  }
-
-  /** Delete the published copy, unless it is already gone. */
-  async function removePublished(p) {
-    await api.remove('site', p.key, p.etag).catch((err) => {
-      if (err instanceof ApiError && err.status === 404) return;
-      if (err instanceof ApiError && err.code === 'changed') err.published = true;
-      throw err;
-    });
-  }
-
   async function run(act) {
     if (!validate()) return;
     const newKey = `posts/${slug()}.md`;
@@ -614,8 +549,8 @@ export async function showEditor(view, store, key, newStore) {
           dropLocal(local);
           setDirty(false);
           history.replaceState(null, '', editHref(ed.store, ed.key));
-          await rebuildSite();
-          toast('Published.', 'success');
+          toast('Saved. The site is updating in the background (Activity).', 'success');
+          rebuildSite().catch(() => {}); // shown in the Activity panel
           return;
         }
 
@@ -639,33 +574,21 @@ export async function showEditor(view, store, key, newStore) {
         }
 
         if (act === 'publish') {
-          // 2. Copy it, with its files, to the site.
-          const r = await publishDraft();
-          if (!r) {
-            toast('Saved as a draft; not published.', 'info');
-            return;
-          }
+          // 2. Copy it, with its files, to the site: in the background
+          // (Activity panel), so writing can go on meanwhile.
           const renamedFrom = ed.published && ed.published.key !== ed.key ? ed.published : null;
-          ed.published = { key: ed.key, etag: r.post.etag, text: content };
-          if (renamedFrom) await removePublished(renamedFrom);
-          renderActions();
-          await rebuildSite();
-          const url = publicUrl(`posts/${slug()}.html`);
-          if (state.site.indexNowKey && state.site.url && url) {
-            api.indexNow([url, publicUrl('index.html')]).catch((err) => console.warn('IndexNow:', err));
-          }
-          const copied = r.files.copy.length + r.files.overwrite.length;
-          const kept = r.files.skip.length;
-          toast(`${r.updated ? 'Site updated' : 'Published'}${copied ? ` with ${copied} file(s)` : ''}${kept ? `; ${kept} file(s) kept private` : ''}. The draft stays in ${storeLabel(ed.store)}.`, 'success');
+          const job = publishPost({
+            draft: { store: ed.store, key: ed.key, etag: ed.etag },
+            published: ed.published ? { key: ed.published.key, etag: ed.published.etag } : null,
+            title: f.title.value.trim(),
+          }, { alsoRemove: renamedFrom });
+          job.then((r) => {
+            ed.published = { key: ed.key, etag: r.post.etag, text: content };
+            if (current === ed) renderActions();
+          }, (err) => {
+            if (err instanceof Cancelled) toast('Saved as a draft; not published.', 'info');
+          });
           return;
-        }
-
-        if (act === 'unpublish' && ed.published) {
-          await removePublished(ed.published);
-          ed.published = null;
-          renderActions();
-          await rebuildSite();
-          toast(`Unpublished. The draft stays in ${storeLabel(ed.store)}.`, 'success');
         }
         return;
       } catch (err) {
@@ -685,47 +608,10 @@ export async function showEditor(view, store, key, newStore) {
     }
   }
 
-  async function remove() {
-    const p = direct ? null : ed.published;
-    let what;
-    if (direct) {
-      what = await confirmDialog('Delete post?', 'Delete this published post? Its page is removed from the blog.') ? 'draft' : null;
-    } else if (ed.store && p) {
-      what = await dialog({
-        title: 'Delete post?',
-        body: `This post is published, and its draft is in ${storeLabel(ed.store)}.`,
-        buttons: [
-          { label: 'Delete the draft only', value: 'draft' },
-          { label: 'Delete the draft and unpublish', value: 'both', kind: 'danger' },
-          { label: 'Cancel', value: null },
-        ],
-        stacked: true,
-      });
-    } else if (ed.store) {
-      what = await confirmDialog('Delete draft?', `Delete this draft from ${storeLabel(ed.store)}? This cannot be undone.`) ? 'draft' : null;
-    } else {
-      what = await confirmDialog('Delete post?', 'Delete this published post? Its page is removed from the blog.') ? 'site' : null;
-    }
-    if (!what) return;
-    try {
-      if (what !== 'site') await api.remove(ed.store, ed.key, ed.etag);
-      if (what !== 'draft') await removePublished(p);
-      ed.dirty = false;
-      dropLocal(local);
-      if (direct || what !== 'draft') await rebuildSite();
-      toast('Deleted.', 'success');
-      location.hash = what === 'draft' && p ? editHref('site', p.key) : '#/posts';
-    } catch (err) {
-      if (err instanceof ApiError && err.code === 'changed') await onChanged(err);
-      else reportError(err);
-    }
-  }
-
   actions.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-act]');
     if (!b) return;
-    if (b.dataset.act === 'delete') remove();
-    else run(b.dataset.act);
+    run(b.dataset.act);
   });
   form.addEventListener('submit', (e) => e.preventDefault());
   setDirty(false);

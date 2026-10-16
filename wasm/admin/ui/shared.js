@@ -2,6 +2,7 @@
 
 import { normalizeSite } from './lib/site-config.js';
 import { api, ApiError } from './client.js';
+import { requestBuild } from './tasks.js';
 
 // The Markdown engine and the site build load only when first needed
 // (editor, publishing), so the posts list and the explorer start light.
@@ -164,54 +165,34 @@ export function reportError(err, what = 'That did not work') {
 /* ---------- Building the public site ---------- */
 
 /**
- * Run the shared site build against the public bucket, showing progress.
- * Returns the build result. Options as for lib/site-build.js build().
+ * Update the public site: the shared site build, run in the background
+ * (tasks.js), one at a time; requests made while one waits join it.
+ * Resolves with the build result. Options as for lib/site-build.js build().
  */
-export async function rebuildSite(opts = {}) {
-  const log = document.createElement('pre');
-  log.className = 'build-log';
-  const status = document.createElement('p');
-  status.textContent = opts.full ? 'Rebuilding every page…' : 'Updating the site…';
-  const body = document.createElement('div');
-  body.append(status, log);
-  const dlg = document.createElement('dialog');
-  dlg.className = 'dialog';
-  dlg.innerHTML = '<h2>Publishing</h2>';
-  dlg.append(body);
-  document.body.append(dlg);
-  dlg.showModal();
-  dlg.addEventListener('cancel', (e) => e.preventDefault());
-  try {
+export function rebuildSite(opts = {}) {
+  return requestBuild(opts, async (merged, { log, step }) => {
+    step('Loading the site build…');
     const [{ build }, { adminStorage }, md4c] = await Promise.all([
       import('./lib/site-build.js'), import('./admin-storage.js'), getMd4c(),
     ]);
-    const write = (line) => {
-      log.textContent += `${line}\n`;
-      log.scrollTop = log.scrollHeight;
-    };
     // Markdown published before is moved out of the public bucket first:
     // readers get only the pages built from it.
     const { moved = [] } = await api.privateSources().catch((err) => {
-      write(`note: the published Markdown could not be made private yet (${err.message ?? err})`);
+      log(`note: the published Markdown could not be made private yet (${err.message ?? err})`);
       return {};
     });
-    for (const key of moved) write(`private ${key} (removed from the public bucket)`);
+    for (const key of moved) log(`private ${key} (removed from the public bucket)`);
+    step(merged.full ? 'Rendering every page…' : 'Rendering changed pages…');
     const result = await build(adminStorage('site'), md4c, {
-      ...opts, privateSources: Boolean(state.session?.privateSources), log: write,
+      ...merged, privateSources: Boolean(state.session?.privateSources),
+      log: (line) => {
+        log(line);
+        if (/^(upload|delete) /.test(line)) step(line);
+      },
     });
     await refreshSite();
-    dlg.close();
-    dlg.remove();
-    toast(`Site updated: ${result.rendered.length} page(s) rendered${result.removed.length ? `, ${result.removed.length} removed` : ''}.`, 'success');
+    log(`${result.rendered.length} page(s) rendered${result.removed.length ? `, ${result.removed.length} removed` : ''}.`);
+    window.dispatchEvent(new CustomEvent('site-updated'));
     return result;
-  } catch (err) {
-    status.textContent = `The build stopped: ${err.message ?? err}`;
-    status.className = 'error';
-    const close = document.createElement('button');
-    close.className = 'btn';
-    close.textContent = 'Close';
-    close.addEventListener('click', () => { dlg.close(); dlg.remove(); });
-    body.append(close);
-    throw err;
-  }
+  });
 }

@@ -301,3 +301,68 @@ audio.file-preview { width: 100%; }
   position: absolute; top: 0; left: -10000px; visibility: hidden; pointer-events: none;
   white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word;
 }
+
+/* ---------- Background tasks: the Activity panel (tasks.js) ---------- */
+
+.activity-toggle {
+  order: 2; margin-left: auto; display: inline-flex; align-items: center; gap: .4rem;
+  font: inherit; font-size: .85rem; padding: .3rem .7rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+.activity-toggle[data-state="running"] { border-color: var(--accent); color: var(--accent); }
+.activity-toggle[data-state="failed"] { border-color: var(--danger); color: var(--danger); }
+@media (min-width: 760px) { .activity-toggle { order: 0; margin-left: 0; } }
+.spinner {
+  display: inline-block; width: .85em; height: .85em; flex: none; border-radius: 50%;
+  border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+
+/* A side panel on wide screens, a bottom sheet on phones; never modal. */
+.activity {
+  position: fixed; z-index: 15; right: 0; bottom: 0; width: 100%; max-height: 55vh;
+  display: flex; flex-direction: column; background: var(--surface); border-top: 1px solid var(--line);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, .15); padding-bottom: env(safe-area-inset-bottom);
+}
+@media (min-width: 900px) {
+  .activity { top: 3.6rem; bottom: auto; width: 24rem; max-height: calc(100vh - 4.4rem); margin: 0 .8rem; border: 1px solid var(--line); border-radius: var(--radius); }
+}
+.activity[hidden] { display: none; }
+.activity-head { display: flex; align-items: center; gap: .5rem; padding: .6rem .8rem; border-bottom: 1px solid var(--line); }
+.activity-head h2 { margin: 0 auto 0 0; font-size: 1rem; }
+.activity-close, .task-dismiss { font: inherit; font-size: 1.2rem; line-height: 1; border: 0; background: none; color: var(--muted); cursor: pointer; padding: .2rem .4rem; }
+.activity-list { list-style: none; margin: 0; padding: .4rem .8rem .8rem; overflow-y: auto; display: grid; gap: .5rem; }
+.task { border: 1px solid var(--line); border-radius: var(--radius); padding: .55rem .7rem; background: var(--bg); }
+.task-head { display: flex; align-items: center; gap: .5rem; }
+.task-icon { width: 1.1rem; text-align: center; flex: none; }
+.task-done .task-icon { color: var(--ok); }
+.task-failed { border-color: var(--danger); }
+.task-failed .task-icon, .task-error { color: var(--danger); }
+.task-running .task-icon { color: var(--accent); }
+.task-title { flex: 1; min-width: 0; font-weight: 600; font-size: .92rem; overflow-wrap: anywhere; }
+.task-time { font-size: .78rem; font-variant-numeric: tabular-nums; }
+.task-step, .task-error, .task-links { margin: .3rem 0 0 1.6rem; font-size: .85rem; overflow-wrap: anywhere; }
+.task details { margin: .3rem 0 0 1.6rem; font-size: .8rem; }
+.task summary { cursor: pointer; color: var(--muted); }
+.task pre { max-height: 12rem; overflow: auto; margin: .3rem 0 0; padding: .4rem .5rem; background: var(--surface); border-radius: 4px; font-size: .75rem; white-space: pre-wrap; }
+
+/* ---------- Posts: each card's ⋯ menu (posts.js) ---------- */
+
+.post-card { position: relative; }
+button.post-card-link { font: inherit; font-size: 1.2rem; border: 0; border-left: 1px solid var(--line); background: none; cursor: pointer; border-radius: 0 var(--radius) var(--radius) 0; }
+button.post-card-link:disabled { cursor: default; opacity: .4; }
+.card-menu {
+  position: absolute; z-index: 10; right: .4rem; top: calc(100% - .3rem); min-width: 13rem;
+  display: grid; padding: .3rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+}
+.card-menu a, .card-menu button {
+  font: inherit; font-size: .92rem; text-align: left; padding: .55rem .7rem; border: 0; border-radius: 6px;
+  background: none; color: var(--ink); text-decoration: none; cursor: pointer;
+}
+.card-menu a:hover, .card-menu button:hover, .card-menu :focus-visible { background: var(--bg); }
+.card-menu .primary { color: var(--accent); font-weight: 600; }
+.card-menu .danger { color: var(--danger); }
+.chip-busy { display: inline-flex; align-items: center; gap: .35rem; border-color: var(--accent); color: var(--accent); }
+.more-actions { align-self: center; font-size: .85rem; }

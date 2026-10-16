@@ -160,11 +160,15 @@ async function showSettings() {
     const act = e.target.closest('button[data-act]')?.dataset.act;
     if (!act) return;
     try {
+      // Both run in the background: see the Activity panel.
       if (act === 'save') {
         const obj = parse();
-        if (obj) await rebuildSite({ site: obj, full: true });
+        if (obj) {
+          toast('Saving the settings and rebuilding every page in the background.', 'info');
+          rebuildSite({ site: obj, full: true }).then(() => toast('Settings saved; every page rebuilt.', 'success'), () => {});
+        }
       } else if (act === 'rebuild') {
-        await rebuildSite({ full: true });
+        rebuildSite({ full: true }).then(() => toast('Every page rebuilt.', 'success'), () => {});
       } else if (act === 'indexnow') {
         const items = await api.listAll('site', 'posts/');
         const urls = [publicUrl('index.html'), ...items.filter((i) => i.key.endsWith('.html')).map((i) => publicUrl(i.key))];
