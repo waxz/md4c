@@ -11,11 +11,13 @@
 //   #/settings                  site settings and rebuild
 
 import { api } from './client.js';
-import { hasUnsavedChanges, showEditor, showTextEditor } from './editor.js';
-import { showFile, showFiles } from './explorer.js';
 import { showPosts } from './posts.js';
-import { showStorage } from './storage.js';
-import { uploadFiles } from './explorer.js';
+
+// Views other than the posts list load when first opened.
+let editorModule = null;
+const editor = async () => (editorModule ??= await import('./editor.js'));
+const explorer = () => import('./explorer.js');
+const hasUnsavedChanges = () => editorModule?.hasUnsavedChanges() ?? false;
 import { DEFAULT_SITE, normalizeSite } from './lib/site-config.js';
 import { dialog, esc, init, publicUrl, rebuildSite, reportError, state, toast } from './shared.js';
 
@@ -34,13 +36,13 @@ async function route() {
     a.setAttribute('aria-current', String(a.dataset.route === section));
   });
   try {
-    if (r.name === 'new') await showEditor(view, null, null, location.hash.split('/')[2]);
-    else if (r.name === 'edit') await showEditor(view, r.store, r.path);
-    else if (r.name === 'view') await showFile(view, r.store, r.path);
-    else if (r.name === 'text') await showTextEditor(view, r.store, r.path);
+    if (r.name === 'new') await (await editor()).showEditor(view, null, null, location.hash.split('/')[2]);
+    else if (r.name === 'edit') await (await editor()).showEditor(view, r.store, r.path);
+    else if (r.name === 'view') await (await explorer()).showFile(view, r.store, r.path);
+    else if (r.name === 'text') await (await editor()).showTextEditor(view, r.store, r.path);
     else if (r.name === 'settings') await showSettings();
-    else if (r.name === 'storage') await showStorage(view);
-    else if (r.name === 'files') await showFiles(view, r.store, r.path);
+    else if (r.name === 'storage') await (await import('./storage.js')).showStorage(view);
+    else if (r.name === 'files') await (await explorer()).showFiles(view, r.store, r.path);
     else await showPosts(view);
     lastHash = location.hash;
     view.focus({ preventScroll: true });
@@ -136,7 +138,7 @@ async function showSettings() {
       const files = [...e.target.files];
       e.target.value = '';
       // Site images are public: they go to assets/ in the published site.
-      const [key] = await uploadFiles('site', 'assets/', files);
+      const [key] = await (await explorer()).uploadFiles('site', 'assets/', files);
       if (!key) return;
       setKey(input.dataset.upload, key);
       fillForm();

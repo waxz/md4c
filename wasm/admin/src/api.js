@@ -261,10 +261,13 @@ async function writeFile(request, env, stores, entry, key, ofPublished) {
     // The draft of a published post shares its slug with the public copy.
     const own = ofPublished && entry.role === 'drafts' && postSlug(key) ? { store: 'site', key } : undefined;
     await checkNewKey(stores, entry, key, own);
-    return json(info(entry, await entry.store.put(key, body, putOpts(key))), 201);
+    const created = await entry.store.put(key, body, putOpts(key));
+    rememberSummary(entry, created, body);
+    return json(info(entry, created), 201);
   }
   if (ifMatch) {
     const meta = await entry.store.put(key, body, putOpts(key, stripQuotes(ifMatch)));
+    rememberSummary(entry, meta, body);
     if (!meta) {
       const current = await entry.store.head(key);
       throw new ApiError(412, current
@@ -327,6 +330,7 @@ async function moveFile(request, stores) {
   }
   await checkNewKey(stores, dst, to.key, from);
   const written = await dst.store.put(to.key, obj.body, putOpts(to.key));
+  rememberSummary(dst, written, obj.body);
   await src.store.delete(from.key);
   return json(info(dst, written));
 }
@@ -442,6 +446,7 @@ async function publish(request, stores) {
   }
   const published = await site.store.put(from.key, publicBody, putOpts(from.key, live && body.siteIfMatch ? live.etag : undefined));
   if (!published) throw new ApiError(412, `The published ${from.key} changed during publishing; try again`, { code: 'changed', published: true });
+  rememberSummary(site, published, publicBody);
   return json({
     post: info(site, published),
     draft: info(src, post.meta),
@@ -541,38 +546,30 @@ async function listFolder(entry, prefix) {
   return { items, folders: [...folders].sort(), exists };
 }
 
-/** Run `fn` over `list` with at most `limit` at a time. */
-async function inBatches(list, limit, fn) {
-  const queue = [...list];
-  await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, async () => {
-    while (queue.length) await fn(queue.shift());
-  }));
-}
-
-// Post summaries already read, by store, key and version: a post is read
-// once per Worker isolate, not on every visit to the posts list.
+// Post summaries the Worker already knows, by store, key and version:
+// those of posts it wrote (any store). The posts list never reads a post.
 const summaryCache = new Map();
 const SUMMARY_CACHE_MAX = 5000;
+const summaryKey = (entry, key, etag) => `${entry.id}\n${key}\n${etag}`;
 
-/** A post's { title, date, tags } with as little reading as the store allows. */
-async function summaryOf(entry, item, siteMeta) {
-  if (item.summary) return item.summary; // R2: stored with the post
+/** Remember the summary of a post just written (its body is at hand anyway). */
+function rememberSummary(entry, written, body) {
+  if (!written || !postSlug(written.key) || !body) return;
+  const text = new TextDecoder().decode(new Uint8Array(body, 0, Math.min(body.byteLength, PEEK_BYTES * 2)));
+  if (summaryCache.size >= SUMMARY_CACHE_MAX) summaryCache.delete(summaryCache.keys().next().value);
+  summaryCache.set(summaryKey(entry, written.key, written.etag), postSummary(text));
+}
+
+/**
+ * A post's { title, date, tags } without reading the post: stored with it
+ * (R2), from index.json (published posts), or remembered from writing it.
+ * Unknown summaries are null: the list then shows the post's address.
+ */
+function summaryOf(entry, item, siteMeta) {
+  if (item.summary) return item.summary;
   const fromIndex = entry.role === 'site' && siteMeta.get(item.key);
   if (fromIndex && fromIndex.etag === item.etag) return fromIndex.metadata;
-  const cacheKey = `${entry.id}\n${item.key}\n${item.etag}`;
-  const cached = summaryCache.get(cacheKey);
-  if (cached) return cached;
-  // The front matter is at the start: read that much, all of it only if needed.
-  let text = entry.store.peek ? await entry.store.peek(item.key, PEEK_BYTES) : null;
-  if (text !== null && text.length >= PEEK_BYTES - 4 && !/^\uFEFF?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)/.test(text) && /^\uFEFF?---/.test(text)) text = null;
-  if (text === null) {
-    const obj = await entry.store.get(item.key);
-    text = obj ? new TextDecoder().decode(obj.body) : '';
-  }
-  const summary = postSummary(text);
-  if (summaryCache.size >= SUMMARY_CACHE_MAX) summaryCache.delete(summaryCache.keys().next().value);
-  summaryCache.set(cacheKey, summary);
-  return summary;
+  return summaryCache.get(summaryKey(entry, item.key, item.etag)) ?? null;
 }
 
 /** Every post in every store, with the front matter the posts list shows. */
@@ -600,16 +597,19 @@ async function listPosts(stores) {
       return;
     }
     if (entry.role === 'site') await loadIndex;
-    await inBatches(items, 8, async (item) => {
-      const meta = await summaryOf(entry, item, siteMeta);
+    for (const item of items) {
+      const meta = summaryOf(entry, item, siteMeta) ?? {};
+      const { summary, ...rest } = item;
       out.push({
-        ...item,
+        ...rest,
         status: entry.role === 'site' ? 'published' : 'draft',
         title: String(meta.title || postSlug(item.key)).slice(0, 200),
         date: /^\d{4}-\d{2}-\d{2}/.test(meta.date ?? '') ? meta.date.slice(0, 10) : '',
         tags: String(meta.tags ?? ''),
+        // Where to read it; the list itself reads nothing.
+        url: entry.role === 'site' ? '' : `/api/raw/${entry.id}/${item.key}`,
       });
-    });
+    }
   }));
   return json({ posts: out, problems });
 }

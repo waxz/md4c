@@ -15,7 +15,7 @@ import { slugify } from './lib/blog-render.js';
 import { finishArticle, renderLive } from './render.js';
 import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
 import {
-  confirmDialog, dialog, draftStores, esc, formatSize, formatTime, publicUrl, rebuildSite, reportError, state,
+  confirmDialog, dialog, draftStores, esc, formatSize, formatTime, getMd4c, publicUrl, rebuildSite, reportError, state,
   storeLabel, toast,
 } from './shared.js';
 
@@ -104,6 +104,7 @@ async function readPublished(key) {
  * store to start it in). A published post opens its draft when it has one.
  */
 export async function showEditor(view, store, key, newStore) {
+  const engine = getMd4c(); // for the preview and publishing; loads while the post does
   const stores = draftStores();
   const direct = !stores.length; // no draft stores: write the site directly
   const isNew = !key;
@@ -130,6 +131,7 @@ export async function showEditor(view, store, key, newStore) {
       return;
     }
   }
+  await engine;
   const { meta, body } = parseFrontMatter(source);
   const extra = Object.fromEntries(Object.entries(meta).filter(([k]) => !KNOWN.includes(k)));
   const noDraftYet = isNew || (store === 'site' && !direct);

@@ -1,9 +1,29 @@
 // State and helpers shared by the admin views.
 
-import { loadMd4c } from './lib/md4c.js';
 import { normalizeSite } from './lib/site-config.js';
-import { build, readIndex } from './lib/site-build.js';
-import { adminStorage, api, ApiError } from './client.js';
+import { api, ApiError } from './client.js';
+
+// The Markdown engine and the site build load only when first needed
+// (editor, publishing), so the posts list and the explorer start light.
+let md4cPromise;
+/** md4c.wasm, loaded once; also kept in state.md4c. */
+export function getMd4c() {
+  md4cPromise ??= import('./lib/md4c.js')
+    .then(({ loadMd4c }) => loadMd4c(new URL('./lib/md4c.wasm', import.meta.url)))
+    .then((m) => (state.md4c = m));
+  return md4cPromise;
+}
+
+/** The site's index.json as an object, or null. */
+async function readSiteIndex() {
+  try {
+    const doc = JSON.parse((await api.read('site', 'index.json')).text);
+    return doc && typeof doc === 'object' ? (Array.isArray(doc) ? { items: doc } : doc) : null;
+  } catch (err) {
+    if (err instanceof SyntaxError || (err instanceof ApiError && err.status === 404)) return null;
+    throw err;
+  }
+}
 
 export const state = {
   session: null, // { email, publicUrl, drafts, maxUploadMb }
@@ -13,11 +33,10 @@ export const state = {
 };
 
 export async function init() {
-  // Session, Markdown engine and site settings load side by side.
-  const md4c = loadMd4c(new URL('./lib/md4c.wasm', import.meta.url));
-  const index = readIndex(adminStorage('site'));
+  // Session and site settings load side by side.
+  const index = readSiteIndex();
   state.session = await api.session();
-  [state.md4c] = await Promise.all([md4c, index.then(applySiteIndex)]);
+  applySiteIndex(await index);
 }
 
 function applySiteIndex(index) {
@@ -26,7 +45,7 @@ function applySiteIndex(index) {
 }
 
 export async function refreshSite() {
-  applySiteIndex(await readIndex(adminStorage('site')));
+  applySiteIndex(await readSiteIndex());
 }
 
 export const draftStores = () => state.session.stores.filter((s) => s.role === 'drafts');
@@ -163,7 +182,10 @@ export async function rebuildSite(opts = {}) {
   dlg.showModal();
   dlg.addEventListener('cancel', (e) => e.preventDefault());
   try {
-    const result = await build(adminStorage('site'), state.md4c, {
+    const [{ build }, { adminStorage }, md4c] = await Promise.all([
+      import('./lib/site-build.js'), import('./admin-storage.js'), getMd4c(),
+    ]);
+    const result = await build(adminStorage('site'), md4c, {
       ...opts,
       log: (line) => {
         log.textContent += `${line}\n`;

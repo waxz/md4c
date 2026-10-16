@@ -518,6 +518,19 @@ describe('fast listings', () => {
     assert.deepEqual([missing.data.items, missing.data.folders, missing.data.exists], [[], [], false]);
   });
 
+  test('the posts list reads no post: unknown titles show the address', async () => {
+    const { createClient } = await import('webdav');
+    const other = createClient(`http://127.0.0.1:${davPort}`, { username: 'me', password: 'secret' });
+    await other.putFileContents('/blog-drafts/posts/written-elsewhere.md', '---\ntitle: Not read\n---\n\nBody');
+    await create('nas', 'posts/written-here.md', '---\ntitle: Saved in the admin\ndate: 2026-10-16\n---\n\nBody');
+    const r = await call('GET', '/api/posts');
+    const byKey = (k) => r.data.posts.find((p) => p.key === k);
+    assert.equal(byKey('posts/written-elsewhere.md').title, 'written-elsewhere', 'not read: shown by its address');
+    assert.equal(byKey('posts/written-here.md').title, 'Saved in the admin', 'known from writing it');
+    assert.equal(byKey('posts/written-here.md').url, '/api/raw/nas/posts/written-here.md');
+    assert.ok(!('summary' in byKey('posts/written-here.md')));
+  });
+
   test('R2 posts carry their summary, so the posts list reads no drafts', async () => {
     await create('drafts', 'posts/summary-one.md', '---\ntitle: "C++: fast"\ndate: 2026-10-16\ntags: [a, b]\n---\n\nBody');
     const head = await env.DRAFTS.head('posts/summary-one.md');

@@ -266,15 +266,19 @@ runs it in Cloudflare's own runtime with local R2 buckets.
   for small teams).
 - Each publish makes a few dozen requests: the listing, a few reads, the
   changed pages, the home page and the indexes.
-- **Posts list:** shows the last list at once, then refreshes in the
-  background.
-  - Drafts in R2 carry their title, date and tags as object metadata,
-    written with each save, so listing them reads no files.
-  - Published posts use `index.json`.
-  - Other stores (WebDAV, S3, GitHub) read only the first 8 KB of each draft,
-    once per version. The Worker keeps the result.
-  - Drafts saved before this change are read that way until their next
-    save.
+- **Posts list:** it never reads a post. It shows each post as a link,
+  using only the storage listing and summaries already known:
+  - **R2 drafts:** they carry their title, date and tags as object metadata,
+    written with each save.
+  - **Published posts:** their titles come from `index.json`.
+  - **Drafts the Worker saved:** it remembers their titles.
+  - **Anything else** is shown by its address until its next save in the
+    admin. That covers drafts written outside the admin, and drafts in
+    WebDAV, S3 or GitHub stores after the Worker restarts.
+
+  The list shows the last result at once, then refreshes in the background.
+  The page loads only the list's code (under 100 KB). The Markdown engine,
+  site builder, editor and file explorer load when first opened.
 - **Files:** each folder is listed one level deep, with one R2 list or one
   WebDAV `PROPFIND`, and the last listing shows at once on the next visit.
 - A move (rename, publish, unpublish) is a copy followed by a delete. If the
