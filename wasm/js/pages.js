@@ -33,22 +33,76 @@ const GOOGLE_TAG_CSP = {
   connect: 'https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com',
 };
 
-/** The pages' CSP: CSP, plus Google's hosts when the site has a Google tag. */
+/**
+ * Google's snippet, inline as Google gives it: Search Console's "Google
+ * Analytics" verification looks for exactly this in the page. The CSP
+ * allows this one script by its SHA-256 hash; any other inline script
+ * stays blocked.
+ */
+function googleTagScript(id) {
+  return `
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', '${id}');
+`;
+}
+
+/** The pages' CSP: CSP, plus Google's hosts and snippet when the site has a Google tag. */
 export function cspFor(site) {
   if (!site.googleTag) return CSP;
+  const hash = `'sha256-${sha256Base64(googleTagScript(site.googleTag))}'`;
   return CSP
-    .replace("script-src 'self' 'wasm-unsafe-eval'", `script-src 'self' 'wasm-unsafe-eval' ${GOOGLE_TAG_CSP.script}`)
+    .replace("script-src 'self' 'wasm-unsafe-eval'", `script-src 'self' 'wasm-unsafe-eval' ${hash} ${GOOGLE_TAG_CSP.script}`)
     .replace("connect-src 'self'", `connect-src 'self' ${GOOGLE_TAG_CSP.connect}`);
 }
 
-/** Google's tag: its loader, then gtag.js (the setup, which CSP keeps out of inline script). */
-function googleTag(site, root) {
+/** Google's tag, as Google gives it (site.googleTag is validated: G-…, GT-…, AW-…, DC-…). */
+function googleTag(site) {
   if (!site.googleTag) return '';
-  const id = encodeURIComponent(site.googleTag);
   return `<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>
-<script src="${asset(site, root, 'gtag.js')}" data-id="${esc(site.googleTag)}"></script>
+<script async src="https://www.googletagmanager.com/gtag/js?id=${site.googleTag}"></script>
+<script>${googleTagScript(site.googleTag)}</script>
 `;
+}
+
+/** Base64 SHA-256 of a string's UTF-8 bytes (synchronous: pages are built synchronously). */
+export function sha256Base64(text) {
+  const K = [];
+  const H = [];
+  let n = 2;
+  for (let found = 0; found < 64; n++) {
+    let prime = true;
+    for (let d = 2; d * d <= n; d++) if (n % d === 0) { prime = false; break; }
+    if (!prime) continue;
+    if (found < 8) H[found] = (Math.pow(n, 1 / 2) * 2 ** 32) | 0;
+    K[found++] = (Math.pow(n, 1 / 3) * 2 ** 32) | 0;
+  }
+  const bytes = [...new TextEncoder().encode(text)];
+  const bitLen = bytes.length * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  for (let i = 7; i >= 0; i--) bytes.push(i >= 4 ? 0 : (bitLen >>> (i * 8)) & 0xff);
+  const w = new Array(64);
+  const rotr = (x, r) => (x >>> r) | (x << (32 - r));
+  for (let off = 0; off < bytes.length; off += 64) {
+    for (let i = 0; i < 16; i++) w[i] = (bytes[off + i * 4] << 24) | (bytes[off + i * 4 + 1] << 16) | (bytes[off + i * 4 + 2] << 8) | bytes[off + i * 4 + 3];
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0;
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      [h, g, f, e, d, c, b, a] = [g, f, e, (d + t1) | 0, c, b, a, (t1 + t2) | 0];
+    }
+    [a, b, c, d, e, f, g, h].forEach((v, i) => { H[i] = (H[i] + v) | 0; });
+  }
+  const out = H.flatMap((v) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff]);
+  return btoa(String.fromCharCode(...out));
 }
 
 const FAVICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%238b1e2d'/%3E%3Cpath d='M4.5 12V4h2.2c2.2 0 3.3 1.3 3.3 4s-1.1 4-3.3 4z' stroke='white' fill='none' stroke-width='1.3'/%3E%3C/svg%3E";
@@ -176,7 +230,7 @@ function documentHtml({ site, root, page, title, description, canonical, head = 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="${cspFor(site)}">
-${googleTag(site, root)}<meta name="referrer" content="strict-origin-when-cross-origin">
+${googleTag(site)}<meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="color-scheme" content="${site.colorScheme === 'auto' ? 'light dark' : site.colorScheme}">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">

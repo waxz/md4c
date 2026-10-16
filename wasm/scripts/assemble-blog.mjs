@@ -113,7 +113,7 @@ const jsFiles = async (dir) => {
 };
 const blogVersion = await versionAssets(out, await jsFiles(out));
 const assets = {};
-for (const name of ['app.js', 'style.css', 'unlock.js', 'gtag.js']) assets[name] = await blogVersion(name);
+for (const name of ['app.js', 'style.css', 'unlock.js']) assets[name] = await blogVersion(name);
 await writeFile(join(out, 'assets.json'), `${JSON.stringify(assets, null, 2)}\n`);
 
 // A starter home page and theme (no posts yet); publish.mjs rebuilds both.
