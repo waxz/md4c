@@ -1,0 +1,64 @@
+# Blog admin Worker. Deploy from wasm/: `npm run build && npm run admin:deploy`.
+# See admin/README.md for the one-time Cloudflare setup.
+
+name = "blog-admin"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+# The WebDAV client used for WebDAV draft stores needs Node built-ins.
+compatibility_flags = ["nodejs_compat"]
+
+# Serve only on the custom domain protected by Cloudflare Access; a
+# *.workers.dev address would bypass the Access login page (the Worker still
+# rejects requests without a valid Access token, but keep it off anyway).
+workers_dev = false
+preview_urls = false
+routes = [
+  { pattern = "admin.blog.example.com", custom_domain = true },
+]
+
+[assets]
+directory = "../dist/admin"
+binding = "ASSETS"
+# Every request goes through the Worker, so the Access token is checked and
+# security headers are added for the app's pages too, not just the API.
+run_worker_first = true
+
+# The public blog bucket (readers use its public URL; the admin writes here).
+[[r2_buckets]]
+binding = "SITE"
+bucket_name = "my-blog"
+
+# A private bucket for drafts and their images: no public access, only this
+# Worker reads it. Remove it (and DRAFT_STORES below) to publish directly.
+[[r2_buckets]]
+binding = "DRAFTS"
+bucket_name = "my-blog-drafts"
+
+# Optional: a KV namespace for storage added on the admin's Storage page
+# and kept "in Cloudflare KV" (usable from every device). Without it, such
+# storage can only be kept in each browser.
+#   npx wrangler kv namespace create blog-admin-settings
+[[kv_namespaces]]
+binding = "SETTINGS"
+id = "1a556bd21fac431f9aacd78a046b0b3d"
+
+[vars]
+ACCESS_TEAM_DOMAIN = "https://your-team.cloudflareaccess.com"
+ACCESS_AUD = "paste the Access application's Audience (AUD) tag here"
+ADMIN_EMAILS = "you@example.com"
+PUBLIC_URL = "https://blog.example.com/"
+MAX_UPLOAD_MB = "25"
+
+# Draft stores: add WebDAV, S3-compatible or GitHub storage from the admin's
+# Storage page, kept in KV (above) or in your browser; no secrets or
+# redeploy needed. DRAFT_STORES is only for stores fixed in the deploy,
+# e.g. more R2 bindings; without it, the DRAFTS bucket above is the
+# deployed draft store. Credentials here name Worker secrets:
+#   npx wrangler secret put NAS_PASSWORD --config admin/wrangler.toml
+# DRAFT_STORES = """[
+#   { "id": "drafts", "label": "Drafts", "type": "r2", "binding": "DRAFTS" },
+#   { "id": "nas", "label": "Home NAS", "type": "webdav",
+#     "baseUrl": "https://dav.example.com/remote.php/dav/files/me",
+#     "root": "/blog", "folder": "drafts",
+#     "username": "me", "passwordSecret": "NAS_PASSWORD" }
+# ]"""
