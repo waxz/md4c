@@ -50,6 +50,9 @@ export const HtmlFlags = Object.freeze({
   VERBATIM_ENTITIES: 0x2,
   SKIP_UTF8_BOM: 0x4,
   XHTML: 0x8,
+  // md4c.wasm only: each block's opening tag gets data-src="<byte offset
+  // of its text in the input>" (the admin's preview, to follow the source).
+  SOURCE_POS: 0x10000,
 });
 
 // By default md4c.wasm is expected next to this file.

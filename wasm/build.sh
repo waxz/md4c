@@ -38,7 +38,6 @@ mkdir -p "$(dirname "$OUT")"
     -Wl,-z,stack-size=1048576 \
     -o "$OUT" \
     "$ROOT/src/md4c.c" \
-    "$ROOT/src/md4c-html.c" \
     "$ROOT/src/entity.c" \
     "$HERE/md4c_wasm.c" \
     "$HERE/libc/libc.c"

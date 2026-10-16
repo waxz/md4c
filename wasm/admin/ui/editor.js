@@ -13,6 +13,7 @@ import { linkPostsForStaticPage, PARSER_FLAGS } from './lib/blog-render.js';
 import { digest, protectPost, readProtected } from './lib/protect.js';
 import { slugify } from './lib/blog-render.js';
 import { finishArticle, renderLive } from './render.js';
+import { attachSourceSync } from './sync.js';
 import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
 import {
   confirmDialog, dialog, draftStores, esc, formatSize, formatTime, getMd4c, publicUrl, rebuildSite, reportError, state,
@@ -311,6 +312,14 @@ export async function showEditor(view, store, key, newStore) {
   // ---- Preview ----
   const iframe = form.querySelector('iframe');
   let previewTimer;
+  // Text and preview scroll together; a click in the preview finds its lines.
+  const wide = matchMedia('(min-width: 1000px)');
+  const sync = attachSourceSync({
+    textarea: f.body,
+    iframe,
+    sideBySide: () => wide.matches,
+    showWrite: () => form.querySelector('.pane-tabs button[data-pane="write"]').click(),
+  });
   async function updatePreview() {
     const doc = iframe.contentDocument;
     if (!doc?.querySelector('.prose')) return;
@@ -358,10 +367,12 @@ export async function showEditor(view, store, key, newStore) {
       postUrl: api.rawUrl(home(), `posts/${s}.md`),
       storageBase: api.rawUrl(home(), ''),
       postHref: () => '#',
+      sourcePositions: true,
     }));
     prose.className = 'prose';
     await finishArticle(article, { ...state.site, citation: false }, { title: f.title.value, date: f.date.value, slug: s, url: '', toc: f.toc.value })
       .catch((err) => console.warn('preview:', err));
+    sync.refresh();
   }
   const schedulePreview = () => {
     clearTimeout(previewTimer);

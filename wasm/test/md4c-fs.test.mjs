@@ -32,6 +32,24 @@ test('toHtml renders CommonMark and extensions', async () => {
   assert.equal(md4c.toHtml(''), '');
 });
 
+test('SOURCE_POS marks where each block starts in the source (the editor preview)', async () => {
+  const md4c = await loadMd4c(WASM_URL);
+  const { HtmlFlags } = await import('../js/md4c.js');
+  const src = '# Tïtle\n\nPara\n\n- a\n- b\n\n```\ncode\n```\n\n| x |\n|---|\n| 1 |\n\n<div><p>raw</p></div>\n';
+  const flags = { parserFlags: Dialect.GITHUB };
+  const html = md4c.toHtml(src, { ...flags, rendererFlags: HtmlFlags.SKIP_UTF8_BOM | HtmlFlags.SOURCE_POS });
+  const bytes = new TextEncoder().encode(src);
+  const at = (tag) => [...html.matchAll(new RegExp(`<${tag}(?=[\\s>])[^>]* data-src="(\\d+)"`, 'g'))]
+    .map((m) => new TextDecoder().decode(bytes.slice(Number(m[1]))).split('\n')[0]);
+  assert.deepEqual(at('h1'), ['Tïtle']);
+  assert.deepEqual(at('p'), ['Para'], 'raw HTML gets no positions');
+  assert.deepEqual(at('li'), ['a', 'b']);
+  assert.deepEqual(at('pre'), ['code']);
+  assert.deepEqual(at('td'), ['1 |']);
+  assert.equal(md4c.toHtml(src, flags).includes('data-src'), false, 'published pages carry none');
+  assert.equal(md4c.toHtml(src, flags), html.replace(/ data-src="\d+"/g, ''), 'otherwise the same HTML');
+});
+
 test('toHtml handles large input and repeated calls', async () => {
   const md4c = await loadMd4c(WASM_URL);
   const big = '* item **bold** [link](http://x.y)\n'.repeat(50000);

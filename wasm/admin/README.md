@@ -228,6 +228,16 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
     private.
   - *Preview* shows the post in the blog's theme, with contents box, figures
     and maths.
+  - Text and preview follow each other:
+    - **Side by side** (wide screens): scrolling either one scrolls the
+      other to the same place.
+    - **Click a block in the preview** (a paragraph, heading, list item,
+      code block, table cell…) to select its lines in the text. On a phone,
+      tapping it in *Preview* switches to *Write* with those lines selected.
+    - The block the cursor is in is marked in the preview.
+    - This works because the preview is rendered with md4c.wasm's
+      `SOURCE_POS` flag: each block carries `data-src`, where its text starts
+      in the Markdown (`md4c_wasm.c`). Published pages are rendered without it.
   - What you type is also kept on the device until it's saved.
 - **The draft is the working copy.**
   - **Save draft** stores the post privately. A published post isn't

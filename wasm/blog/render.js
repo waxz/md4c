@@ -3,7 +3,7 @@
 
 import DOMPurify from './vendor/dompurify/purify.es.js';
 import { SLUG_RE } from './lib/post-format.js';
-import { PARSER_FLAGS, slugify } from './lib/blog-render.js';
+import { PARSER_FLAGS, slugify, SOURCE_POS_FLAGS } from './lib/blog-render.js';
 
 export { slugify };
 
@@ -64,9 +64,13 @@ function resolveUrls(frag, postUrl, storageBase, postHref) {
   }
 }
 
-/** Markdown -> sanitized DOM fragment, for posts rendered in the browser. */
-export function renderLive(md4cFs, markdown, { postUrl, storageBase, postHref }) {
-  const html = md4cFs.render(markdown, { parserFlags: PARSER_FLAGS });
+/**
+ * Markdown -> sanitized DOM fragment, for posts rendered in the browser.
+ * `sourcePositions`: blocks carry data-src, their offset in `markdown`
+ * (the admin's preview uses it to follow the text).
+ */
+export function renderLive(md4cFs, markdown, { postUrl, storageBase, postHref, sourcePositions = false }) {
+  const html = md4cFs.render(markdown, { parserFlags: PARSER_FLAGS, ...(sourcePositions ? { rendererFlags: SOURCE_POS_FLAGS } : {}) });
   const frag = DOMPurify.sanitize(html, { ...PURIFY_CONFIG, RETURN_DOM_FRAGMENT: true });
   resolveUrls(frag, postUrl, storageBase, postHref);
   for (const el of frag.querySelectorAll('x-wikilink')) {
@@ -109,6 +113,7 @@ export function typeset(root) {
     const img = p.firstElementChild;
     if (p.children.length !== 1 || img.tagName !== 'IMG' || p.textContent.trim()) continue;
     const figure = document.createElement('figure');
+    if (p.dataset.src) figure.dataset.src = p.dataset.src;
     figure.append(img);
     const caption = img.getAttribute('title') || img.getAttribute('alt');
     if (caption) {

@@ -289,3 +289,15 @@ audio.file-preview { width: 100%; }
 .settings-form fieldset.checks code { font-size: .8rem; color: var(--muted); }
 .settings-form fieldset.checks input[type="checkbox"] { width: auto; min-width: 0; flex: none; margin: .2rem 0 0; padding: 0; border: 0; box-shadow: none; }
 .settings-form fieldset.checks label { align-items: flex-start; line-height: 1.4; }
+
+/* Text and preview side by side: the same height, each scrolling inside,
+   so they can scroll together (sync.js). */
+@media (min-width: 1000px) {
+  .write-pane { height: 75vh; }
+  .write-pane textarea { height: 100%; min-height: 0; resize: none; }
+}
+/* sync.js measures the text box's wrapped lines on this hidden copy. */
+.textarea-mirror {
+  position: absolute; top: 0; left: -10000px; visibility: hidden; pointer-events: none;
+  white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word;
+}

@@ -1,11 +1,14 @@
 // Markdown -> HTML rules shared by the browser and the publish script, so a
 // post pre-rendered at publish time and one rendered live look the same.
 
-import { Dialect, Flags } from './md4c.js';
+import { Dialect, Flags, HtmlFlags } from './md4c.js';
 import { SLUG_RE } from './post-format.js';
 
 export const PARSER_FLAGS =
   Dialect.GITHUB | Flags.WIKILINKS | Flags.HIGHLIGHT | Flags.LATEXMATHSPANS;
+
+/** Renderer flags for the admin's preview: blocks carry data-src (md4c_wasm.c). */
+export const SOURCE_POS_FLAGS = HtmlFlags.SKIP_UTF8_BOM | HtmlFlags.SOURCE_POS;
 
 export function slugify(s) {
   return String(s).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
