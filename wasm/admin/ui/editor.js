@@ -8,7 +8,7 @@
 // Without any draft store, posts are written to the site directly.
 
 import { api, ApiError } from './client.js';
-import { parseFrontMatter, SLUG_RE } from './lib/post-format.js';
+import { flag, parseFrontMatter, SLUG_RE } from './lib/post-format.js';
 import { linkPostsForStaticPage, PARSER_FLAGS } from './lib/blog-render.js';
 import { digest, protectPost, readProtected } from './lib/protect.js';
 import { slugify } from './lib/blog-render.js';
@@ -19,7 +19,7 @@ import {
   storeLabel, toast,
 } from './shared.js';
 
-const KNOWN = ['title', 'date', 'tags', 'author', 'description', 'image', 'banner', 'background', 'password'];
+const KNOWN = ['title', 'date', 'tags', 'author', 'description', 'summary', 'image', 'banner', 'cover', 'background', 'password', 'toc', 'numbered'];
 let current = null; // the open editor, for the leave-page guard
 
 export function hasUnsavedChanges() {
@@ -46,6 +46,7 @@ function compose(fields, extra, body) {
     if (clean(fields[k])) lines.push(`${k}: ${yamlValue(fields[k])}`);
   }
   if (clean(fields.password)) lines.push(`password: ${clean(fields.password)}`);
+  for (const k of ['toc', 'numbered']) if (/^(true|false)$/.test(fields[k] ?? '')) lines.push(`${k}: ${fields[k]}`);
   for (const [k, v] of Object.entries(extra)) if (k !== 'draft') lines.push(`${k}: ${yamlValue(v)}`);
   lines.push('---', '', body.replace(/^\s+/, ''));
   return lines.join('\n');
@@ -176,6 +177,10 @@ export async function showEditor(view, store, key, newStore) {
         <div class="field span-2"><span>Banner image above the article (optional)</span><span class="field-row"><input name="banner" aria-label="Banner image" autocapitalize="off" spellcheck="false" placeholder="e.g. banner.jpg"><label class="btn btn-small">Upload<input type="file" accept="image/*" data-image-for="banner" hidden></label></span></div>
         <div class="field span-2"><span>Page background image (optional)</span><span class="field-row"><input name="background" aria-label="Page background image" autocapitalize="off" spellcheck="false" placeholder="e.g. paper.jpg"><label class="btn btn-small">Upload<input type="file" accept="image/*" data-image-for="background" hidden></label></span></div>
         <label class="field span-2"><span>Social preview image (optional; default: the banner)</span><input name="image" autocapitalize="off" spellcheck="false"></label>
+        <label class="field"><span>Contents box</span><select name="toc">
+          <option value="">site default</option><option value="true">show</option><option value="false">hide</option></select></label>
+        <label class="field"><span>Number the sections (1, 1.1, …)</span><select name="numbered">
+          <option value="">site default</option><option value="true">yes</option><option value="false">no</option></select></label>
         <label class="field span-2"><span>🔒 Password (optional): readers must type it to read the post</span><input name="password" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="200"><small class="password-note"></small></label>
         ${noDraftYet && stores.length > 1 ? `<label class="field span-2"><span>Keep the draft in</span><select name="target">${stores.map((s) =>
           `<option value="${esc(s.id)}"${s.id === ed.target ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select></label>` : ''}
@@ -208,17 +213,48 @@ export async function showEditor(view, store, key, newStore) {
 
   const form = view.querySelector('form');
   const f = form.elements;
-  f.title.value = meta.title ?? '';
   f.slug.value = isNew ? '' : key.slice(6, -3);
-  f.date.value = /^\d{4}-\d{2}-\d{2}$/.test(meta.date ?? '') ? meta.date : today();
-  f.tags.value = meta.tags ?? '';
-  f.description.value = meta.description ?? meta.summary ?? '';
-  f.image.value = meta.image ?? '';
-  f.author.value = meta.author ?? '';
-  f.banner.value = meta.banner || meta.cover || '';
-  f.background.value = meta.background ?? '';
-  f.password.value = meta.password ?? '';
+  /** Put front matter values in the fields; `partial`: only the keys present. */
+  const fillFields = (m, partial = false) => {
+    const set = (el, v) => {
+      if (!partial || v !== undefined) el.value = v ?? '';
+    };
+    set(f.title, m.title);
+    const date = /^\d{4}-\d{2}-\d{2}/.test(m.date ?? '') ? m.date.slice(0, 10) : undefined;
+    if (date || !partial) f.date.value = date ?? today();
+    set(f.tags, m.tags);
+    set(f.description, m.description ?? m.summary);
+    set(f.image, m.image);
+    set(f.author, m.author);
+    set(f.banner, m.banner || m.cover || (partial ? undefined : ''));
+    set(f.background, m.background);
+    set(f.password, m.password);
+    set(f.toc, flag(m.toc) ?? (partial ? undefined : ''));
+    set(f.numbered, flag(m.numbered) ?? (partial ? undefined : ''));
+    for (const [k, v] of Object.entries(m)) if (!KNOWN.includes(k)) extra[k] = v;
+  };
+  fillFields(meta);
   f.body.value = body;
+  /**
+   * A "---" front matter block typed or pasted at the top of the text (or
+   * left there by an earlier save) moves into the fields: the post's real
+   * front matter is made from the fields, so in the text it would only
+   * show up as text. Returns true when it moved one.
+   */
+  const liftFrontMatter = () => {
+    const text = f.body.value.replace(/^\uFEFF/, '');
+    const m = /^\s*---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(text);
+    if (!m) return false;
+    const block = parseFrontMatter(text.replace(/^\s+/, '')).meta;
+    if (!Object.keys(block).length) return false;
+    fillFields(block, true);
+    f.body.value = text.slice(m[0].length).replace(/^\s*\n/, '');
+    form.querySelector('.meta-fields').open = true;
+    toast(`Front matter (${Object.keys(block).join(', ')}) moved into the fields above.`, 'success');
+    return true;
+  };
+  // A draft saved with its front matter in the text: fixed, to be saved.
+  const liftedOnOpen = liftFrontMatter();
   f.target?.addEventListener('change', () => {
     ed.target = f.target.value;
     renderActions();
@@ -229,6 +265,7 @@ export async function showEditor(view, store, key, newStore) {
     {
       title: f.title.value, date: f.date.value, tags: f.tags.value, author: f.author.value, description: f.description.value,
       image: f.image.value, banner: f.banner.value, background: f.background.value, password: f.password.value,
+      toc: f.toc.value, numbered: f.numbered.value,
     },
     extra, f.body.value
   );
@@ -269,6 +306,7 @@ export async function showEditor(view, store, key, newStore) {
     form.querySelector('.save-state').textContent = d ? 'Unsaved changes' : (ed.etag ? 'Saved' : '');
     renderStatus();
   }
+  if (liftedOnOpen) setDirty(text() !== ed.saved);
 
   // ---- Preview ----
   const iframe = form.querySelector('iframe');
@@ -280,7 +318,7 @@ export async function showEditor(view, store, key, newStore) {
     root.dataset.theme = state.site.theme;
     root.dataset.scheme = state.site.colorScheme;
     root.dataset.font = state.site.font || (state.site.theme === 'modern' ? 'sans' : 'serif');
-    root.dataset.numbered = String(state.site.numberedHeadings);
+    root.dataset.numbered = f.numbered.value || String(state.site.numberedHeadings);
     if (state.site.accent) root.style.setProperty('--accent-base', state.site.accent);
     doc.querySelector('.article-title').textContent = f.title.value || 'Untitled';
     doc.querySelector('.byline').textContent = [f.author.value.trim() || state.site.author, f.date.value].filter(Boolean).join(' · ');
@@ -322,7 +360,7 @@ export async function showEditor(view, store, key, newStore) {
       postHref: () => '#',
     }));
     prose.className = 'prose';
-    await finishArticle(article, { ...state.site, citation: false }, { title: f.title.value, date: f.date.value, slug: s, url: '' })
+    await finishArticle(article, { ...state.site, citation: false }, { title: f.title.value, date: f.date.value, slug: s, url: '', toc: f.toc.value })
       .catch((err) => console.warn('preview:', err));
   }
   const schedulePreview = () => {
@@ -343,6 +381,7 @@ export async function showEditor(view, store, key, newStore) {
   form.addEventListener('input', (e) => {
     if (e.target === f.title && !ed.slugTouched) f.slug.value = slugify(f.title.value);
     if (e.target === f.slug) ed.slugTouched = true;
+    if (e.target === f.body) liftFrontMatter();
     setDirty(text() !== ed.saved);
     saveLocal(local, { text: text(), slug: slug() });
     schedulePreview();
@@ -409,14 +448,7 @@ export async function showEditor(view, store, key, newStore) {
       if (!b) return;
       if (b.dataset.restore === 'yes') {
         const r = parseFrontMatter(stash.text);
-        f.title.value = r.meta.title ?? '';
-        f.date.value = r.meta.date ?? f.date.value;
-        f.tags.value = r.meta.tags ?? '';
-        f.description.value = r.meta.description ?? '';
-        f.image.value = r.meta.image ?? '';
-        f.author.value = r.meta.author ?? '';
-        f.banner.value = r.meta.banner || r.meta.cover || '';
-        f.background.value = r.meta.background ?? '';
+        fillFields(r.meta);
         f.body.value = r.body;
         if (isNew && stash.slug) f.slug.value = stash.slug;
         setDirty(true);

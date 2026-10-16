@@ -592,3 +592,33 @@ describe("private Markdown: the public bucket gets only pages", () => {
     assert.ok(await has('public', 'posts/one.html'), 'pages untouched');
   });
 });
+
+describe('per-post style in the front matter: toc and numbered', () => {
+  let dir;
+  const read = (p) => readFile(join(dir, 'public', p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-style-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({ title: 'S' }));
+    await writeFile(join(dir, 'posts', 'plain.md'), '---\ntitle: Plain\ndate: 2026-10-01\n---\n\n# A\n\n# B\n');
+    await writeFile(join(dir, 'posts', 'styled.md'), '---\ntitle: Styled\ndate: 2026-10-02\ntoc: no\nnumbered: yes\n---\n\n# A\n\n# B\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('sections are not numbered unless the site or the post asks', async () => {
+    const plain = await read('posts/plain.html');
+    assert.match(plain, /<html [^>]*data-numbered="false"/);
+    assert.match(plain, /<article [^>]*data-numbered="false"/);
+    assert.doesNotMatch(plain, /data-toc=/);
+    const styled = await read('posts/styled.html');
+    assert.match(styled, /<html [^>]*data-numbered="true"/);
+    assert.match(styled, /<article [^>]*data-numbered="true" data-toc="false"/);
+    const meta = JSON.parse(await read('index.json')).items.find((i) => i.path === 'posts/styled.md').metadata;
+    assert.equal(meta.toc, 'false');
+    assert.equal(meta.numbered, 'true');
+  });
+});

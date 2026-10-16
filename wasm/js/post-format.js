@@ -16,6 +16,11 @@
 //   background: paper.jpg   (optional; this post's page background)
 //   backgroundMode: page    (optional; page | hero, as in site settings)
 //   updated: 2026-11-02     (optional; last substantial revision)
+//   toc: true               (optional; true: always a "Contents" box,
+//                            false: never; default: the site setting, for
+//                            posts with two or more sections)
+//   numbered: true          (optional; number the sections 1, 1.1, ...;
+//                            default: the site's "numberedHeadings")
 //   draft: true             (optional: the publish script skips drafts)
 //   password: …             (optional: published encrypted; readers need
 //                            this password, see protect.js)
@@ -123,6 +128,13 @@ export function parseFrontMatter(text) {
   return { meta, body };
 }
 
+/** "true" / "false" for a yes/no front matter value, else undefined. */
+export function flag(v) {
+  if (/^(true|yes|on|1)$/i.test(String(v ?? '').trim())) return 'true';
+  if (/^(false|no|off|0)$/i.test(String(v ?? '').trim())) return 'false';
+  return undefined;
+}
+
 /** Tags from "a, b" (front matter) or ["a", "b"] (hand-written index.json). */
 export function parseTags(s) {
   const list = Array.isArray(s) ? s : String(s ?? '').split(',');
@@ -165,5 +177,7 @@ export function postMetadata(source, renderHtml, fallbackTitle) {
   if (meta.background) out.background = meta.background.slice(0, 500);
   if (/^(page|hero)$/.test(meta.backgroundmode ?? '')) out.backgroundMode = meta.backgroundmode;
   if (isIsoDate(updated)) out.updated = updated;
+  if (flag(meta.toc)) out.toc = flag(meta.toc);
+  if (flag(meta.numbered)) out.numbered = flag(meta.numbered);
   return out;
 }

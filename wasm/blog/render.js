@@ -141,16 +141,17 @@ export function typeset(root) {
 
 /**
  * The "Contents" box: the article's two highest heading levels present
- * (usually h2 and h3), once it has at least three such headings. Headings
- * inside quotes, lists or details are left out.
+ * (usually h2 and h3), once it has two such headings (one, when the post
+ * asks for it with "toc: true"). Headings inside quotes, lists or details
+ * are left out. `toc`: the post's own "true"/"false", else the site's.
  */
-export function buildToc(prose, site) {
-  if (!site.toc) return null;
+export function buildToc(prose, site, toc = '') {
+  if (toc === 'false' || (!site.toc && toc !== 'true')) return null;
   const all = [...prose.querySelectorAll(':scope > h2, :scope > h3, :scope > h4')].filter((h) => h.id);
   const levels = [...new Set(all.map((h) => Number(h.tagName[1])))].sort();
   const [topLevel, subLevel] = levels;
   const heads = all.filter((h) => Number(h.tagName[1]) <= (subLevel ?? topLevel));
-  if (heads.length < 3) return null;
+  if (heads.length < (toc === 'true' ? 1 : 2)) return null;
   const nav = document.createElement('nav');
   nav.className = 'toc';
   nav.setAttribute('aria-label', 'Contents');
@@ -332,7 +333,7 @@ export async function finishArticle(article, site, info) {
   // Authors who number their own headings keep their numbers, unduplicated.
   const manual = [...prose.querySelectorAll(':scope > h2')].some((h) => /^\s*\d+(\.\d+)*[.)]?\s/.test(h.textContent));
   prose.classList.toggle('manual-numbers', manual);
-  const toc = buildToc(prose, site);
+  const toc = buildToc(prose, site, info.toc ?? article.dataset.toc ?? '');
   if (toc) {
     toc.classList.toggle('manual-numbers', manual);
     prose.before(toc);

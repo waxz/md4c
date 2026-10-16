@@ -318,9 +318,12 @@ export function postPage(site, post, html) {
   ].filter(Boolean).join('\n') + '\n';
 
   const banner = locked ? '' : postAssetHref(post.banner, root);
+  // The post's own front matter wins over the site's settings.
+  const numbered = post.numbered === 'true' ? true : post.numbered === 'false' ? false : site.numberedHeadings;
   const background = locked ? '' : postAssetHref(post.background, root);
   const main = `<a class="back-link sc" href="${root}index.html">← All articles</a>
-<article data-slug="${esc(post.slug)}" data-title="${esc(post.title)}" data-date="${esc(post.date)}" data-author="${esc(post.author ?? '')}"${
+<article data-slug="${esc(post.slug)}" data-title="${esc(post.title)}" data-date="${esc(post.date)}" data-author="${esc(post.author ?? '')}" data-numbered="${numbered}"${
+  post.toc ? ` data-toc="${esc(post.toc)}"` : ''}${
   background ? ` data-background="${esc(background)}" data-background-mode="${esc(post.backgroundMode || 'page')}"` : ''}>
   ${banner ? `<figure class="post-banner"><img src="${esc(banner)}" alt="" decoding="async"></figure>` : ''}
   <header class="article-header">
@@ -334,7 +337,7 @@ ${html}
 </article>`;
 
   return documentHtml({
-    site, root, page: 'post',
+    site: { ...site, numberedHeadings: numbered }, root, page: 'post',
     title: `${post.title} · ${site.title}`,
     description, canonical: url, head: locked ? '' : head, main,
     // Search engines would only see the unlock form.

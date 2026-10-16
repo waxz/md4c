@@ -69,6 +69,12 @@ async function showSettings() {
         <label class="btn btn-small">Upload<input type="file" accept="image/*" data-upload="backgroundImage" hidden></label></span></div>
       <label class="field"><span>Background shown</span><select data-key="backgroundMode">
         <option value="hero">behind the title (masthead)</option><option value="page">behind the whole page</option></select></label>
+      <fieldset class="field span-2 checks"><legend>In every post (a post's front matter can say otherwise)</legend>
+        <label><input type="checkbox" data-key="numberedHeadings"> <span>Number the sections (1, 1.1, …) <code>numbered:</code></span></label>
+        <label><input type="checkbox" data-key="toc"> <span>"Contents" box when a post has two or more sections <code>toc:</code></span></label>
+        <label><input type="checkbox" data-key="graph"> <span>Cross-references and the Graph page</span></label>
+        <label><input type="checkbox" data-key="citation"> <span>"How to cite" box</span></label>
+      </fieldset>
     </div>
     <p class="hint">Everything else is in the <code>site</code> section of <code>index.json</code> below: theme, colours, links,
       search-engine verification, full-text search engine and more (see the deploy guide). Saving re-renders every page.
@@ -116,7 +122,8 @@ async function showSettings() {
       return;
     }
     for (const el of formFields) {
-      if (document.activeElement !== el) el.value = obj[el.dataset.key] ?? (el.tagName === 'SELECT' ? 'hero' : '');
+      if (el.type === 'checkbox') el.checked = typeof obj[el.dataset.key] === 'boolean' ? obj[el.dataset.key] : DEFAULT_SITE[el.dataset.key];
+      else if (document.activeElement !== el) el.value = obj[el.dataset.key] ?? (el.tagName === 'SELECT' ? 'hero' : '');
     }
   };
   const setKey = (key, value) => {
@@ -132,7 +139,10 @@ async function showSettings() {
     ta.value = JSON.stringify(obj, null, 2);
     parse();
   };
-  for (const el of formFields) el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => setKey(el.dataset.key, el.value.trim()));
+  for (const el of formFields) {
+    if (el.type === 'checkbox') el.addEventListener('change', () => setKey(el.dataset.key, el.checked));
+    else el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => setKey(el.dataset.key, el.value.trim()));
+  }
   for (const input of view.querySelectorAll('.settings-form input[data-upload]')) {
     input.addEventListener('change', async (e) => {
       const files = [...e.target.files];

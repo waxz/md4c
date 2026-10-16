@@ -20,7 +20,7 @@
 import { STORAGE_URL } from './config.js';
 import { Md4cFs } from './lib/md4c-fs.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
-import { isDraft, parseFrontMatter, parseTags, postMetadata, SLUG_RE } from './lib/post-format.js';
+import { flag, isDraft, parseFrontMatter, parseTags, postMetadata, SLUG_RE } from './lib/post-format.js';
 import { decryptText, readProtected, WrongPasswordError } from './lib/protect.js';
 import { esc, finishArticle, formatDate, renderLive } from './render.js';
 import { applySite, normalizeSite } from './theme.js';
@@ -233,6 +233,9 @@ async function showLivePost(slug) {
     <div class="prose"></div>
   </article>`;
   const article = app.querySelector('article');
+  const numbered = flag(meta.numbered);
+  if (numbered) document.documentElement.dataset.numbered = numbered;
+  if (flag(meta.toc)) article.dataset.toc = flag(meta.toc);
   article.querySelector('.prose').append(renderLive(fs, body, {
     postUrl: await fs.storage.url(path),
     storageBase: fs.baseUrl,
@@ -440,6 +443,8 @@ async function main() {
 
     if (page === 'post') {
       const article = document.querySelector('article');
+      // The post's "numbered:" front matter wins over the site setting.
+      if (article.dataset.numbered) document.documentElement.dataset.numbered = article.dataset.numbered;
       if (article.dataset.background) {
         // The post's own background (front matter "background"), set through
         // CSSOM like the site's, so the CSP needs no inline styles.

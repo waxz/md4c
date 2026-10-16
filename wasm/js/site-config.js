@@ -17,8 +17,10 @@
 //       "backgroundMode": "hero",     // hero (masthead) | page (whole page)
 //       "banner": "assets/banner.jpg", // wide image at the top of the home page
 //       "stylesheet": "assets/custom.css",
-//       "numberedHeadings": true,     // 1, 1.1, ... in posts
-//       "toc": true,                  // "Contents" box for longer posts
+//       "numberedHeadings": false,    // 1, 1.1, ... in posts (a post's
+//                                     // "numbered:" front matter wins)
+//       "toc": true,                  // "Contents" box for posts with two
+//                                     // or more sections ("toc:" wins)
 //       "graph": true,                // links between posts: a Graph page,
 //                                     // and "Linked from" under each post
 //       "citation": true,             // "How to cite this post" box
@@ -62,7 +64,7 @@ export const DEFAULT_SITE = Object.freeze({
   backgroundMode: 'hero',
   banner: '',
   stylesheet: '',
-  numberedHeadings: true,
+  numberedHeadings: false,
   toc: true,
   graph: true,
   citation: true,

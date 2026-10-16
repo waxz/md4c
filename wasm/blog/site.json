@@ -10,7 +10,7 @@
   "accent": "#8b1e2d",
   "backgroundImage": "",
   "backgroundMode": "hero",
-  "numberedHeadings": true,
+  "numberedHeadings": false,
   "toc": true,
   "citation": true,
   "math": true,

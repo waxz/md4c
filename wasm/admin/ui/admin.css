@@ -281,3 +281,11 @@ audio.file-preview { width: 100%; }
 .settings-form { display: grid; gap: .75rem; margin: .75rem 0; }
 @media (min-width: 720px) { .settings-form { grid-template-columns: 1fr 1fr; } }
 .refreshing { font-size: .85rem; margin-left: auto; margin-right: .5rem; }
+
+/* Settings: yes/no options for every post */
+.settings-form fieldset.checks { border: 0; padding: 0; margin: 0; display: grid; gap: .45rem; min-width: 0; grid-column: 1 / -1; }
+.settings-form fieldset.checks legend { padding: 0; margin-bottom: .4rem; font-size: .85rem; color: var(--muted); }
+.settings-form fieldset.checks label { display: flex; gap: .5rem; align-items: baseline; font-size: .95rem; }
+.settings-form fieldset.checks code { font-size: .8rem; color: var(--muted); }
+.settings-form fieldset.checks input[type="checkbox"] { width: auto; min-width: 0; flex: none; margin: .2rem 0 0; padding: 0; border: 0; box-shadow: none; }
+.settings-form fieldset.checks label { align-items: flex-start; line-height: 1.4; }

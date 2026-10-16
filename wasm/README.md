@@ -164,7 +164,7 @@ Every field is optional:
     "backgroundImage": "assets/header.jpg",
     "backgroundMode": "hero",
     "stylesheet": "assets/custom.css",
-    "numberedHeadings": true,
+    "numberedHeadings": false,
     "toc": true,
     "graph": true,
     "citation": true,
@@ -184,8 +184,8 @@ Every field is optional:
 | `font` | `serif` or `sans`; the default depends on the theme |
 | `backgroundImage` | image URL, relative to the bucket. `backgroundMode` is `hero` (a banner behind the title) or `page` (the whole page, with the text on a paper card). |
 | `stylesheet` | your own CSS file in the bucket, loaded after the built-in styles |
-| `numberedHeadings` | number sections 1, 1.1, … (posts that number their own headings keep their numbers) |
-| `toc` | show a "Contents" box on posts with three or more sections. A post's `# Heading`s (after the title) count as sections: in the body they become second-level headings, since the title is the page's only first-level one. |
+| `numberedHeadings` | number sections 1, 1.1, … (default off; posts that number their own headings keep their numbers). A post's `numbered: true` or `numbered: false` front matter wins. |
+| `toc` | show a "Contents" box on posts with two or more sections. A post's `# Heading`s (after the title) count as sections: in the body they become second-level headings, since the title is the page's only first-level one. A post's `toc: true` (always, even for one section) or `toc: false` (never) front matter wins. |
 | `graph` | links between posts, as in Obsidian. A **Graph** page (graph.html, in the menu) draws every post and link: an article is a dot, a tag a blue diamond ("Show tags"), a post linked to but not written yet a dashed ring, and arrows show which way each link goes (both ends for posts that link to each other). Under each post, **Cross-references** lists the posts it links to and the posts that link to it, each with the sentence the link is in, above a graph of those neighbours. Links are `[[Wiki links]]` (`[[Kyoto trip]]` → posts/kyoto-trip) and ordinary links to other posts (`[text](kyoto.md)`). Password-protected posts keep their links secret. |
 | `citation` | show a "How to cite" box with a reference and BibTeX |
 | `math` | typeset `$…$` and `$$…$$` with KaTeX, loaded only on posts that use them |
