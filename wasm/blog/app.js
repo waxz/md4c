@@ -253,29 +253,68 @@ const slugOfItem = (e) => e.path.slice('posts/'.length, -'.md'.length);
 const hrefOfPost = (slug, item) =>
   (item?.page ? new URL(item.page, SITE_ROOT).href : `${SITE_ROOT}index.html#/post/${slug}`);
 
+/** The marks the graphs use, explained. */
+const LEGEND = `<p class="graph-legend sc" aria-hidden="true">
+  <span><i class="mark-post"></i>article</span>
+  <span><i class="mark-tag"></i>tag</span>
+  <span><i class="mark-missing"></i>not written yet</span>
+  <span><i class="mark-arrow"></i>links to</span>
+</p>`;
+
+/** "…text [link] text…": where a link appears in the post that makes it. */
+function contextHtml(ctx) {
+  if (!Array.isArray(ctx) || ctx.length !== 3) return '';
+  const [before, label, after] = ctx.map((t) => String(t ?? ''));
+  return `<q class="xref-context">${esc(before)}<mark>${esc(label)}</mark>${esc(after)}</q>`;
+}
+
 /**
- * Under an article: the posts that link to it, and a graph of its
- * neighbours (posts it links to and posts linking to it), as in Obsidian.
+ * Under an article: its cross-references, both ways (the posts it links
+ * to, and the posts that link to it, each with the sentence the link is
+ * in), and a graph of those neighbours, as in Obsidian.
  */
 async function showConnections(article, slug) {
   if (!site.graph || !slug) return;
   const items = indexItems();
-  const backlinks = items
+  const bySlug = new Map(items.map((e) => [slugOfItem(e), e]));
+  const own = bySlug.get(slug);
+  const outgoing = (Array.isArray(own?.links) ? own.links : []).filter((t) => t !== slug);
+  const incoming = items
     .filter((e) => slugOfItem(e) !== slug && Array.isArray(e.links) && e.links.includes(slug))
     .sort((a, b) => String(b.metadata.date).localeCompare(String(a.metadata.date)));
-  const { graphData, neighbourhood, drawGraph } = await import('./graph.js');
-  const local = neighbourhood(graphData(items, { postHref: hrefOfPost }), `p:${slug}`, 1);
-  if (local.nodes.length < 2) return; // links nowhere, and nothing links here
+  if (!outgoing.length && !incoming.length) return;
+  const title = (t) => bySlug.get(t)?.metadata.title || t;
+  const entry = (t, ctx, mutual) => {
+    const known = bySlug.has(t);
+    return `<li>${known ? `<a href="${esc(hrefOfPost(t, bySlug.get(t)))}">${esc(title(t))}</a>`
+      : `<span class="xref-missing">${esc(t)}</span> <span class="muted">(not written yet)</span>`}${
+      mutual ? ' <span class="xref-mutual sc" title="These posts link to each other">⇄ both ways</span>' : ''}${contextHtml(ctx)}</li>`;
+  };
+  const outSet = new Set(outgoing);
   const box = document.createElement('section');
   box.className = 'connections';
-  box.setAttribute('aria-labelledby', 'linked-from');
-  box.innerHTML = `<h2 class="sc" id="linked-from">Linked from</h2>
-  ${backlinks.length ? `<ul class="backlinks">${backlinks.map((e) => `<li><a href="${esc(hrefOfPost(slugOfItem(e), e))}">${esc(e.metadata.title || slugOfItem(e))}</a>${
-    e.metadata.date ? ` <time class="sc muted" datetime="${esc(e.metadata.date)}">${esc(formatDate(e.metadata.date, 'short'))}</time>` : ''}</li>`).join('')}</ul>`
-    : '<p class="muted">No other article links here yet.</p>'}
+  box.setAttribute('aria-labelledby', 'xrefs');
+  box.innerHTML = `<h2 class="sc" id="xrefs">Cross-references</h2>
+  <div class="xref-columns">
+    <div>
+      <h3 class="sc">Links to <span class="count">${outgoing.length}</span></h3>
+      ${outgoing.length
+        ? `<ul class="xrefs">${outgoing.map((t) => entry(t, own?.context?.[t], incoming.some((e) => slugOfItem(e) === t))).join('')}</ul>`
+        : '<p class="muted">This article links to no other.</p>'}
+    </div>
+    <div>
+      <h3 class="sc" id="linked-from">Linked from <span class="count">${incoming.length}</span></h3>
+      ${incoming.length
+        ? `<ul class="xrefs">${incoming.map((e) => entry(slugOfItem(e), e.context?.[slug], outSet.has(slugOfItem(e)))).join('')}</ul>`
+        : '<p class="muted">No other article links here yet.</p>'}
+    </div>
+  </div>
   <div class="graph-box local-graph"></div>
+  ${LEGEND}
   <p class="graph-more sc"><a href="${SITE_ROOT}graph.html">Open the full graph</a></p>`;
   article.after(box);
+  const { graphData, neighbourhood, drawGraph } = await import('./graph.js');
+  const local = neighbourhood(graphData(items, { postHref: hrefOfPost }), `p:${slug}`, 1);
   drawGraph(box.querySelector('.graph-box'), local, { focus: `p:${slug}`, label: 'always' });
 }
 
@@ -293,6 +332,7 @@ async function showGraph() {
     <span class="graph-count muted"></span>
   </div>
   <div class="graph-box full-graph"></div>
+  ${LEGEND}
   <details class="graph-list"><summary>All links as a list</summary><ul></ul></details>`;
   const box = view.querySelector('.graph-box');
   let drawn = null;
@@ -304,7 +344,7 @@ async function showGraph() {
     drawn?.destroy();
     drawn = drawGraph(box, g);
     const posts = g.nodes.filter((n) => n.kind === 'post').length;
-    const links = g.edges.filter(([a, b]) => a.startsWith('p:') && b.startsWith('p:')).length;
+    const links = g.edges.filter((e) => !e.tag).reduce((n, e) => n + (e.both ? 2 : 1), 0);
     view.querySelector('.graph-count').textContent =
       `${posts} article${posts === 1 ? '' : 's'} · ${links} link${links === 1 ? '' : 's'}`;
   };

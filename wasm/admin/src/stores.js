@@ -1,6 +1,10 @@
 // Storage the admin can read and write ("stores"):
 //
-//   site            the public blog bucket (R2 binding SITE)
+//   site            the public blog bucket (R2 binding SITE). The Markdown
+//                   of published posts (posts/<slug>.md) is kept privately,
+//                   in the SOURCES binding or else the DRAFTS bucket under
+//                   .published/ (see withPrivateSources): readers get only
+//                   the pages built from it.
 //   draft stores    one or more private stores for drafts and their images
 //
 // Draft stores come from three places:
@@ -38,6 +42,8 @@ import { Storage, StorageError } from '@storagesdk/core';
 import { parseFrontMatter } from '../../js/post-format.js';
 
 const POST_KEY = /^posts\/[a-z0-9][a-z0-9-]{0,79}\.md$/;
+// Also below a prefix (".published/posts/a.md"), for prefixedStore.
+const SUMMARY_KEY = /(?:^|\/)posts\/[a-z0-9][a-z0-9-]{0,79}\.md$/;
 
 /** The posts list's view of a post: { title, date, tags } from its front matter. */
 export function postSummary(text) {
@@ -75,7 +81,7 @@ export function r2Store(bucket) {
     },
     async put(key, body, { contentType, cacheControl, ifMatch } = {}) {
       // A post carries its summary, so the posts list never has to read it.
-      const summary = POST_KEY.test(key)
+      const summary = SUMMARY_KEY.test(key)
         ? postSummary(new TextDecoder().decode(new Uint8Array(body, 0, Math.min(body.byteLength, PEEK_BYTES * 2))))
         : null;
       const o = await bucket.put(key, body, {
@@ -101,6 +107,114 @@ export function r2Store(bucket) {
     async peek(key, bytes = PEEK_BYTES) {
       const o = await bucket.get(key, { range: { offset: 0, length: bytes } });
       return o ? new TextDecoder().decode(await o.arrayBuffer()) : null;
+    },
+  };
+}
+
+/** `store` with every key under `prefix` ("published/"), invisible outside it. */
+export function prefixedStore(store, prefix) {
+  const strip = (m) => (m ? { ...m, key: m.key.slice(prefix.length) } : m);
+  return {
+    head: async (key) => strip(await store.head(prefix + key)),
+    async get(key) {
+      const o = await store.get(prefix + key);
+      return o ? { ...o, meta: strip(o.meta) } : null;
+    },
+    put: async (key, body, opts) => strip(await store.put(prefix + key, body, opts)),
+    delete: (key) => store.delete(prefix + key),
+    async list(sub = '', cursor, opts) {
+      const page = await store.list(prefix + sub, cursor, opts);
+      return {
+        ...page,
+        items: page.items.filter((m) => m.key.startsWith(prefix)).map(strip),
+        ...(page.folders ? { folders: page.folders.map((f) => f.slice(prefix.length)) } : {}),
+      };
+    },
+    peek: (key, bytes) => store.peek(prefix + key, bytes),
+  };
+}
+
+/**
+ * The public site with its posts' Markdown kept elsewhere (`sources`, a
+ * private store). To the admin and the site build it is one store, as
+ * before: posts/<slug>.md reads and writes go to `sources`, everything
+ * else (pages, attachments, index.json) to `site`. The public bucket thus
+ * never holds a post's text, only the page built from it.
+ *
+ * Markdown published before (in the public bucket) is still read until
+ * migrate() moves it; writing or deleting a post also removes that copy.
+ */
+export function withPrivateSources(site, sources) {
+  const isSource = (key) => POST_KEY.test(key);
+  async function allSources() {
+    const out = [];
+    let cursor;
+    do {
+      const page = await sources.list('posts/', cursor, { shallow: true });
+      out.push(...page.items.filter((m) => isSource(m.key)));
+      cursor = page.cursor;
+    } while (cursor);
+    return out;
+  }
+  return {
+    privateSources: true,
+    async head(key) {
+      return isSource(key) ? (await sources.head(key)) ?? site.head(key) : site.head(key);
+    },
+    async get(key) {
+      return isSource(key) ? (await sources.get(key)) ?? site.get(key) : site.get(key);
+    },
+    async put(key, body, opts = {}) {
+      if (!isSource(key)) return site.put(key, body, opts);
+      let own = opts;
+      if (opts.ifMatch && !(await sources.head(key))) {
+        // Updating a post whose Markdown is still public: it moves now.
+        const legacy = await site.head(key);
+        if (!legacy || legacy.etag !== opts.ifMatch) return null;
+        own = { ...opts, ifMatch: undefined };
+      }
+      const written = await sources.put(key, body, own);
+      if (written) await site.delete(key);
+      return written;
+    },
+    async delete(key) {
+      if (isSource(key)) await sources.delete(key);
+      await site.delete(key);
+    },
+    async list(prefix = '', cursor, opts = {}) {
+      const page = await site.list(prefix, cursor, opts);
+      // The Markdown joins the first page; it lives in posts/ only.
+      if (cursor || !(prefix === '' || prefix === 'posts/' || (prefix.startsWith('posts/') && !prefix.endsWith('/')))) return page;
+      const own = (await allSources()).filter((m) => m.key.startsWith(prefix));
+      if (!own.length) return page;
+      if (opts.shallow && prefix === '') {
+        return { ...page, folders: [...new Set([...(page.folders ?? []), 'posts/'])].sort() };
+      }
+      const mine = new Set(own.map((m) => m.key));
+      const items = [...page.items.filter((m) => !mine.has(m.key)), ...own].sort((a, b) => (a.key < b.key ? -1 : 1));
+      return { ...page, items };
+    },
+    peek: async (key, bytes) => (isSource(key) ? (await sources.peek(key, bytes)) ?? site.peek(key, bytes) : site.peek(key, bytes)),
+    /** Move Markdown still in the public bucket to `sources`; returns the keys moved. */
+    async migrate() {
+      const moved = [];
+      let cursor;
+      do {
+        const page = await site.list('posts/', cursor, { shallow: true });
+        for (const m of page.items) {
+          if (!isSource(m.key)) continue;
+          if (!(await sources.head(m.key))) {
+            const obj = await site.get(m.key);
+            if (!obj) continue;
+            const written = await sources.put(m.key, obj.body, { contentType: obj.meta.contentType || 'text/markdown; charset=utf-8' });
+            if (!written) continue;
+          }
+          await site.delete(m.key);
+          moved.push(m.key);
+        }
+        cursor = page.cursor;
+      } while (cursor);
+      return moved;
     },
   };
 }
@@ -678,7 +792,12 @@ async function serverStores(env) {
   if (hit && hit.text === text) return hit.promise;
   const promise = (async () => {
     if (!env.SITE?.put) throw new StoreConfigError('the SITE R2 binding is missing');
-    const stores = new Map([['site', { id: 'site', label: 'Published site', role: 'site', type: 'r2', location: 'deploy', store: r2Store(env.SITE) }]]);
+    // Published Markdown stays private when there is a private bucket for it.
+    const sourcesBucket = env.SOURCES?.put ? env.SOURCES : env.DRAFTS?.put ? env.DRAFTS : null;
+    const siteStore = sourcesBucket
+      ? withPrivateSources(r2Store(env.SITE), prefixedStore(r2Store(sourcesBucket), env.SOURCES?.put ? '' : '.published/'))
+      : r2Store(env.SITE);
+    const stores = new Map([['site', { id: 'site', label: 'Published site', role: 'site', type: 'r2', location: 'deploy', store: siteStore }]]);
     const problems = [];
     for (const cfg of deployedConfigs(env)) {
       if (!ID_RE.test(cfg?.id ?? '') || cfg.id === 'site') {

@@ -185,12 +185,19 @@ export async function rebuildSite(opts = {}) {
     const [{ build }, { adminStorage }, md4c] = await Promise.all([
       import('./lib/site-build.js'), import('./admin-storage.js'), getMd4c(),
     ]);
+    const write = (line) => {
+      log.textContent += `${line}\n`;
+      log.scrollTop = log.scrollHeight;
+    };
+    // Markdown published before is moved out of the public bucket first:
+    // readers get only the pages built from it.
+    const { moved = [] } = await api.privateSources().catch((err) => {
+      write(`note: the published Markdown could not be made private yet (${err.message ?? err})`);
+      return {};
+    });
+    for (const key of moved) write(`private ${key} (removed from the public bucket)`);
     const result = await build(adminStorage('site'), md4c, {
-      ...opts,
-      log: (line) => {
-        log.textContent += `${line}\n`;
-        log.scrollTop = log.scrollHeight;
-      },
+      ...opts, privateSources: Boolean(state.session?.privateSources), log: write,
     });
     await refreshSite();
     dlg.close();

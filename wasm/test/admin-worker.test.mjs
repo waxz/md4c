@@ -690,6 +690,36 @@ describe('publishing with files', () => {
     assert.equal((await call('GET', '/api/raw/nas/index.html')).status, 404, 'no fallback for non-assets');
   });
 
+  test("a published post's Markdown stays private: the public bucket gets no .md", async () => {
+    assert.equal(await env.SITE.head('posts/trip.md'), null, 'not in the public bucket');
+    assert.ok(await env.DRAFTS.head('.published/posts/trip.md'), 'kept in the private bucket');
+    const site = await call('GET', '/api/list?store=site&prefix=posts/&shallow=1');
+    assert.ok(site.data.items.some((i) => i.key === 'posts/trip.md'), 'the admin still sees it as published');
+    assert.ok(site.data.items.some((i) => i.key === 'posts/photo.png'), 'next to its public files');
+    const drafts = await call('GET', '/api/list?store=drafts&prefix=');
+    assert.ok(!drafts.data.items.some((i) => i.key.includes('.published')), 'hidden from the drafts store');
+    assert.equal((await call('GET', '/api/session')).data.privateSources, true);
+  });
+
+  test('Markdown published before is moved out of the public bucket', async () => {
+    await env.SITE.put('posts/old-post.md', '---\ntitle: Old\ndate: 2026-01-01\n---\n\nOld.\n');
+    assert.equal(await read('site', 'posts/old-post.md'), '---\ntitle: Old\ndate: 2026-01-01\n---\n\nOld.\n', 'still readable before the move');
+    const r = await postJson('/api/site/private-sources', {});
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.data.moved, ['posts/old-post.md']);
+    assert.equal(await env.SITE.head('posts/old-post.md'), null);
+    assert.match(await read('site', 'posts/old-post.md'), /title: Old/);
+    assert.deepEqual((await postJson('/api/site/private-sources', {})).data.moved, [], 'nothing left to move');
+    // Updating a post whose Markdown was still public moves it too.
+    await env.SITE.put('posts/old-two.md', 'two');
+    const etag = (await env.SITE.head('posts/old-two.md')).etag;
+    assert.equal((await put('site', 'posts/old-two.md', 'two!', { 'if-match': `"${etag}"` })).status, 200);
+    assert.equal(await env.SITE.head('posts/old-two.md'), null);
+    assert.equal(await read('site', 'posts/old-two.md'), 'two!');
+    assert.equal((await call('DELETE', '/api/file?store=site&key=posts/old-post.md')).status, 204);
+    assert.equal(await read('site', 'posts/old-post.md'), null);
+  });
+
   test('the posts list shows every store', async () => {
     const r = await call('GET', '/api/posts');
     const byKey = (store, k) => r.data.posts.find((p) => p.store === store && p.key === k);

@@ -41,37 +41,79 @@ export function linkPostsForStaticPage(html) {
       SLUG_RE.test(slug) ? `href="${slug}.html${frag}"` : whole);
 }
 
-const HREF_RE = /<a\s[^>]*?href="([^"]*)"/gi;
 const unescAttr = (s) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const BASE = 'https://site.invalid/';
+
+/**
+ * The post an href in a post page points at ("other.html", "other.md",
+ * "../posts/other.html", "../index.html#/post/other", or the same as an
+ * absolute URL on `own`, the site's URL), or ''.
+ */
+function slugFromHref(raw, own) {
+  let url;
+  try {
+    url = new URL(unescAttr(raw), `${BASE}posts/`);
+  } catch {
+    return '';
+  }
+  let path;
+  if (url.origin === new URL(BASE).origin) path = url.pathname.slice(1);
+  else if (own && url.origin === own.origin && url.pathname.startsWith(own.pathname)) path = url.pathname.slice(own.pathname.length);
+  else return '';
+  const page = /^posts\/([^/]+)\.(?:html|md)$/.exec(path);
+  const live = /^(?:index\.html)?$/.test(path) && /^#\/post\/([^/?#]+)/.exec(url.hash);
+  const slug = page?.[1] ?? live?.[1] ?? '';
+  return SLUG_RE.test(slug) ? slug : '';
+}
+
+function siteUrlOf(siteUrl) {
+  try {
+    return siteUrl ? new URL(siteUrl) : null;
+  } catch {
+    return null;
+  }
+}
+
+const HREF_RE = /<a\s[^>]*?href="([^"]*)"/gi;
 
 /**
  * Slugs of the posts an article links to, from its static-page HTML (see
- * linkPostsForStaticPage): "other.html", "other.md", "../posts/other.html",
- * "../index.html#/post/other", or absolute links to the same on `siteUrl`.
- * Sorted, without duplicates; may name posts that do not exist (yet).
+ * linkPostsForStaticPage). Sorted, without duplicates; may name posts that
+ * do not exist (yet).
  */
 export function postLinks(html, siteUrl = '') {
-  const base = 'https://site.invalid/';
-  let own = null;
-  try {
-    if (siteUrl) own = new URL(siteUrl);
-  } catch {}
+  const own = siteUrlOf(siteUrl);
   const out = new Set();
   for (const [, raw] of html.matchAll(HREF_RE)) {
-    let url;
-    try {
-      url = new URL(unescAttr(raw), `${base}posts/`);
-    } catch {
-      continue;
-    }
-    let path;
-    if (url.origin === new URL(base).origin) path = url.pathname.slice(1);
-    else if (own && url.origin === own.origin && url.pathname.startsWith(own.pathname)) path = url.pathname.slice(own.pathname.length);
-    else continue;
-    const page = /^posts\/([^/]+)\.(?:html|md)$/.exec(path);
-    const live = /^(?:index\.html)?$/.test(path) && /^#\/post\/([^/?#]+)/.exec(url.hash);
-    const slug = page?.[1] ?? live?.[1] ?? '';
-    if (SLUG_RE.test(slug)) out.add(slug);
+    const slug = slugFromHref(raw, own);
+    if (slug) out.add(slug);
   }
   return [...out].sort();
+}
+
+const BLOCK_RE = /<(p|li|h[2-6]|td|th|dt|dd|figcaption)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+const ANCHOR_RE = /<a\s[^>]*?href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+const plain = (h) => unescAttr(h.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ');
+const CONTEXT = 90;
+
+/**
+ * Where each linked post is mentioned: { slug: [before, label, after] },
+ * the text around the first link to it (as Obsidian shows backlinks in
+ * context), cut to about CONTEXT characters on each side.
+ */
+export function linkContexts(html, siteUrl = '') {
+  const own = siteUrlOf(siteUrl);
+  const out = {};
+  for (const [, , block] of html.matchAll(BLOCK_RE)) {
+    for (const m of block.matchAll(ANCHOR_RE)) {
+      const slug = slugFromHref(m[1], own);
+      if (!slug || out[slug]) continue;
+      let before = plain(block.slice(0, m.index)).trimStart();
+      let after = plain(block.slice(m.index + m[0].length)).trimEnd();
+      if (before.length > CONTEXT) before = `…${before.slice(-CONTEXT).replace(/^\S*\s/, '')}`;
+      if (after.length > CONTEXT) after = `${after.slice(0, CONTEXT).replace(/\s\S*$/, '')}…`;
+      out[slug] = [before, plain(m[2]).trim(), after];
+    }
+  }
+  return out;
 }

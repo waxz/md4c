@@ -28,6 +28,9 @@
 //   POST   /api/copy {from, overwrite, ifMatch} copy a draft store's attachment to the
 //                                               site (same path); ifMatch = public copy
 //   POST   /api/indexnow {urls}                 notify IndexNow search engines
+//   POST   /api/site/private-sources            move published Markdown still in the
+//                                               public bucket to its private place
+//                                               (stores.js withPrivateSources)
 //   GET    /api/storage                         draft stores: deployed and saved in KV
 //                                               (settings only, never secrets)
 //   PUT    /api/storage {version, stores}       save the Storage page's KV stores
@@ -757,6 +760,8 @@ export async function handleApi(request, env, user) {
           publicUrl: String(env.PUBLIC_URL ?? ''),
           stores: [...stores.values()].map(({ id, label, role, type, location }) => ({ id, label, role, type, location })),
           kv: Boolean(env.SETTINGS),
+          // Published posts' Markdown is kept out of the public bucket.
+          privateSources: Boolean(stores.get('site').store.privateSources),
           problems: stores.problems,
           maxUploadMb: Number(env.MAX_UPLOAD_MB ?? 25),
         });
@@ -789,6 +794,10 @@ export async function handleApi(request, env, user) {
         return await createFolder(request, stores);
       case 'DELETE /api/folder':
         return await deleteFolder(storeOf(stores, storeParam), q('prefix'));
+      case 'POST /api/site/private-sources': {
+        const site = stores.get('site').store;
+        return json({ privateSources: Boolean(site.migrate), moved: site.migrate ? await site.migrate() : [] });
+      }
       case 'POST /api/indexnow':
         return await indexNow(request, stores);
       case 'GET /api/storage':

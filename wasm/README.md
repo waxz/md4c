@@ -121,6 +121,8 @@ node scripts/publish.mjs --to r2 --site          # R2: site + posts
 node scripts/publish.mjs --to r2 --posts ~/blog  # only posts, from ~/blog
 node scripts/publish.mjs --to r2 --prune         # also delete removed posts
 node scripts/publish.mjs --to r2 --no-posts      # only rebuild index.json
+node scripts/publish.mjs --to r2 --sources-bucket my-blog-drafts
+                                                 # keep the posts' Markdown private
 node scripts/publish.mjs --help
 ```
 
@@ -132,6 +134,12 @@ node scripts/publish.mjs --help
 - You can also write files into the bucket directly, with the Cloudflare
   dashboard, `rclone`, the storagesdk CLI or anything else. Run
   `--no-posts` afterwards so `index.json` lists them.
+- With `--sources-bucket <private bucket>`, the posts' Markdown goes to that
+  bucket (under `.published/`) instead of the public one, which then holds
+  only the pages; Markdown already public is moved there. The admin does
+  the same with its drafts bucket, so a site published from the admin is
+  rebuilt with `--sources-bucket <the drafts bucket>` (without it the
+  rebuild is refused rather than deleting the pages).
 - Adapters are chosen with `--to` or `STORAGE_ADAPTER` and configured with
   storagesdk's env vars. For the `fs` adapter, `FS_ROOT`/`FS_FOLDER` default
   to `dist/` and `public`.
@@ -178,7 +186,7 @@ Every field is optional:
 | `stylesheet` | your own CSS file in the bucket, loaded after the built-in styles |
 | `numberedHeadings` | number sections 1, 1.1, … (posts that number their own headings keep their numbers) |
 | `toc` | show a "Contents" box on posts with three or more sections. A post's `# Heading`s (after the title) count as sections: in the body they become second-level headings, since the title is the page's only first-level one. |
-| `graph` | links between posts, as in Obsidian: a **Graph** page (graph.html, in the menu) with every post as a dot and every link as a line, and under each post the posts that link to it ("Linked from") with a small graph of its neighbours. Links are `[[Wiki links]]` (`[[Kyoto trip]]` → posts/kyoto-trip) and ordinary links to other posts (`[text](kyoto.md)`). Links to posts not written yet show as faint dots. Password-protected posts keep their links secret. |
+| `graph` | links between posts, as in Obsidian. A **Graph** page (graph.html, in the menu) draws every post and link: an article is a dot, a tag a blue diamond ("Show tags"), a post linked to but not written yet a dashed ring, and arrows show which way each link goes (both ends for posts that link to each other). Under each post, **Cross-references** lists the posts it links to and the posts that link to it, each with the sentence the link is in, above a graph of those neighbours. Links are `[[Wiki links]]` (`[[Kyoto trip]]` → posts/kyoto-trip) and ordinary links to other posts (`[text](kyoto.md)`). Password-protected posts keep their links secret. |
 | `citation` | show a "How to cite" box with a reference and BibTeX |
 | `math` | typeset `$…$` and `$$…$$` with KaTeX, loaded only on posts that use them |
 | `links` | extra navigation links: `#/post/<slug>` or an http(s) URL |

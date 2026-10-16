@@ -11,14 +11,14 @@
 // full rebuild is requested.
 
 import { StorageError } from '@storagesdk/core';
-import { linkPostsForStaticPage, PARSER_FLAGS, postLinks } from './blog-render.js';
+import { linkContexts, linkPostsForStaticPage, PARSER_FLAGS, postLinks } from './blog-render.js';
 import { isDraft, parseFrontMatter, postMetadata, SLUG_RE } from './post-format.js';
 import { atomFeed, graphPage, homePage, postPage, protectedArticle, robotsTxt, siteRelative, sitemap, themeCss } from './pages.js';
 import { readProtected, wantsPassword } from './protect.js';
 import { normalizeSite } from './site-config.js';
 
 /** Bump when js/pages.js output changes, so the next build redoes every page. */
-export const BUILD_VERSION = 6;
+export const BUILD_VERSION = 7;
 export const INDEX = 'index.json';
 export const CACHE_FILES = 'public, max-age=300';
 // Pages, posts and indexes change in place (an edit, a new password), so
@@ -76,8 +76,11 @@ export function siteSettings(raw) {
  *
  * @param {import('@storagesdk/core').Storage} storage
  * @param {{ toHtml: Function }} md4c
- * @param {{ site?: object, defaultSite?: object, full?: boolean,
+ * @param {{ site?: object, defaultSite?: object, full?: boolean, privateSources?: boolean,
  *           log?: (msg: string) => void }} [opts]
+ *        `privateSources`: posts/<slug>.md reach `storage` from a private
+ *        place (recorded, so a build without them is refused rather than
+ *        deleting every page).
  *        `site` replaces index.json's "site" section; `defaultSite` is used
  *        when there is none yet.
  * @returns {Promise<{ site, posts, rendered: string[], removed: string[], full: boolean }>}
@@ -91,6 +94,12 @@ export async function build(storage, md4c, opts = {}) {
   };
 
   const previous = await readIndex(storage);
+  if (previous?.build?.sources === 'private' && !opts.privateSources) {
+    // The posts' Markdown is not in this storage: building from it would
+    // find no posts and delete every page.
+    throw new Error("This site keeps its posts' Markdown privately (published from the admin), not in this storage. "
+      + 'Rebuild it from the admin, or run publish.mjs with --sources-bucket <the private bucket>.');
+  }
   const rawSite = opts.site ?? previous?.site ?? opts.defaultSite;
   const site = siteSettings(rawSite);
   const siteHash = fnv1a(JSON.stringify(rawSite ?? null));
@@ -115,6 +124,7 @@ export async function build(storage, md4c, opts = {}) {
     const prior = known.get(item.path);
     let metadata;
     let links = [];
+    let context = {};
     const etag = item.etag;
     let size = item.size;
     let lastModified = item.lastModified;
@@ -122,6 +132,7 @@ export async function build(storage, md4c, opts = {}) {
     if (!full && prior && prior.etag === item.etag && htmlNames.has(page) && Array.isArray(prior.links)) {
       metadata = prior.metadata; // unchanged since the last build
       links = prior.links;
+      context = prior.context ?? {};
     } else {
       const fileItem = await storage.download(item.path);
       const source = new TextDecoder().decode(fileItem.body);
@@ -155,6 +166,8 @@ export async function build(storage, md4c, opts = {}) {
         htmlBySlug.set(slug, html);
         sources.set(slug, source);
         links = postLinks(html, site.url).filter((s) => s !== slug);
+        const around = linkContexts(html, site.url);
+        context = Object.fromEntries(links.filter((s) => around[s]).map((s) => [s, around[s]]));
         await put(page, postPage(site, { slug, page, ...metadata }, html), 'text/html; charset=utf-8', CACHE_PAGES);
       }
       rendered.push(slug);
@@ -169,6 +182,8 @@ export async function build(storage, md4c, opts = {}) {
       lastModified: new Date(lastModified).toISOString(),
       metadata,
       links,
+      // Where each link appears: [text before, link text, text after].
+      ...(Object.keys(context).length ? { context } : {}),
     });
   }
 
@@ -195,7 +210,7 @@ export async function build(storage, md4c, opts = {}) {
   const index = {
     version: 1,
     generated: new Date().toISOString(),
-    build: { version: BUILD_VERSION, site: siteHash },
+    build: { version: BUILD_VERSION, site: siteHash, ...(opts.privateSources ? { sources: 'private' } : {}) },
     ...(rawSite ? { site: rawSite } : {}),
     items,
   };

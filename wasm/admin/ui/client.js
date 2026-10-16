@@ -178,6 +178,9 @@ export const api = {
     headers: { 'content-type': 'application/json' },
   }),
 
+  /** Move published Markdown out of the public bucket (where it used to be). */
+  privateSources: () => request('POST', 'site/private-sources'),
+
   indexNow: (urls) => request('POST', 'indexnow', {
     body: JSON.stringify({ urls }),
     headers: { 'content-type': 'application/json' },

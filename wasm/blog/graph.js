@@ -8,16 +8,21 @@
 //                            scroll or pinch to zoom, hover to highlight a
 //                            node's links, click to open its post
 //
-// Links count both ways: a post's node joins the posts it links to and the
-// posts that link to it (its backlinks). Colours come from the page's CSS
-// variables, so the graph follows the theme and dark mode.
+// Marks: an article is a filled dot, a tag a diamond in a second colour, a
+// post not written yet a hollow dashed ring. Arrows point the way a link
+// goes (from the post that links to the post it names); a link both ways
+// has an arrow at each end. A post's neighbourhood takes links both ways:
+// the posts it links to and the posts that link to it (its backlinks).
+// Colours come from the page's CSS variables, so the graph follows the
+// theme and dark mode.
 
 const POST = 'post';
 const TAG = 'tag';
 const MISSING = 'missing';
 
 /**
- * { nodes: [{ id, kind, label, href, slug }], edges: [[a, b]] } from
+ * { nodes: [{ id, kind, label, href, slug }],
+ *   edges: [{ source, target, both, tag }] } from
  * index.json items. `postHref(slug)` makes a post's link; with `tags`,
  * each tag is a node joined to its posts. Links to posts that do not
  * exist become dim "missing" nodes, as in Obsidian.
@@ -34,10 +39,11 @@ export function graphData(items, { postHref, tags = false, tagHref } = {}) {
       href: postHref(slug, e), protected: e.metadata.protected === 'true',
     });
   }
-  const join = (a, b) => {
-    if (a === b) return;
-    const key = a < b ? `${a}\n${b}` : `${b}\n${a}`;
-    if (!edges.has(key)) edges.set(key, a < b ? [a, b] : [b, a]);
+  const join = (source, target, tag = false) => {
+    if (source === target) return;
+    const back = edges.get(`${target}\n${source}`);
+    if (back) back.both = true; // linked both ways: one line, two arrows
+    else if (!edges.has(`${source}\n${target}`)) edges.set(`${source}\n${target}`, { source, target, both: false, tag });
   };
   for (const e of posts) {
     const from = `p:${slugOf(e)}`;
@@ -51,7 +57,7 @@ export function graphData(items, { postHref, tags = false, tagHref } = {}) {
       for (const t of String(e.metadata.tags ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
         const id = `t:${t}`;
         if (!nodes.has(id)) nodes.set(id, { id, kind: TAG, label: `#${t}`, href: tagHref ? tagHref(t) : '' });
-        join(from, id);
+        join(from, id, true);
       }
     }
   }
@@ -61,9 +67,9 @@ export function graphData(items, { postHref, tags = false, tagHref } = {}) {
 /** Adjacency: node id -> Set of neighbour ids. */
 function adjacency(g) {
   const adj = new Map(g.nodes.map((n) => [n.id, new Set()]));
-  for (const [a, b] of g.edges) {
-    adj.get(a)?.add(b);
-    adj.get(b)?.add(a);
+  for (const { source, target } of g.edges) {
+    adj.get(source)?.add(target);
+    adj.get(target)?.add(source);
   }
   return adj;
 }
@@ -87,7 +93,7 @@ export function neighbourhood(g, id, depth = 1) {
   }
   return {
     nodes: g.nodes.filter((n) => keep.has(n.id)),
-    edges: g.edges.filter(([a, b]) => keep.has(a) && keep.has(b)),
+    edges: g.edges.filter((e) => keep.has(e.source) && keep.has(e.target)),
   };
 }
 
@@ -140,7 +146,8 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
     byId.set(node.id, sim);
     return sim;
   });
-  const edges = g.edges.map(([a, b]) => [byId.get(a), byId.get(b)]).filter(([a, b]) => a && b);
+  const edges = g.edges.map((e) => ({ a: byId.get(e.source), b: byId.get(e.target), both: e.both, tag: e.tag }))
+    .filter((e) => e.a && e.b);
 
   // View: world -> screen is (x * scale + tx, y * scale + ty), in CSS pixels.
   const view = { scale: 1, tx: 0, ty: 0, width: 0, height: 0 };
@@ -152,6 +159,8 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
       rule: cssColour(box, '--rule-graph', '#bbb'),
       accent: cssColour(box, '--accent', '#8b1e2d'),
       paper: cssColour(box, '--paper', '#fff'),
+      surface: cssColour(box, '--surface', '#fff'),
+      tag: cssColour(box, '--graph-tag', '#2f5d8a'),
       font: getComputedStyle(box).fontFamily || 'sans-serif',
     };
   };
@@ -184,7 +193,7 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
       }
     }
     // Links pull their ends to about LINK apart.
-    for (const [a, b] of edges) {
+    for (const { a, b } of edges) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const d = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -236,6 +245,24 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
 
   let hover = null;
   let dragging = null;
+  /** An arrowhead on the line from `a` to `b`, touching `b`'s mark. */
+  function arrow(a, b, size) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const d = Math.hypot(dx, dy);
+    const reach = b.radius * (b.kind === TAG ? 1.25 : 1) + 1.5 / view.scale;
+    if (d < reach + size) return;
+    const ux = dx / d;
+    const uy = dy / d;
+    const tx = b.x - ux * reach;
+    const ty = b.y - uy * reach;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(tx - ux * size - uy * size * 0.45, ty - uy * size + ux * size * 0.45);
+    ctx.lineTo(tx - ux * size + uy * size * 0.45, ty - uy * size - ux * size * 0.45);
+    ctx.closePath();
+    ctx.fill();
+  }
   function draw() {
     const dpr = window.devicePixelRatio || 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -244,26 +271,53 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
     const lit = hover ? new Set([hover.id, ...adj.get(hover.id)]) : null;
 
     ctx.lineWidth = 1 / view.scale;
-    for (const [a, b] of edges) {
+    const head = 9 / Math.max(view.scale, 0.6); // arrowheads stay readable when zoomed out
+    for (const { a, b, both, tag } of edges) {
       const on = lit && (a === hover || b === hover);
-      ctx.strokeStyle = on ? colours.accent : colours.rule;
+      const colour = on ? colours.accent : colours.rule;
+      ctx.strokeStyle = colour;
+      ctx.fillStyle = colour;
       ctx.globalAlpha = lit && !on ? 0.25 : 1;
+      ctx.setLineDash(tag ? [3 / view.scale, 3 / view.scale] : []);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
+      ctx.setLineDash([]);
+      if (tag) continue; // a tag is not a link: no direction
+      arrow(a, b, head);
+      if (both) arrow(b, a, head);
     }
     for (const p of nodes) {
       const dim = lit && !lit.has(p.id);
-      ctx.globalAlpha = dim ? 0.25 : p.kind === MISSING ? 0.55 : 1;
-      ctx.fillStyle = p === hover || p.id === focus ? colours.accent
-        : p.kind === TAG ? colours.muted : p.kind === MISSING ? colours.rule : colours.ink;
+      ctx.globalAlpha = dim ? 0.25 : 1;
+      const strong = p === hover || p.id === focus;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      ctx.fill();
-      if (p.kind === MISSING) {
-        ctx.strokeStyle = colours.muted;
+      if (p.kind === TAG) {
+        // A diamond, in the second colour.
+        const r = p.radius * 1.25;
+        ctx.moveTo(p.x, p.y - r);
+        ctx.lineTo(p.x + r, p.y);
+        ctx.lineTo(p.x, p.y + r);
+        ctx.lineTo(p.x - r, p.y);
+        ctx.closePath();
+        ctx.fillStyle = strong ? colours.accent : colours.tag;
+        ctx.fill();
+      } else if (p.kind === MISSING) {
+        // A hollow, dashed ring: linked to, not written yet.
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fillStyle = colours.surface;
+        ctx.fill();
+        ctx.setLineDash([2 / view.scale, 2 / view.scale]);
+        ctx.lineWidth = 1.4 / view.scale;
+        ctx.strokeStyle = strong ? colours.accent : colours.muted;
         ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineWidth = 1 / view.scale;
+      } else {
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fillStyle = strong ? colours.accent : colours.ink;
+        ctx.fill();
       }
     }
     // Labels: always for the highlighted nodes; others fade in with zoom.
@@ -279,9 +333,9 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
       ctx.globalAlpha = a;
       const text = p.label.length > 40 ? `${p.label.slice(0, 39)}…` : p.label;
       ctx.lineWidth = 3 / view.scale;
-      ctx.strokeStyle = colours.paper;
+      ctx.strokeStyle = colours.surface;
       ctx.strokeText(text, p.x, p.y + p.radius + 3 / view.scale);
-      ctx.fillStyle = p === hover ? colours.accent : colours.ink;
+      ctx.fillStyle = p === hover ? colours.accent : p.kind === TAG ? colours.tag : p.kind === MISSING ? colours.muted : colours.ink;
       ctx.fillText(text, p.x, p.y + p.radius + 3 / view.scale);
     }
     ctx.globalAlpha = 1;

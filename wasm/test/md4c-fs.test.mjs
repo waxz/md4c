@@ -513,6 +513,11 @@ describe('links between posts (graph) and section headings', () => {
     assert.deepEqual(links['posts/beta.md'], ['alpha']);
     assert.deepEqual(links['posts/gamma.md'], []);
     assert.deepEqual(links['posts/locked.md'], [], 'a protected post keeps its links secret');
+    const alpha = items.find((i) => i.path === 'posts/alpha.md');
+    assert.deepEqual(alpha.context.beta, ['See ', 'Beta', ', gamma, again, live, Not Written, self, elsewhere and .'],
+      'where each link appears: text before, link text, text after');
+    assert.deepEqual(items.find((i) => i.path === 'posts/beta.md').context.alpha, ['Back to ', 'alpha', '.']);
+    assert.equal(items.find((i) => i.path === 'posts/locked.md').context, undefined);
   });
 
   test('a Graph page, linked from every page', async () => {
@@ -539,13 +544,51 @@ describe('links between posts (graph) and section headings', () => {
     const g = graphData(items, { postHref: (s) => `${s}.html` });
     assert.deepEqual(g.nodes.map((n) => `${n.id}:${n.kind}`).sort(),
       ['p:alpha:post', 'p:beta:post', 'p:gamma:post', 'p:locked:post', 'p:not-written:missing']);
-    assert.deepEqual(g.edges.map((e) => e.join('-')).sort(),
-      ['p:alpha-p:beta', 'p:alpha-p:gamma', 'p:alpha-p:not-written'], 'links both ways are one edge');
+    assert.deepEqual(g.edges.map((e) => `${e.source}>${e.target}${e.both ? ' both' : ''}`).sort(),
+      ['p:alpha>p:beta both', 'p:alpha>p:gamma', 'p:alpha>p:not-written'], 'links both ways are one edge, with both arrows');
     const near = neighbourhood(g, 'p:gamma', 1);
     assert.deepEqual(near.nodes.map((n) => n.id).sort(), ['p:alpha', 'p:gamma'], 'backlinks count');
     assert.equal(neighbourhood(g, 'p:gamma', 2).nodes.length, 4);
     const tagged = graphData([{ path: 'posts/a.md', metadata: { title: 'A', tags: 'x, y' }, links: [] }],
       { postHref: (s) => s, tags: true });
-    assert.deepEqual(tagged.nodes.map((n) => n.id), ['p:a', 't:x', 't:y']);
+    assert.deepEqual(tagged.nodes.map((n) => `${n.id}:${n.kind}`), ['p:a:post', 't:x:tag', 't:y:tag']);
+    assert.ok(tagged.edges.every((e) => e.tag), 'tag edges are marked as such');
+  });
+});
+
+describe("private Markdown: the public bucket gets only pages", () => {
+  let dir;
+  const pub = (p) => readFile(join(dir, 'public', p), 'utf8');
+  const has = (folder, p) => stat(join(dir, folder, p)).then(() => true, () => false);
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-private-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'posts', 'one.md'), '---\ntitle: One\ndate: 2026-10-01\n---\n\nSee [[Two]].\n');
+    await writeFile(join(dir, 'posts', 'two.md'), '---\ntitle: Two\ndate: 2026-10-02\n---\n\nText.\n');
+    // Published the old way first: Markdown in the public bucket.
+    await publish('--posts', join(dir, 'posts'));
+  });
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('--sources-bucket moves the Markdown out and builds from it', async () => {
+    assert.ok(await has('public', 'posts/one.md'), 'the old way: public');
+    await publish('--posts', join(dir, 'posts'), '--sources-bucket', 'private');
+    assert.equal(await has('public', 'posts/one.md'), false);
+    assert.equal(await has('public', 'posts/two.md'), false);
+    assert.ok(await has('private', '.published/posts/one.md'));
+    assert.match(await pub('posts/one.html'), /<a href="two\.html">Two<\/a>/);
+    const index = JSON.parse(await pub('index.json'));
+    assert.equal(index.build.sources, 'private');
+    assert.deepEqual(index.items.map((i) => i.path), ['posts/one.md', 'posts/two.md']);
+    await publish('--no-posts', '--sources-bucket', 'private', '--full');
+    assert.ok(await has('public', 'posts/two.html'), 'rebuilds from the private copy');
+  });
+
+  test('a rebuild without the private Markdown is refused, not destructive', async () => {
+    await assert.rejects(publish('--no-posts'), /keeps its posts' Markdown privately/);
+    assert.ok(await has('public', 'posts/one.html'), 'pages untouched');
   });
 });

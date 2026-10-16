@@ -5,8 +5,9 @@ storage folders, write and edit posts with a live preview in the blog's own
 theme, upload photos, and save drafts, publish, update or unpublish posts.
 Drafts and their photos stay private in one or more draft stores (R2
 buckets, WebDAV shares such as Nextcloud or a NAS, S3-compatible buckets
-or GitHub). Publishing copies them to the public bucket, and the draft stays
-as your working copy.
+or GitHub). Publishing puts the rendered page and the files it uses in the
+public bucket, and the draft stays as your working copy. The post's
+Markdown itself never goes public (see below).
 It runs as a Cloudflare Worker on its own hostname (for example
 `admin.blog.example.com`), behind Cloudflare Access.
 
@@ -45,6 +46,23 @@ All of these checks happen on the server, whatever the browser sends.
 
 Drafts and their photos live in private draft stores. Anything in the
 public bucket can be read by URL, so drafts stay out of it until you publish.
+
+### Published Markdown stays private
+
+The public bucket holds only what readers need: the pages, `index.json`
+and the attachments. A published post's Markdown (`posts/<slug>.md`, the
+source the pages are built from) is kept in the private `DRAFTS` bucket
+under `.published/` (or in a `SOURCES` R2 binding, if the deploy has one).
+To the admin and the site build it still looks like part of the site:
+the Explorer shows it under **Published site**, publishing writes it, and
+unpublishing removes it.
+
+Markdown published before this (in the public bucket) is moved there on
+the next publish or rebuild, and the build log lists each file as
+`private posts/<slug>.md`. A rebuild that cannot see the private Markdown
+(`publish.mjs` without `--sources-bucket`) is refused, so it cannot
+delete every page by mistake. Without a `DRAFTS` bucket (only
+`DRAFT_STORES`), the Markdown stays public, as before.
 
 ## Draft stores
 

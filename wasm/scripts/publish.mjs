@@ -24,6 +24,13 @@
 //   --indexnow       after publishing, notify Bing, Yandex and other
 //                    IndexNow search engines of the pages (needs site.url
 //                    and site.indexNowKey in index.json)
+//   --sources-bucket <name>
+//                    keep the posts' Markdown out of the public bucket, in
+//                    this private bucket (same adapter and credentials) under
+//                    .published/, as the admin does with its DRAFTS bucket:
+//                    readers get only the pages. Markdown already public is
+//                    moved there. Needed to rebuild a site published from
+//                    the admin.
 //   --full           re-render every page (normally only changed posts are)
 //   --dry-run        print what would change, change nothing
 //
@@ -63,6 +70,7 @@ const { values: args } = parseArgs({
     'site-url': { type: 'string' },
     indexnow: { type: 'boolean', default: false },
     full: { type: 'boolean', default: false },
+    'sources-bucket': { type: 'string' },
     'dry-run': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -77,7 +85,7 @@ if (args.help) {
 const dry = args['dry-run'];
 const log = (msg) => console.log(dry ? `[dry-run] ${msg}` : msg);
 
-async function openStorage(name) {
+async function openStorage(name, bucket) {
   if (!ADAPTERS.includes(name)) throw new Error(`unknown adapter "${name}"; one of: ${ADAPTERS.join(', ')}`);
   if (name === 'fs') {
     process.env.FS_ROOT ??= join(root, 'dist');
@@ -85,7 +93,78 @@ async function openStorage(name) {
   }
   const missing = getAdapterEnvVars(name).filter((v) => v.required && !process.env[v.name]);
   if (missing.length) throw new Error(`set ${missing.map((v) => v.name).join(', ')} for the ${name} adapter`);
-  return new Storage({ adapter: await buildAdapter(name) });
+  if (!bucket) return new Storage({ adapter: await buildAdapter(name) });
+  // The same adapter on another bucket (fs: another folder).
+  const vars = getAdapterEnvVars(name).map((v) => v.name).filter((v) => /_(BUCKET|FOLDER)$/.test(v));
+  if (!vars.length) throw new Error(`--sources-bucket is not supported for the ${name} adapter`);
+  const saved = vars.map((v) => [v, process.env[v]]);
+  for (const v of vars) process.env[v] = bucket;
+  try {
+    return new Storage({ adapter: await buildAdapter(name) });
+  } finally {
+    for (const [v, value] of saved) {
+      if (value === undefined) delete process.env[v];
+      else process.env[v] = value;
+    }
+  }
+}
+
+const POST_KEY = /^posts\/[a-z0-9][a-z0-9-]{0,79}\.md$/;
+const SOURCES_PREFIX = '.published/';
+const notFound = (err) => err instanceof StorageError && err.code === 'NotFound';
+
+/**
+ * The site storage with posts/<slug>.md kept in `sources` (under
+ * .published/), as the admin Worker does (admin/src/stores.js
+ * withPrivateSources): the build and the upload see one storage.
+ */
+function withPrivateSources(site, sources) {
+  const at = (path) => SOURCES_PREFIX + path;
+  const strip = (item) => (item && typeof item.path === 'string' ? { ...item, path: item.path.slice(SOURCES_PREFIX.length) } : item);
+  const fromSources = async (path, op, fallback) => {
+    try {
+      return strip(await op(at(path)));
+    } catch (err) {
+      if (notFound(err)) return fallback();
+      throw err;
+    }
+  };
+  return {
+    head: (path, o) => (POST_KEY.test(path) ? fromSources(path, (p) => sources.head(p, o), () => site.head(path, o)) : site.head(path, o)),
+    download: (path, o) => (POST_KEY.test(path) ? fromSources(path, (p) => sources.download(p, o), () => site.download(path, o)) : site.download(path, o)),
+    async upload(path, body, o) {
+      if (!POST_KEY.test(path)) return site.upload(path, body, o);
+      const written = await sources.upload(at(path), body, o);
+      await site.delete(path).catch((err) => { if (!notFound(err)) throw err; });
+      return strip(written);
+    },
+    async delete(path, o) {
+      if (POST_KEY.test(path)) await sources.delete(at(path), o).catch((err) => { if (!notFound(err)) throw err; });
+      return site.delete(path, o).catch((err) => { if (!(POST_KEY.test(path) && notFound(err))) throw err; });
+    },
+    async list(o = {}) {
+      const page = await site.list(o);
+      const prefix = o.prefix ?? '';
+      if (o.cursor || !(prefix === '' || prefix.startsWith('posts/'))) return page;
+      const own = (await listAll(sources, at('posts/'))).map(strip).filter((i) => POST_KEY.test(i.path) && i.path.startsWith(prefix));
+      const mine = new Set(own.map((i) => i.path));
+      return { ...page, items: [...page.items.filter((i) => !mine.has(i.path)), ...own].sort((a, b) => (a.path < b.path ? -1 : 1)) };
+    },
+    /** Move Markdown still in the public bucket to `sources`. */
+    async migrate() {
+      for (const item of await listAll(site, 'posts/')) {
+        if (!POST_KEY.test(item.path)) continue;
+        try {
+          await sources.head(at(item.path));
+        } catch (err) {
+          if (!notFound(err)) throw err;
+          log(`private ${item.path}`);
+          if (!dry) await sources.upload(at(item.path), (await site.download(item.path)).body, { contentType: 'text/markdown; charset=utf-8' });
+        }
+        await remove(site, item.path);
+      }
+    },
+  };
 }
 
 
@@ -206,11 +285,15 @@ async function indexNow(storage, site, posts) {
   console.log(`IndexNow: HTTP ${res.status}${res.ok ? '' : ` ${await res.text()}`}`);
 }
 
-const storage = await openStorage(args.to);
+const publicStorage = await openStorage(args.to);
+const storage = args['sources-bucket']
+  ? withPrivateSources(publicStorage, await openStorage(args.to, args['sources-bucket']))
+  : publicStorage;
 const md4c = await loadMd4c(pathToFileURL(join(root, 'dist', 'md4c.wasm')));
 console.log(`Publishing to ${args.to}${args.to === 'fs' ? ` (${resolve(process.env.FS_ROOT, process.env.FS_FOLDER)})` : ''}`);
 
-if (args.site) await uploadSite(storage);
+if (args.site) await uploadSite(publicStorage);
+if (storage.migrate) await storage.migrate();
 if (!args['no-posts']) await uploadPosts(storage, resolve(args.posts));
 if (dry) {
   console.log('Done (dry run): index.json and pages would be rebuilt.');
@@ -218,6 +301,7 @@ if (dry) {
   const { site, posts, rendered, removed, full } = await build(storage, md4c, {
     ...(await siteOptions(storage)),
     full: args.full,
+    privateSources: Boolean(storage.migrate),
     log: (msg) => (msg.startsWith('upload') || msg.startsWith('delete') ? log(msg) : console.warn(msg)),
   });
   console.log(`${full ? 'Full' : 'Incremental'} build: ${rendered.length} page(s) rendered, ${removed.length} removed.`);

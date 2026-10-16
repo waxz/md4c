@@ -180,6 +180,10 @@ uploading posts, rebuild the generated files:
 node scripts/publish.mjs --to r2 --no-posts
 ```
 
+(For a site published from the admin, add `--sources-bucket my-blog-drafts`:
+the admin keeps the posts' Markdown in the private drafts bucket, not the
+public one.)
+
 This lists the bucket with your API token, renders every post with md4c.wasm
 on your machine, and writes:
 - `posts/<slug>.html` for each post;
