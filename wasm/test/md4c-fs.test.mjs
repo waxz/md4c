@@ -640,3 +640,31 @@ describe('per-post style in the front matter: toc and numbered', () => {
     assert.equal(meta.numbered, 'true');
   });
 });
+
+test('uploads to R2/S3 keep their Cache-Control (storagesdk drops it)', async () => {
+  const { s3Put } = await import('../scripts/s3-put.mjs');
+  const seen = [];
+  const server = createServer((req, res) => {
+    seen.push({ method: req.method, url: req.url, cache: req.headers['cache-control'], type: req.headers['content-type'] });
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { etag: '"x"' });
+      res.end();
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const put = await s3Put('r2', {
+      R2_ENDPOINT: `http://127.0.0.1:${server.address().port}`, R2_BUCKET: 'blog', R2_ACCESS_KEY_ID: 'id', R2_SECRET_ACCESS_KEY: 'secret',
+    });
+    await put('lib/render.js', 'export {}', { contentType: 'text/javascript', cacheControl: 'public, no-cache' });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].method, 'PUT');
+    assert.match(seen[0].url, /^\/blog\/lib\/render\.js/);
+    assert.equal(seen[0].cache, 'public, no-cache');
+    assert.equal(seen[0].type, 'text/javascript');
+    assert.equal(await s3Put('fs'), null);
+  } finally {
+    server.close();
+  }
+});

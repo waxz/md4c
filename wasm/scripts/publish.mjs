@@ -56,6 +56,7 @@ import { linkPostsForStaticPage, PARSER_FLAGS } from '../js/blog-render.js';
 import { isDraft, parseFrontMatter, SLUG_RE } from '../js/post-format.js';
 import { protectPost, wantsPassword } from '../js/protect.js';
 import { build, CACHE_FILES, CACHE_PAGES, listAll, readIndex } from '../js/site-build.js';
+import { s3Put } from './s3-put.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -186,11 +187,18 @@ async function remove(storage, path) {
   if (!dry) await storage.delete(path);
 }
 
+// The site's code is checked for a new version on every visit (a cheap
+// 304 when unchanged): a browser keeping some modules longer than others
+// would run new code with old modules after a deploy. Fonts and images
+// may be reused for a while.
+const CACHE_CODE = CACHE_PAGES;
+const IS_CODE = /\.(js|mjs|css|wasm|html|json|txt|xml|svg)$/;
+
 async function uploadSite(storage) {
   const site = join(root, 'dist', 'blog');
   for await (const file of walk(site)) {
     const key = relative(site, file).split(sep).join('/');
-    await upload(storage, key, await readFile(file), contentTypeFor(key));
+    await upload(storage, key, await readFile(file), contentTypeFor(key), IS_CODE.test(key) ? CACHE_CODE : CACHE_FILES);
   }
 }
 
@@ -286,6 +294,12 @@ async function indexNow(storage, site, posts) {
 }
 
 const publicStorage = await openStorage(args.to);
+// The r2/s3 adapters drop Cache-Control (see s3-put.mjs): send those uploads directly.
+const putWithHeaders = await s3Put(args.to);
+if (putWithHeaders) {
+  const plain = publicStorage.upload.bind(publicStorage);
+  publicStorage.upload = (path, body, opts = {}) => (opts.cacheControl ? putWithHeaders(path, body, opts) : plain(path, body, opts));
+}
 const storage = args['sources-bucket']
   ? withPrivateSources(publicStorage, await openStorage(args.to, args['sources-bucket']))
   : publicStorage;

@@ -194,12 +194,15 @@ function entryHtml(p, root) {
 
 /**
  * The body of a protected article: the encrypted text and an unlock form,
- * which app.js wires up (the page's CSP allows no inline script).
+ * which app.js wires up (the page's CSP allows no inline script). If the
+ * script ever fails to run, the form must not send the password anywhere:
+ * method="post" keeps it out of the address (and history and logs), and
+ * the CSP's form-action 'none' blocks the request itself.
  */
 export function protectedArticle(envelope) {
   return `<div class="protected" data-envelope="${esc(JSON.stringify(envelope))}">
   <p>🔒 This post is password-protected.</p>
-  <form class="unlock" autocomplete="off">
+  <form class="unlock" method="post" autocomplete="off">
     <label for="unlock-password">Password</label>
     <input id="unlock-password" name="password" type="password" required autocomplete="current-password">
     <button type="submit">Unlock</button>
