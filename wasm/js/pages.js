@@ -342,7 +342,9 @@ ${html}
   return documentHtml({
     site: { ...site, numberedHeadings: numbered }, root, page: 'post',
     title: `${post.title} · ${site.title}`,
-    description, canonical: url, head: locked ? '' : head, main,
+    description, canonical: url,
+    // unlock.js guards the unlock form even if app.js cannot run.
+    head: locked ? `<script src="${root}unlock.js"></script>\n` : head, main,
     // Search engines would only see the unlock form.
     robots: locked ? 'noindex' : '',
   });

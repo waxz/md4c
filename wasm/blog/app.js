@@ -394,6 +394,9 @@ async function unlock(article) {
   const input = form.querySelector('input');
   const status = form.querySelector('.unlock-status');
   input.focus();
+  // unlock.js (a plain script that loads first) holds submissions until now.
+  document.documentElement.dataset.unlockReady = 'true';
+  if (status.dataset.waiting) status.textContent = 'Ready: press Unlock again.';
   await new Promise((done) => {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -429,6 +432,10 @@ document.addEventListener('click', (e) => {
 
 async function main() {
   const page = document.body.dataset.page;
+  // A protected post's form is wired first, before anything is fetched:
+  // a reader may type the password while the rest still loads.
+  const locked = page === 'post' && document.querySelector('article .protected');
+  const unlocked = locked ? unlock(document.querySelector('article')) : null;
   try {
     const baseUrl = new URL(STORAGE_URL, SITE_ROOT);
     fs = await Md4cFs.open({ baseUrl, wasmUrl: new URL('./lib/md4c.wasm', import.meta.url) });
@@ -451,7 +458,7 @@ async function main() {
         document.documentElement.style.setProperty('--bg-image', `url(${JSON.stringify(new URL(article.dataset.background, location.href).href)})`);
         document.documentElement.dataset.bg = article.dataset.backgroundMode === 'hero' ? 'hero' : 'page';
       }
-      if (article.querySelector('.protected')) await unlock(article);
+      if (unlocked) await unlocked;
       const canonical = document.querySelector('link[rel="canonical"]')?.href;
       await finishArticle(article, site, { ...article.dataset, url: canonical || location.href.split('#')[0] });
       await showConnections(article, article.dataset.slug);
