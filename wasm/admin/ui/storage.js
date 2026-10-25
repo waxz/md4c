@@ -7,7 +7,8 @@
 //     back to the browser).
 
 import { api, ApiError, browserStores } from './client.js';
-import { confirmDialog, esc, reportError, state, toast } from './shared.js';
+import { confirmDialog, esc, formatSize, reportError, state, toast } from './shared.js';
+import { localStore } from './local-store.js';
 
 // S3-compatible services: endpoint pattern and default region.
 const S3_PROVIDERS = {
@@ -64,7 +65,13 @@ function storeCard(s) {
 
 export async function showStorage(view) {
   view.innerHTML = '<p class="muted">Loading storage…</p>';
-  data = await api.storage();
+  try {
+    data = await api.storage();
+  } catch (err) {
+    if (err.code !== 'offline') throw err;
+    // Signed out: only this browser's own store is at hand.
+    data = { deployed: [], stores: [], offline: true };
+  }
   const all = [
     ...data.deployed.map((s) => ({ ...s, location: 'deploy' })),
     ...data.stores.map((s) => ({ ...s, location: 'kv' })),
@@ -78,15 +85,25 @@ export async function showStorage(view) {
     <p class="hint">Drafts and their images are kept in private storage until you publish. Add a NAS or
       Nextcloud (WebDAV), any S3-compatible bucket, or a GitHub repository. Keep its settings and password in
       this browser only, or in Cloudflare KV to use it from every device.</p>
-    <section class="post-section"><h2>Storage <span class="count">${all.length + 1}</span></h2>
+    <section class="post-section"><h2>Storage <span class="count">${all.length + 2}</span></h2>
       <ul class="post-cards">
         <li class="post-card store-card"><div class="post-card-main"><span class="post-title">Published site</span>
           <span class="post-meta"><span class="chip">R2 bucket</span><span>public</span></span></div></li>
         ${all.map(storeCard).join('')}
+        <li class="post-card store-card"><div class="post-card-main"><span class="post-title">This browser</span>
+          <span class="post-meta"><span class="chip">Browser database</span><span>this device only; no sign-in needed</span></span>
+          <span class="post-meta local-usage">…</span>
+          <span class="post-meta">Saving works offline and when Cloudflare Access has signed you out. Clearing this browser's
+            site data deletes it: publish, or move drafts to other storage, to keep them.</span></div>
+          <a class="btn btn-small" href="#/files/local/">Files</a></li>
       </ul>
     </section>
     <div class="store-form-slot"></div>
   </div>`;
+  localStore.usage().then((u) => {
+    const el = view.querySelector('.local-usage');
+    if (el) el.textContent = `${u.posts} post(s), ${u.files} file(s), ${formatSize(u.bytes)}`;
+  }, () => {});
   view.querySelector('.storage-view').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-act]');
     if (!btn || btn.closest('.store-form')) return;

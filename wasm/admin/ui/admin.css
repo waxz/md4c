@@ -366,3 +366,10 @@ button.post-card-link:disabled { cursor: default; opacity: .4; }
 .card-menu .danger { color: var(--danger); }
 .chip-busy { display: inline-flex; align-items: center; gap: .35rem; border-color: var(--accent); color: var(--accent); }
 .more-actions { align-self: center; font-size: .85rem; }
+
+/* Signed out of Cloudflare Access, or offline (admin.js) */
+.signed-out {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; padding: .6rem 1rem;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface)); border-bottom: 1px solid var(--line); font-size: .9rem;
+}
+.signed-out span { flex: 1; min-width: 14rem; }

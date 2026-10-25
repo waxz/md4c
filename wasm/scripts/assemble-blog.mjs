@@ -20,7 +20,8 @@ import { homePage, themeCss } from '../js/pages.js';
 import { siteSettings } from '../js/site-build.js';
 import { versionAssets } from './version-assets.mjs';
 import { createRequire } from 'node:module';
-import { dirname, join, sep } from 'node:path';
+import { createHash } from 'node:crypto';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -142,4 +143,23 @@ const adminHtml = join(adminOut, 'index.html');
 let html = await readFile(adminHtml, 'utf8');
 for (const file of ['admin.js', 'admin.css']) html = html.replace(`="${file}"`, `="${file}?v=${await adminVersion(file)}"`);
 await writeFile(adminHtml, html);
+
+// What the service worker (sw.js) caches so the admin opens even when
+// Cloudflare Access has signed it out: the app's files at the addresses the
+// app asks for (modules and stylesheets with their ?v= versions). Fonts are
+// cached as they are used. The build id makes every deploy reinstall it.
+const offline = [];
+for (const ent of await readdir(adminOut, { withFileTypes: true, recursive: true })) {
+  if (!ent.isFile()) continue;
+  const rel = relative(adminOut, join(ent.parentPath ?? ent.path, ent.name)).split(sep).join('/');
+  if (['sw.js', 'offline.json', 'site-assets.json'].includes(rel) || /^vendor\/(katex\/fonts|source-serif-4\/files)\//.test(rel)) continue;
+  if (/\.(js|mjs|css|wasm)$/.test(rel)) offline.push(`${rel}?v=${await adminVersion(rel)}`);
+  if (!/\.(js|mjs)$/.test(rel)) offline.push(rel); // pages, stylesheets the preview links plainly, …
+}
+offline.sort();
+const offlineJson = `${JSON.stringify(offline, null, 1)}\n`;
+await writeFile(join(adminOut, 'offline.json'), offlineJson);
+const swPath = join(adminOut, 'sw.js');
+const sw = await readFile(swPath, 'utf8');
+await writeFile(swPath, sw.replace("'__BUILD__'", `'${createHash('sha256').update(offlineJson + sw).digest('hex').slice(0, 12)}'`));
 console.log(`Admin app assembled in ${adminOut}`);

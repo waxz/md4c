@@ -208,6 +208,35 @@ window.addEventListener('beforeunload', (e) => {
   if (hasUnsavedChanges()) e.preventDefault();
 });
 
+/* ---------- Signed out of Cloudflare Access ---------- */
+
+// Access ends idle sessions. The admin then keeps working with the drafts
+// kept in this browser (sw.js serves the app from its cache); this banner
+// says so, and signs in again ("?signin" skips the cache once).
+function showSignedOut() {
+  if (document.querySelector('.signed-out')) return;
+  const bar = document.createElement('div');
+  bar.className = 'signed-out';
+  bar.setAttribute('role', 'status');
+  bar.innerHTML = `<span><b>Signed out or offline.</b> Drafts in “This browser” can still be opened, written and saved;
+    publishing and the other stores need you signed in.</span>
+    <a class="btn btn-small" href="./?signin${esc(location.hash)}">Sign in again</a>`;
+  bar.querySelector('a').addEventListener('click', () => {
+    // Keep what is being written: the editor stashes it on this device anyway.
+    bar.querySelector('a').href = `./?signin${location.hash}`;
+  });
+  document.querySelector('.app-bar').after(bar);
+}
+window.addEventListener('admin-offline', showSignedOut);
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js', { scope: './' }).catch((err) => console.warn('service worker:', err));
+}
+if (new URLSearchParams(location.search).has('signin')) {
+  // Back from the Access login: a clean address again.
+  history.replaceState(null, '', `${location.pathname}${location.hash}`);
+}
+
 async function main() {
   try {
     await init();
@@ -215,7 +244,8 @@ async function main() {
     view.innerHTML = `<p class="error">${esc(err.message ?? err)}</p>`;
     return;
   }
-  document.querySelector('.user').textContent = state.session.email;
+  document.querySelector('.user').textContent = state.session.offline ? 'signed out' : state.session.email;
+  if (state.session.offline) showSignedOut();
   const site = document.querySelector('.view-site');
   if (state.session.publicUrl) site.href = publicUrl('index.html');
   else site.hidden = true;

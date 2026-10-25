@@ -7,7 +7,7 @@
 // shows what is running, and the list refreshes when it is done.
 
 import { api } from './client.js';
-import { askDelete, deletePost, publishPost, unpublishPost } from './post-actions.js';
+import { askDelete, askMoveTarget, deletePost, moveDraft, publishPost, unpublishPost } from './post-actions.js';
 import { draftStores, esc, formatTime, publicUrl, reportError, state, storeLabel } from './shared.js';
 import { Cancelled, running } from './tasks.js';
 
@@ -106,7 +106,9 @@ function renderPosts(view, { posts, problems = [] }, stale) {
       ${stale ? '<span class="refreshing muted" aria-live="polite">Updating…</span>' : ''}
       <a class="btn btn-primary" href="#/new">New post</a>
     </div>
-    ${problems.map((p) => `<p class="notice error">${esc(p.error)} <a href="#/storage">Check storage</a></p>`).join('')}
+    ${problems.map((p) => p.store === 'server'
+      ? `<p class="notice">${esc(p.error)} <a href="./?signin${esc(location.hash)}">Sign in again</a></p>`
+      : `<p class="notice error">${esc(p.error)} <a href="#/storage">Check storage</a></p>`).join('')}
     <input type="search" class="search" placeholder="Search posts" aria-label="Search posts">
     <div class="post-sections"></div>
   </div>`;
@@ -139,6 +141,7 @@ function actionsFor(post) {
     { act: 'edit', label: 'Edit', href: editHref(editStore, editKey) },
     draft ? { act: 'publish', label: published ? 'Update site' : 'Publish', primary: true } : null,
     published ? { act: 'unpublish', label: draft ? 'Unpublish (keep the draft)' : 'Unpublish (keep as a draft)', hidden: !draftStores().length } : null,
+    draft && draftStores().length > 1 ? { act: 'move', label: 'Move draft to…' } : null,
     published ? { act: 'view', label: 'View on the blog', href: publicUrl(published.key.replace(/\.md$/, '.html')), external: true } : null,
     { act: 'delete', label: 'Delete…', danger: true },
   ].filter((a) => a && !a.hidden);
@@ -176,6 +179,10 @@ function wireMenus(view, rerender) {
       try {
         if (act === 'publish') await publishPost(post);
         else if (act === 'unpublish') await unpublishPost(post);
+        else if (act === 'move') {
+          const to = await askMoveTarget(post);
+          if (to) await moveDraft(post, to);
+        }
         else if (act === 'delete') {
           const what = await askDelete(post);
           if (what) await deletePost(post, what);

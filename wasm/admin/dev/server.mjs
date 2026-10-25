@@ -96,7 +96,24 @@ async function readBody(req) {
   return chunks.length ? Buffer.concat(chunks) : undefined;
 }
 
+// To try the admin signed out: GET /__dev/signout makes every request
+// answer as Cloudflare Access does for an expired session (a redirect to its
+// login page on another origin) until GET /__dev/signin.
+let signedOut = false;
+
 createServer(async (req, res) => {
+  if (req.url === '/__dev/signout' || req.url === '/__dev/signin') {
+    signedOut = req.url === '/__dev/signout';
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end(signedOut ? 'signed out' : 'signed in');
+    return;
+  }
+  if (signedOut && !new URL(req.url, 'http://x').searchParams.has('signin')) {
+    // Another origin, as Access's login page is (fetch cannot follow it there).
+    res.writeHead(302, { location: `http://localhost:${BLOG_PORT}/cdn-cgi/access/login` });
+    res.end();
+    return;
+  }
   if (req.url === '/cdn-cgi/access/certs') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ keys: [jwk] }));

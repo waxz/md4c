@@ -15,6 +15,7 @@ import { finishArticle, renderLive } from './render.js';
 import { attachSourceSync } from './sync.js';
 import { publishPost } from './post-actions.js';
 import { Cancelled } from './tasks.js';
+import { LOCAL_ID } from './local-store.js';
 import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
 import {
   confirmDialog, dialog, draftStores, esc, formatTime, getMd4c, publicUrl, rebuildSite, reportError, state,
@@ -124,7 +125,11 @@ export async function showEditor(view, store, key, newStore) {
         }
       }
       ({ text: source, etag } = await api.read(store, key));
-      if (!direct) published = store === 'site' ? { key, etag, text: source } : await readPublished(key);
+      if (!direct) {
+        // Signed out: whether it is published is unknown; the draft still opens.
+        published = store === 'site' ? { key, etag, text: source }
+          : await readPublished(key).catch((err) => (err.code === 'offline' ? null : Promise.reject(err)));
+      }
       // A protected post's public copy is encrypted; it records a digest of
       // the draft it was made from, so "changes not live" still works.
       const locked = published && store !== 'site' ? readProtected(published.text) : null;
@@ -146,7 +151,9 @@ export async function showEditor(view, store, key, newStore) {
     // The published copy: { key, etag, text } or null.
     published,
     // Where a new draft (and its photos) will be saved.
-    target: (stores.find((s) => s.id === (newStore ?? store)) ?? stores[0])?.id ?? 'site',
+    // (signed out, a new post starts in this browser: the others cannot be reached)
+    target: (stores.find((s) => s.id === (newStore ?? store))
+      ?? (state.session.offline ? stores.find((s) => s.id === LOCAL_ID) : null) ?? stores[0])?.id ?? 'site',
     slugTouched: !isNew,
     dirty: false,
     saved: source,
@@ -594,6 +601,20 @@ export async function showEditor(view, store, key, newStore) {
       } catch (err) {
         if (err instanceof ApiError && err.code === 'changed') {
           if ((await onChanged(err)) === 'retry') continue;
+          return;
+        }
+        if (err instanceof ApiError && err.code === 'offline' && home() !== LOCAL_ID && act === 'draft') {
+          // Signed out (or offline): keep the text in this browser instead.
+          const ok = await dialog({
+            title: 'Save in this browser?',
+            body: `${storeLabel(home())} cannot be reached: Cloudflare Access may have signed you out. Save this draft in “This browser” instead? `
+              + (ed.store ? `The copy in ${storeLabel(ed.store)} stays as it was; delete one of the two later.` : 'You can move it later.'),
+            buttons: [{ label: 'Cancel', value: false }, { label: 'Save in this browser', value: true, kind: 'primary' }],
+          });
+          if (ok) {
+            Object.assign(ed, { store: null, key: null, etag: null, target: LOCAL_ID });
+            continue;
+          }
           return;
         }
         if (err instanceof ApiError && ['exists', 'draft-exists', 'published-exists'].includes(err.code)) {

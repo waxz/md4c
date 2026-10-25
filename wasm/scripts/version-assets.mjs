@@ -36,6 +36,10 @@ export async function versionAssets(root, files) {
     } catch {
       return null; // not part of the site (e.g. made at publish time)
     }
+    if (busy.has(abs) && !isVendor(abs)) {
+      // An import cycle: this module would get two addresses, and load twice.
+      console.warn(`version-assets: import cycle through ${relative(root, abs)}; break it`);
+    }
     if (!abs.endsWith('.js') || isVendor(abs) || busy.has(abs)) {
       const h = hashOf(bytes);
       if (!busy.has(abs)) done.set(abs, h);
@@ -47,7 +51,8 @@ export async function versionAssets(root, files) {
     let last = 0;
     for (const m of text.matchAll(SPEC_RE)) {
       const [whole, lead, quote, spec] = m;
-      const v = await version(resolve(dirname(abs), spec));
+      const target = resolve(dirname(abs), spec);
+      const v = target === abs ? null : await version(target); // (a file naming itself, e.g. in a usage comment)
       parts.push(text.slice(last, m.index), v ? `${lead}${quote}${spec}?v=${v}${quote}` : whole);
       last = m.index + whole.length;
     }

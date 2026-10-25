@@ -2,6 +2,7 @@
 
 import { normalizeSite } from './lib/site-config.js';
 import { api, ApiError } from './client.js';
+import { LOCAL_STORE } from './local-store.js';
 import { requestBuild } from './tasks.js';
 
 // The Markdown engine and the site build load only when first needed
@@ -33,16 +34,48 @@ export const state = {
   rawSite: null,
 };
 
+// The last session and site settings, for when the server cannot be reached
+// (signed out of Cloudflare Access, offline): the admin still opens, with
+// the drafts kept in this browser.
+const SESSION_CACHE = 'md4c-admin-session';
+function remember(data) {
+  try {
+    localStorage.setItem(SESSION_CACHE, JSON.stringify({ ...JSON.parse(localStorage.getItem(SESSION_CACHE) ?? '{}'), ...data }));
+  } catch {}
+}
+function remembered() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_CACHE) ?? '{}') ?? {};
+  } catch {
+    return {};
+  }
+}
+
 export async function init() {
   // Session and site settings load side by side.
-  const index = readSiteIndex();
-  state.session = await api.session();
+  const index = readSiteIndex().catch((err) => {
+    if (err.code !== 'offline') throw err;
+    return { site: remembered().rawSite ?? null };
+  });
+  try {
+    state.session = await api.session();
+    remember({ session: { email: state.session.email, publicUrl: state.session.publicUrl } });
+  } catch (err) {
+    if (err.code !== 'offline') throw err;
+    const last = remembered().session ?? {};
+    state.session = {
+      email: last.email ?? '', publicUrl: last.publicUrl ?? '', kv: false, problems: [], maxUploadMb: 25,
+      stores: [{ id: 'site', label: 'Published site', role: 'site', type: 'r2', location: 'deploy' }, LOCAL_STORE],
+      offline: true,
+    };
+  }
   applySiteIndex(await index);
 }
 
 function applySiteIndex(index) {
   state.rawSite = index?.site ?? null;
   state.site = normalizeSite(state.rawSite, state.session.publicUrl || location.href);
+  if (!state.session.offline) remember({ rawSite: state.rawSite });
 }
 
 export async function refreshSite() {

@@ -66,6 +66,34 @@ delete every page by mistake. Without a `DRAFTS` bucket (only
 
 ## Draft stores
 
+### This browser
+
+Every admin also has **This browser**: a draft store in the browser's own
+database (IndexedDB). It works like the others: choose it under *Keep the
+draft in*, upload images into it, preview, publish, and move drafts to or
+from other storage with **Move draft to…** in a post's ⋯ menu. It needs no
+setup and no permission:
+
+- **Saving needs no network and no sign-in.** Cloudflare Access ends idle
+  sessions; the admin then keeps working with these drafts. A service worker
+  (`admin/ui/sw.js`) keeps the app's files, so the admin even reopens while
+  signed out. A banner says so, with **Sign in again**. Signed out, a new
+  post starts in This browser, and saving to other storage offers to keep
+  the draft here instead.
+- **Publishing** a draft from here is done by the browser: it works out the
+  files the post uses, asks which go public as usual, and uploads them and
+  the post through the file API (so it needs you signed in).
+- **Previews** read its files through the service worker, at
+  `local-files/<path>`.
+- **It is this device only.** Clearing the browser's data for the admin
+  deletes it. The Storage page shows how much it holds. Publish, or move
+  drafts to other storage, to keep them safe; the browser is asked to keep
+  the data rather than evict it.
+
+The id `local` is reserved for it.
+
+### Other storage
+
 The `DRAFTS` R2 bucket is always a draft store. Add more from the admin's
 **Storage** page, from any device, with no redeploy and no Worker secrets:
 

@@ -345,6 +345,8 @@ describe('Storage page', () => {
     assert.match(s3.data.error, /secret access key/);
     assert.equal((await putStorage({ version, stores: [dav({ baseUrl: 'ftp://x' })] })).data.code, 'bad-store');
     assert.equal((await putStorage({ version, stores: [{ id: 'gh', type: 'github', owner: 'me', repo: 'notes' }] })).data.code, 'bad-store');
+    const local = await putStorage({ version, stores: [dav({ id: 'local' })] });
+    assert.equal(local.data.code, 'bad-store', '"local" is the browser\'s own store');
   });
 
   test('without a KV namespace, saving is refused', async () => {

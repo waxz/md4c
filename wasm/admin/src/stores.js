@@ -572,8 +572,8 @@ function folderPath(id, v) {
 export function normalizeStore(input, previous) {
   if (!input || typeof input !== 'object') throw new StoreConfigError('each store must be an object');
   const id = str(input.id, 31);
-  if (!ID_RE.test(id) || id === 'site') {
-    throw new StoreConfigError(`store id "${id}" must start with a letter and use lowercase letters, digits and dashes, and not be "site"`);
+  if (!ID_RE.test(id) || id === 'site' || id === 'local') {
+    throw new StoreConfigError(`store id "${id}" must start with a letter and use lowercase letters, digits and dashes, and not be "site" or "local" (this browser's own store)`);
   }
   const type = str(input.type, 20);
   const spec = STORE_TYPES[type];
@@ -800,8 +800,8 @@ async function serverStores(env) {
     const stores = new Map([['site', { id: 'site', label: 'Published site', role: 'site', type: 'r2', location: 'deploy', store: siteStore }]]);
     const problems = [];
     for (const cfg of deployedConfigs(env)) {
-      if (!ID_RE.test(cfg?.id ?? '') || cfg.id === 'site') {
-        throw new StoreConfigError(`draft store id "${cfg?.id}" must be lowercase letters, digits and dashes, and not "site"`);
+      if (!ID_RE.test(cfg?.id ?? '') || cfg.id === 'site' || cfg.id === 'local') {
+        throw new StoreConfigError(`draft store id "${cfg?.id}" must be lowercase letters, digits and dashes, and not "site" or "local"`);
       }
       if (stores.has(cfg.id)) throw new StoreConfigError(`duplicate draft store id "${cfg.id}"`);
       const label = String(cfg.label ?? cfg.id).slice(0, 60);
