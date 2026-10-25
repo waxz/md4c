@@ -30,14 +30,27 @@ main.page:has(.paper) .article-header, main.page:has(.paper) .paper-notes { max-
 }
 .paper-page canvas { position: absolute; inset: 0; display: block; }
 
+/* Highlight colours: --hl is "r g b", for every tint of it. */
+.hl-yellow, [data-color="yellow"] { --hl: 250 204 21; }
+.hl-orange, [data-color="orange"] { --hl: 251 146 60; }
+.hl-red, [data-color="red"] { --hl: 239 68 68; }
+.hl-pink, [data-color="pink"] { --hl: 236 72 153; }
+.hl-purple, [data-color="purple"] { --hl: 168 85 247; }
+.hl-blue, [data-color="blue"] { --hl: 59 130 246; }
+.hl-green, [data-color="green"] { --hl: 34 197 94; }
+.hl-gray, [data-color="gray"] { --hl: 140 140 140; }
+
 /* Highlights lie under the text layer, so the text above stays selectable. */
 .paper-highlights { position: absolute; inset: 0; pointer-events: none; }
 .paper-hl { position: absolute; border-radius: 2px; mix-blend-mode: multiply; }
-.hl-yellow { background: rgb(255 212 0 / .42); }
-.hl-green { background: rgb(80 200 90 / .38); }
-.hl-blue { background: rgb(80 160 255 / .36); }
-.hl-pink { background: rgb(255 100 170 / .36); }
-.paper-hl.is-active { box-shadow: 0 0 0 2px var(--accent); }
+.paper-hl.shape-highlight { background: rgb(var(--hl) / .4); }
+.paper-hl.shape-underline { border-bottom: 2px solid rgb(var(--hl)); border-radius: 0; }
+.paper-hl.shape-strike { background: linear-gradient(transparent calc(50% - 1px), rgb(var(--hl)) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)); border-radius: 0; }
+.paper-hl.shape-box { border: 2px solid rgb(var(--hl)); background: rgb(var(--hl) / .08); border-radius: 4px; mix-blend-mode: normal; }
+.paper-hl.is-active { box-shadow: 0 0 0 2px rgb(var(--hl)), 0 0 0 4px rgb(var(--hl) / .3); }
+.paper-hl.paper-drawing { border-style: dashed; }
+.paper-pages.is-area { cursor: crosshair; touch-action: none; }
+.paper-pages.is-area .textLayer { pointer-events: none; }
 
 /* The text layer (after pdf.js's web/pdf_viewer.css, Apache-2.0): clear
    text over the drawing, for selecting and copying. */
@@ -61,39 +74,128 @@ main.page:has(.paper) .article-header, main.page:has(.paper) .paper-notes { max-
 .paper-page .textLayer br::selection { background: transparent; }
 .paper-page .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
 
-.paper-highlight-btn {
-  position: absolute; z-index: 5; font: inherit; font-size: .85rem; font-weight: 600; padding: .35rem .8rem;
-  border: 0; border-radius: 999px; background: var(--accent); color: #fff; box-shadow: 0 3px 12px rgb(0 0 0 / .25); cursor: pointer;
-}
+/* ---------- Comments (cards, as in Notion) ---------- */
 
-/* ---------- Comments ---------- */
-
-.paper-comments { position: sticky; top: 1rem; max-height: calc(min(80vh, 60rem) + 2.4rem); overflow: auto; padding: .2rem .2rem .5rem; }
+.paper-comments { position: sticky; top: 1rem; max-height: calc(min(80vh, 60rem) + 2.4rem); overflow: auto; padding: 2px 4px 8px; }
 @media (max-width: 900px) { .paper-comments { position: static; max-height: none; } }
-.paper-comments h2 { margin: 0 0 .6rem; font-size: .85rem; font-weight: 400; color: var(--muted); }
-.paper-comments .count { margin-left: .3em; }
-.annotations { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.paper-comments-head { display: flex; align-items: center; gap: .45rem; margin: .1rem .1rem .6rem; font-size: .8rem; font-weight: 600; letter-spacing: .02em; color: var(--muted); }
+.paper-comments-head .count { min-width: 1.4em; padding: 0 .4em; border-radius: 999px; background: color-mix(in srgb, var(--muted) 16%, transparent); font-weight: 500; text-align: center; font-variant-numeric: tabular-nums; }
+.paper-hint { font-size: .88rem; line-height: 1.5; }
+.paper-hint svg { vertical-align: -2px; margin: 0 .15em; }
+.annotations { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.annotation:not([data-color]) { --hl: 250 204 21; }
 .annotation {
-  padding: .55rem .7rem; border: 1px solid var(--rule); border-left: 4px solid rgb(255 212 0); border-radius: 4px;
-  background: var(--surface); font-size: .9rem; cursor: pointer; scroll-margin: 1rem;
+  position: relative; padding: .6rem .75rem .65rem .9rem; border: 1px solid var(--rule); border-radius: 8px;
+  background: var(--surface); font-size: .9rem; line-height: 1.5; cursor: pointer; scroll-margin: 1rem;
+  transition: border-color .15s, box-shadow .15s, background-color .15s;
 }
-.annotation[data-color="green"] { border-left-color: rgb(80 200 90); }
-.annotation[data-color="blue"] { border-left-color: rgb(80 160 255); }
-.annotation[data-color="pink"] { border-left-color: rgb(255 100 170); }
-.annotation.is-active, .annotation:target { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.annotation-at { font-size: .75rem; color: var(--muted); text-decoration: none; }
-.annotation-quote { margin: .3rem 0; padding: 0 0 0 .6rem; border-left: 2px solid var(--rule); color: var(--ink-soft); font-family: var(--font-serif); font-size: .92rem; font-style: italic; }
-.annotation-comment { font-family: var(--font-serif); color: var(--ink); overflow-wrap: anywhere; }
-.annotation-comment > :first-child { margin-top: .2rem; }
+.annotation::before { content: ""; position: absolute; left: 0; top: .55rem; bottom: .55rem; width: 3px; border-radius: 0 3px 3px 0; background: rgb(var(--hl)); }
+.annotation:hover { border-color: color-mix(in srgb, var(--muted) 45%, var(--rule)); }
+.annotation.is-active, .annotation:target { border-color: rgb(var(--hl)); box-shadow: 0 0 0 3px rgb(var(--hl) / .22); }
+.annotation-at { display: inline-block; font-size: .72rem; font-weight: 600; letter-spacing: .03em; color: var(--muted); text-decoration: none; padding: .05rem .4rem; border-radius: 4px; background: rgb(var(--hl) / .16); }
+.annotation-at:hover { background: rgb(var(--hl) / .3); color: var(--ink); }
+.annotation-quote { margin: .4rem 0 .2rem; padding: 0 0 0 .6rem; border-left: 2px solid rgb(var(--hl) / .6); color: var(--ink-soft); font-size: .86rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.annotation[data-shape="strike"] .annotation-quote { text-decoration: line-through; text-decoration-color: rgb(var(--hl)); }
+.annotation[data-shape="underline"] .annotation-quote { text-decoration: underline 2px; text-decoration-color: rgb(var(--hl)); text-underline-offset: 3px; }
+.annotation.is-active .annotation-quote { -webkit-line-clamp: unset; }
+.annotation-comment { margin-top: .35rem; color: var(--ink); overflow-wrap: anywhere; }
+.annotation-comment > :first-child { margin-top: 0; }
 .annotation-comment > :last-child { margin-bottom: 0; }
+.annotation-comment p { margin: .35em 0; }
 .annotation-comment:empty { display: none; }
+.annotation-backlinks { margin-top: .45rem; padding-top: .4rem; border-top: 1px dashed var(--rule); font-size: .78rem; line-height: 1.8; }
+.annotation-backlinks a { margin-right: .25rem; }
 
-/* Editing (the admin) */
-.annotation-head { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
-.annotation-head .annotation-at { margin-right: auto; }
-.annotation-head select { font: inherit; font-size: .78rem; }
-.annotation textarea { width: 100%; box-sizing: border-box; margin-top: .3rem; font: .88rem/1.45 var(--font-mono, monospace); padding: .4rem; border: 1px solid var(--rule); border-radius: 4px; resize: vertical; }
+/* Inside an article, the prose's list, quote and paragraph styles stay out of the cards. */
+.paper-comments .annotations { margin: 0; padding: 0; }
+.paper-comments .annotation { margin: 0; }
+:is(.paper-comments, .paper-peek) .annotation-quote { margin: .4rem 0 .2rem; padding: 0 0 0 .6rem; border-left: 2px solid rgb(var(--hl, 140 140 140) / .6); font-size: .86rem; }
+:is(.paper-comments, .paper-peek) .annotation-comment p { margin: .35em 0; }
 
-.paper-notes { margin-top: 1rem; }
+/* Tools on a card: shown on hover (always, on a touch screen). */
+.annotation-tools { position: absolute; top: .4rem; right: .45rem; display: flex; gap: 1px; padding: 1px; border-radius: 6px; background: var(--surface); opacity: 0; transition: opacity .12s; }
+.annotation:hover .annotation-tools, .annotation:focus-within .annotation-tools, .annotation.is-active .annotation-tools { opacity: 1; }
+@media (hover: none) { .annotation-tools { opacity: 1; } }
+.annotation-tools button, .pop-icon {
+  display: inline-grid; place-items: center; width: 1.7rem; height: 1.7rem; padding: 0; border: 0; border-radius: 5px;
+  background: none; color: var(--muted); cursor: pointer;
+}
+.annotation-tools button:hover, .pop-icon:hover { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--ink); }
+.annotation-tools button.is-done, .pop-icon.is-done { color: #16a34a; }
+.annotation-tools [data-act="delete"]:hover, .pop-danger:hover { color: var(--danger, #b3261e); }
+.annotation-add { display: block; margin-top: .3rem; padding: .15rem 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: .86rem; cursor: text; }
+.annotation-add:hover { color: var(--ink); }
 
-@media print { .paper { display: block; } .paper-viewer { display: none; } .paper-comments { position: static; max-height: none; overflow: visible; } }
+/* A link to a highlight: a chip (in the notes and in comments). */
+a.annotation-ref {
+  padding: .05em .35em; border-radius: 4px; color: inherit; text-decoration: none; white-space: normal;
+  background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 35%, transparent);
+}
+a.annotation-ref::before { content: "↗"; margin-right: .2em; font-size: .8em; color: var(--accent); }
+a.annotation-ref[href^="#"]::before { content: "¶"; }
+a.annotation-ref:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* ---------- Pop-ups: peek, selection bar, comment editor ---------- */
+
+.paper-pop {
+  position: fixed; z-index: 60; box-sizing: border-box; font-family: var(--font-sans); font-size: .88rem; line-height: 1.45; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 10px;
+  box-shadow: 0 10px 32px rgb(0 0 0 / .18), 0 2px 6px rgb(0 0 0 / .08);
+  animation: paper-pop-in .12s ease-out;
+}
+.paper-pop[hidden] { display: none; }
+@keyframes paper-pop-in { from { opacity: 0; transform: translateY(-3px); } }
+.pop-row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.pop-sep { width: 1px; height: 1.2rem; margin: 0 4px; background: var(--rule); }
+.pop-head { display: flex; align-items: baseline; gap: .5rem; margin-bottom: .45rem; }
+.pop-page { flex: none; font-size: .72rem; font-weight: 600; color: var(--muted); padding: .05rem .4rem; border-radius: 4px; background: rgb(var(--hl, 140 140 140) / .18); }
+.pop-quote { color: var(--ink-soft, var(--muted)); font-size: .84rem; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pop-link { margin-left: auto; padding: 0; border: 0; background: none; font: inherit; font-size: .8rem; color: var(--accent); cursor: pointer; }
+.pop-empty { margin: .2rem 0 0; }
+.pop-btn {
+  display: inline-flex; align-items: center; gap: .3rem; font: inherit; font-size: .84rem; font-weight: 500; padding: .3rem .65rem;
+  border: 0; border-radius: 6px; background: none; color: var(--ink); cursor: pointer;
+}
+.pop-btn:hover { background: color-mix(in srgb, var(--muted) 15%, transparent); }
+.pop-primary { background: var(--accent); color: var(--accent-ink, #fff); }
+.pop-primary:hover { background: color-mix(in srgb, var(--accent) 85%, #000); }
+.swatch { width: 1.35rem; height: 1.35rem; padding: 0; border: 2px solid var(--surface); border-radius: 50%; background: rgb(var(--hl)); box-shadow: 0 0 0 1px rgb(0 0 0 / .1); cursor: pointer; }
+.swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px rgb(var(--hl)); }
+.swatch:hover { transform: scale(1.12); }
+.shape-btn { display: inline-grid; place-items: center; width: 1.9rem; height: 1.75rem; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--ink); cursor: pointer; }
+.shape-btn:hover { background: color-mix(in srgb, var(--muted) 15%, transparent); }
+.shape-btn[aria-pressed="true"] { background: color-mix(in srgb, var(--muted) 22%, transparent); }
+.shape-icon { font-weight: 700; font-size: .85rem; line-height: 1.2; padding: 0 2px; border-radius: 2px; }
+.shape-icon.shape-highlight { background: rgb(var(--hl) / .5); }
+.shape-icon.shape-underline { text-decoration: underline 2px rgb(var(--hl)); text-underline-offset: 2px; }
+.shape-icon.shape-strike { text-decoration: line-through 2px rgb(var(--hl)); }
+.shape-icon.shape-box { outline: 2px solid rgb(var(--hl)); outline-offset: 0; }
+
+.paper-peek { width: min(22rem, calc(100vw - 16px)); max-height: 50vh; overflow: auto; padding: .65rem .8rem; }
+.paper-peek .annotation-quote { -webkit-line-clamp: 3; }
+.paper-selbar { padding: 4px 6px; }
+.paper-editor { width: min(27rem, calc(100vw - 16px)); padding: .7rem .8rem .6rem; }
+.paper-editor textarea {
+  display: block; width: 100%; box-sizing: border-box; min-height: 5.5rem; margin: 0 0 .5rem; padding: .5rem .6rem;
+  font: .9rem/1.5 var(--font-sans); color: var(--ink); background: color-mix(in srgb, var(--muted) 7%, var(--surface));
+  border: 1px solid transparent; border-radius: 7px; resize: vertical; outline: none;
+}
+.paper-editor textarea:focus { border-color: rgb(var(--hl) / .8); box-shadow: 0 0 0 3px rgb(var(--hl) / .18); }
+.pop-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: .55rem; padding-top: .5rem; border-top: 1px solid var(--rule); }
+.pop-foot select { max-width: 11rem; font: inherit; font-size: .8rem; padding: .2rem .3rem; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+.pop-spacer { flex: 1; }
+@media (max-width: 600px) {
+  /* A sheet at the bottom, over the keyboard's top. */
+  .paper-editor .pop-foot select { max-width: 8.5rem; }
+  .paper-editor { left: 0; right: 0; bottom: 0; top: auto; width: auto; border-radius: 14px 14px 0 0; padding-bottom: max(.7rem, env(safe-area-inset-bottom)); }
+}
+
+/* The Area tool */
+.paper-area-btn { display: inline-flex; align-items: center; gap: .25rem; margin-left: .5rem; }
+.paper-area-btn[aria-pressed="true"] { background: var(--accent) !important; color: var(--accent-ink, #fff) !important; border-color: var(--accent) !important; }
+
+/* ---------- The notes, above the PDF ---------- */
+
+.paper-notes { margin: 0 auto 2rem; }
+
+@media print { .paper { display: block; } .paper-viewer, .paper-pop, .annotation-tools { display: none; } .paper-comments { position: static; max-height: none; overflow: visible; } }

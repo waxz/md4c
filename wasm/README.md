@@ -266,21 +266,30 @@ General notes, in Markdown. The encoder is discussed in
 [[transformer-survey#a-k3j9x2|the survey]].
 ```
 
-- **On the blog,** the PDF is drawn in the page (pdf.js, self-hosted, loaded
-  only on these posts; its text can be selected and copied). Highlights sit
-  on the text in their colour; the comments are listed beside it (below it
-  on a phone). Clicking a comment scrolls the PDF to its highlight; clicking
-  a highlight shows its comment. Each highlight has its own address,
-  `…/attention-notes.html#a-k3j9x2`.
-- **Cross-references:** `[[other-paper#a-…]]` links to a highlight in
-  another paper post (the page opens there), `[[#a-…]]` to one in the same
-  paper; in comments and in the notes. They count as links between posts
-  (backlinks, the graph).
+- **On the blog,** the notes come first, then the PDF (pdf.js, self-hosted,
+  loaded only on these posts; its text can be selected and copied) with
+  the comments beside it (below it on a phone). Highlights sit on the text
+  in their colour and shape. Clicking a comment scrolls the PDF to its
+  highlight; clicking a highlight shows its comment (on a phone, in a small
+  card over the PDF). Each highlight has its own address,
+  `…/attention-notes.html#a-k3j9x2`, and a link button on its card.
+- **Cross-references:** `[[#a-…]]` links to a highlight in the same paper,
+  `[[other-paper#a-…]]` to one in another paper post (the page opens
+  there); in the notes and in comments. They show as chips (a bare
+  `[[#a-…]]` is labelled with the page and the quote); clicking one jumps
+  to the highlight and its comment, hovering one peeks at the comment. Each
+  comment lists where it is *referenced in* (the notes, other comments).
+  Links to other posts count as links between posts (backlinks, the graph).
 - **In the admin,** choose *Paper notes* under *Kind of post* and upload
-  the PDF. The right-hand pane shows **PDF & comments**: select text in the
-  PDF and click **Highlight**; write the comment (Markdown) beside it, pick
-  a colour, or **Copy link** for a cross-reference to paste elsewhere.
-  **Page preview** shows the page as published.
+  the PDF. The right-hand pane shows **PDF & comments**. Select text in the
+  PDF: a bar pops up with the shapes (highlight, underline, strike out,
+  box) and eight colours; a colour highlights the selection at once,
+  **Comment** opens a pop-up to write the comment (Markdown; *Link a
+  highlight…* inserts a reference; Ctrl+Enter saves, Esc cancels). The
+  **Area** tool draws a box around a figure, a table or a formula. Click a
+  highlight (or ✎ on its card) to edit it; the cards also copy a
+  cross-reference to paste elsewhere, and delete. The last colour and
+  shape are remembered. **Page preview** shows the page as published.
 - The highlights are kept in the post's own Markdown, in a
   ` ```md4c-annotations ` block the editor keeps out of sight: one file to
   save, autosave, move, publish and encrypt. A password-protected paper post

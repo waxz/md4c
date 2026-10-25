@@ -82,6 +82,11 @@ export function renderLiveHtml(html, { postUrl, storageBase, postHref }) {
     const a = document.createElement('a');
     // [[post]], [[paper#a-…]] (a highlight there) or [[#a-…]] (one here)
     a.href = wikiHref(el.dataset.target ?? '', postHref) || '#';
+    const ref = /#(a-[a-z0-9]{4,16})$/.exec(a.getAttribute('href'));
+    if (ref) {
+      a.className = 'annotation-ref';
+      a.dataset.ref = ref[1];
+    }
     a.append(...el.childNodes);
     el.replaceWith(a);
   }

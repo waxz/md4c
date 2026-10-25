@@ -471,6 +471,7 @@ export async function showEditor(view, store, key, newStore) {
       },
       // A cross-reference to paste in other notes: [[this-post#a-…|p. 3: “…”]]
       linkFor: (id, a) => `[[${slug() || 'this-post'}#${id}|p. ${a.page}${a.quote ? `: “${a.quote.slice(0, 40)}${a.quote.length > 40 ? '…' : ''}”` : ''}]]`,
+      notes: () => f.body.value,
       confirmDelete: (a) => confirmDialog('Delete this highlight?', `${a.quote ? `“${a.quote.slice(0, 100)}” ` : ''}and its comment are removed from the post.`, 'Delete'),
     }).then((h) => { annotator = h; }, (err) => console.warn('annotator:', err));
   }
@@ -482,7 +483,12 @@ export async function showEditor(view, store, key, newStore) {
     if (paperView === 'preview') updatePreview();
   });
   let pdfTimer;
+  let notesTimer;
   form.addEventListener('input', (e) => {
+    if (e.target === f.body && annotator) { // "Referenced in" on the comments
+      clearTimeout(notesTimer);
+      notesTimer = setTimeout(() => annotator?.refresh(), 800);
+    }
     if (e.target === f.pdf) {
       clearTimeout(pdfTimer);
       pdfTimer = setTimeout(() => paperUi(), 600);

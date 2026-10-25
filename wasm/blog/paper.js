@@ -1,22 +1,28 @@
 // The PDF of a paper-notes post (js/paper.js), drawn with pdf.js, with its
 // highlights on the pages and their comments beside it, linked both ways:
-// a highlight scrolls its comment into view, a comment scrolls the PDF to
-// its highlight, and an address ending in #a-… (also from another post:
-// [[that-paper#a-…]]) opens at that highlight.
+// a highlight shows its comment, a comment scrolls the PDF to its highlight,
+// a reference chip ([[#a-…]], in the notes or a comment) jumps to both, and
+// an address ending in #a-… (also from another post: [[that-paper#a-…]])
+// opens at that highlight.
 //
 //   mountPaper(el, opts)   el = the .paper element of the article
 //     opts.pdfUrl          the PDF's address (default: data-pdf, next to the page)
-//     opts.editable        the admin: select text, then "Highlight" makes an
-//                          annotation; comments are edited in the side panel
+//     opts.editable        the admin: select text (or draw a box with the Area
+//                          tool), pick a colour and shape in the bar that pops
+//                          up, and write the comment in a pop-up
 //     opts.annotations     (editable) the annotations; else read from the page
 //     opts.onChange(list)  (editable) after any change
 //     opts.renderComment(md)   (editable) a comment's preview HTML
 //     opts.linkFor(id, a)  (editable) the cross-reference to copy, e.g. [[slug#a-…]]
+//     opts.notes()         (editable) the notes' Markdown (for "Referenced in")
+//     opts.confirmDelete(a)    (editable) resolves true to delete
 //
 // pdf.js is self-hosted under vendor/pdfjs/ (the pages' CSP allows only the
 // blog's own scripts), loaded on first use, with eval off.
 
-import { COLORS, newAnnotationId, sortAnnotations } from './lib/paper.js';
+import {
+  COLORS, SHAPES, annotationLabel, backlinks, backlinksHtml, markAnnotationRefs, newAnnotationId, sortAnnotations,
+} from './lib/paper.js';
 
 const PDFJS = new URL('./vendor/pdfjs/', import.meta.url);
 let pdfjsPromise;
@@ -39,6 +45,36 @@ function addCss() {
   document.head.append(link);
 }
 
+// Small line icons (stroke = the text colour).
+const svg = (d) => `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const ICON = {
+  edit: svg('<path d="M11 2.5l2.5 2.5L6 12.5H3.5V10z"/>'),
+  link: svg('<path d="M7 9a3 3 0 004.2.2l2-2a3 3 0 00-4.2-4.2l-1 1"/><path d="M9 7a3 3 0 00-4.2-.2l-2 2a3 3 0 004.2 4.2l1-1"/>'),
+  trash: svg('<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/>'),
+  area: svg('<path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11"/>'),
+  comment: svg('<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>'),
+};
+const SHAPE_NAMES = { highlight: 'Highlight', underline: 'Underline', strike: 'Strike out', box: 'Box' };
+const shapeOf = (a) => (SHAPES.includes(a.shape) ? a.shape : SHAPES[0]);
+const colorOf = (a) => (COLORS.includes(a.color) ? a.color : COLORS[0]);
+const capital = (s) => s[0].toUpperCase() + s.slice(1);
+
+/** The colour and shape used last (in this browser). */
+const STYLE_KEY = 'md4c-paper-style';
+function lastStyle() {
+  try {
+    const v = JSON.parse(localStorage.getItem(STYLE_KEY) || '{}');
+    return { color: COLORS.includes(v.color) ? v.color : COLORS[0], shape: SHAPES.includes(v.shape) ? v.shape : SHAPES[0] };
+  } catch {
+    return { color: COLORS[0], shape: SHAPES[0] };
+  }
+}
+function keepStyle(style) {
+  try {
+    localStorage.setItem(STYLE_KEY, JSON.stringify(style));
+  } catch {}
+}
+
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 /** The annotations of a published page, from its comment list. */
@@ -48,7 +84,10 @@ function readAnnotations(el) {
     try {
       rects = JSON.parse(li.dataset.rects || '[]');
     } catch {}
-    return { id: li.id, page: Number(li.dataset.page), rects, color: li.dataset.color, li };
+    return {
+      id: li.id, page: Number(li.dataset.page), rects, color: li.dataset.color, shape: li.dataset.shape, li,
+      quote: li.querySelector('.annotation-quote')?.textContent ?? '',
+    };
   });
 }
 
@@ -66,10 +105,10 @@ export async function mountPaper(el, opts = {}) {
       <button type="button" data-zoom="0" class="paper-zoom-label" aria-label="Fit the width">100%</button>
       <button type="button" data-zoom="1" aria-label="Zoom in">+</button>
       <span class="paper-pageinfo muted"></span>
+      ${editable ? `<button type="button" class="paper-area-btn" aria-pressed="false" title="Draw a box around a figure, table or formula">${ICON.area}<span>Area</span></button>` : ''}
       <a class="paper-download" href="${esc(pdfUrl)}" target="_blank" rel="noopener">PDF ↗</a>
     </div>
-    <div class="paper-pages" tabindex="0" aria-label="PDF pages"><p class="paper-loading muted">Loading the PDF…</p></div>
-    ${editable ? '<button type="button" class="paper-highlight-btn" hidden>Highlight</button>' : ''}`;
+    <div class="paper-pages" tabindex="0" aria-label="PDF pages"><p class="paper-loading muted">Loading the PDF…</p></div>`;
   const pagesEl = viewer.querySelector('.paper-pages');
 
   let pdfjs;
@@ -92,6 +131,10 @@ export async function mountPaper(el, opts = {}) {
   }
 
   /* ---------- Pages ---------- */
+
+  const cleanups = [];
+  let activeId = ''; // the highlight shown
+  let quietUntil = 0; // a click that ends drawing a box is not a click on it
 
   let zoom = 1;
   const pages = []; // { n, el, base: viewport at scale 1, rendered: scale, task }
@@ -181,25 +224,27 @@ export async function mountPaper(el, opts = {}) {
       for (const a of list.filter((x) => x.page === p.n)) {
         for (const [x, y, w, h] of a.rects) {
           const r = document.createElement('div');
-          r.className = `paper-hl hl-${COLORS.includes(a.color) ? a.color : 'yellow'}`;
+          r.className = `paper-hl hl-${colorOf(a)} shape-${shapeOf(a)}`;
           r.dataset.id = a.id;
           r.style.left = `${x * 100}%`;
           r.style.top = `${y * 100}%`;
           r.style.width = `${w * 100}%`;
           r.style.height = `${h * 100}%`;
-          r.title = 'Show the comment';
           layer.append(r);
         }
       }
     }
+    if (activeId) setActive(activeId);
   }
 
   const flash = (node) => node?.animate?.([{ outline: '3px solid var(--accent, #8b1e2d)' }, { outline: '3px solid transparent' }], { duration: 1400 });
   const commentOf = (id) => side.querySelector(`[data-annotation="${CSS.escape(id)}"], li#${CSS.escape(id)}`);
+  const narrow = () => window.matchMedia('(max-width: 900px)').matches;
+  const byId = (id) => list.find((x) => x.id === id);
 
   /** Scroll the PDF to annotation `id` and flash it. */
   function showInPdf(id) {
-    const a = list.find((x) => x.id === id);
+    const a = byId(id);
     const p = a && pages[a.page - 1];
     if (!p) return;
     const top = p.el.offsetTop + (a.rects[0]?.[1] ?? 0) * p.el.offsetHeight - pagesEl.clientHeight / 3;
@@ -210,48 +255,203 @@ export async function mountPaper(el, opts = {}) {
     setActive(id);
   }
 
-  /** Scroll the side panel to the comment of `id`. */
-  function showComment(id) {
+  /**
+   * Bring the comment of `id` into view: within the side panel when it
+   * scrolls on its own (beside the PDF), else the page itself when `page`.
+   */
+  function showComment(id, page = false) {
     const c = commentOf(id);
     if (!c) return;
-    c.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (side.scrollHeight > side.clientHeight + 1) {
+      const top = c.getBoundingClientRect().top - side.getBoundingClientRect().top + side.scrollTop - 8;
+      side.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    } else if (page) c.scrollIntoView({ behavior: 'smooth', block: 'center' });
     flash(c);
     setActive(id);
   }
 
+  /** A reference chip was followed: the highlight in the PDF, and its comment. */
+  function jumpTo(id) {
+    closePeek();
+    if (narrow()) showComment(id, true); // stacked: the comment, under the PDF
+    else {
+      const r = el.getBoundingClientRect();
+      if (r.top < -10 || r.top > window.innerHeight * 0.4) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      showComment(id);
+    }
+    showInPdf(id);
+  }
+
   function setActive(id) {
+    activeId = id;
     for (const c of side.querySelectorAll('.is-active')) c.classList.remove('is-active');
     for (const r of viewer.querySelectorAll('.paper-hl.is-active')) r.classList.remove('is-active');
     commentOf(id)?.classList.add('is-active');
     for (const r of viewer.querySelectorAll(`.paper-hl[data-id="${CSS.escape(id)}"]`)) r.classList.add('is-active');
   }
 
+  /* ---------- Pop-ups: a peek at a comment, the selection bar, the comment editor ---------- */
+
+  const popup = (cls) => {
+    const node = document.createElement('div');
+    node.className = `paper-pop ${cls}`;
+    node.hidden = true;
+    el.append(node); // fixed: out of the grid's flow
+    return node;
+  };
+  /** Put a pop-up by `rect` (client coordinates): below it, else above, kept on screen. */
+  function place(node, rect) {
+    node.hidden = false;
+    if (node.classList.contains('paper-editor') && window.matchMedia('(max-width: 600px)').matches) {
+      node.style.left = node.style.top = ''; // a sheet at the bottom (CSS)
+      return;
+    }
+    const w = node.offsetWidth;
+    const h = node.offsetHeight;
+    let top = rect.bottom + 8;
+    if (top + h > window.innerHeight - 8 && rect.top - h - 8 > 8) top = rect.top - h - 8;
+    top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - w - 8));
+    node.style.left = `${left}px`;
+    node.style.top = `${top}px`;
+  }
+
+  const peekEl = popup('paper-peek');
+  let peekFor = '';
+  /** The comment of `id` in a small card by `rect`. */
+  function peek(id, rect, withGo = false) {
+    const a = byId(id);
+    if (!a) return;
+    peekFor = id;
+    const comment = commentHtml(a);
+    peekEl.innerHTML = `<div class="pop-head"><span class="pop-page hl-${colorOf(a)}">p. ${a.page}</span>${withGo ? `<button type="button" class="pop-link" data-go="${esc(id)}">Show comment ↓</button>` : ''}</div>
+      ${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>` : ''}
+      ${comment ? `<div class="annotation-comment">${comment}</div>` : '<p class="muted pop-empty">No comment.</p>'}`;
+    place(peekEl, rect);
+  }
+  function closePeek() {
+    peekEl.hidden = true;
+    peekFor = '';
+  }
+  peekEl.addEventListener('click', (e) => {
+    const go = e.target.closest('[data-go]');
+    if (go) {
+      closePeek();
+      showComment(go.dataset.go, true);
+    }
+  });
+
+  /** A comment's HTML: from the page as published, or rendered (editing). */
+  function commentHtml(a) {
+    if (a.li) return a.li.querySelector('.annotation-comment')?.innerHTML.trim() ?? '';
+    return a.comment?.trim() && opts.renderComment ? markAnnotationRefs(opts.renderComment(a.comment), list) : '';
+  }
+
   // Highlights lie under the text (so it can still be selected): a click
   // that selects nothing finds the highlight under it by position.
-  pagesEl.addEventListener('click', (e) => {
-    if (window.getSelection()?.isCollapsed === false) return;
-    const pageEl = e.target.closest('.paper-page');
-    if (!pageEl) return;
+  const hitAt = (pageEl, clientX, clientY) => {
     const box = pageEl.getBoundingClientRect();
-    const fx = (e.clientX - box.left) / box.width;
-    const fy = (e.clientY - box.top) / box.height;
-    const hit = list.find((a) => a.page === Number(pageEl.dataset.page)
-      && a.rects.some(([x, y, w, h]) => fx >= x && fx <= x + w && fy >= y - 0.003 && fy <= y + h + 0.003));
-    if (hit) showComment(hit.id);
+    const fx = (clientX - box.left) / box.width;
+    const fy = (clientY - box.top) / box.height;
+    return list.find((a) => a.page === Number(pageEl.dataset.page)
+      && a.rects.some(([x, y, w, h]) => fx >= x - 0.003 && fx <= x + w + 0.003 && fy >= y - 0.004 && fy <= y + h + 0.004));
+  };
+  pagesEl.addEventListener('click', (e) => {
+    if (window.getSelection()?.isCollapsed === false || pagesEl.classList.contains('is-area') || Date.now() < quietUntil) return;
+    const pageEl = e.target.closest('.paper-page');
+    const hit = pageEl && hitAt(pageEl, e.clientX, e.clientY);
+    if (!hit) return;
+    if (editable) {
+      openEditor(hit);
+      setActive(hit.id);
+      return;
+    }
+    showComment(hit.id);
+    // Stacked (a phone): the comments are far below; peek at it here.
+    if (narrow()) peek(hit.id, { left: e.clientX - 40, right: e.clientX, top: e.clientY - 10, bottom: e.clientY + 10 }, true);
   });
+
   side.addEventListener('click', (e) => {
+    if (e.target.closest('a.annotation-ref, .annotation-backlinks a, button, textarea, select, input')) return; // below
     const at = e.target.closest('.annotation-at');
     const item = e.target.closest('[data-annotation], li.annotation');
-    if (!item || (e.target.closest('a, button, textarea, select, input') && !at)) return;
+    if (!item || (e.target.closest('a') && !at)) return;
     if (at) e.preventDefault();
     const id = item.dataset.annotation ?? item.id;
     if (at && !editable) history.replaceState(null, '', `#${id}`);
     showInPdf(id);
   });
 
+  // Reference chips: in the notes (the page) or in a comment.
+  const scope = editable ? el : document;
+  const onRefClick = (e) => {
+    const link = e.target.closest?.('a[href^="#"]');
+    if (!link || !scope.contains(link)) return;
+    const id = link.getAttribute('href').slice(1);
+    if (id === 'paper-notes' && editable) return e.preventDefault();
+    if (!byId(id)) return;
+    e.preventDefault();
+    if (!editable) history.pushState(null, '', `#${id}`);
+    jumpTo(id);
+  };
+  document.addEventListener('click', onRefClick);
+  if (editable) {
+    // Other links in a comment would leave the editor.
+    side.addEventListener('click', (e) => {
+      if (e.target.closest('.annotation-comment a:not([href^="#"])')) e.preventDefault();
+    });
+  }
+
+  // Hovering a chip peeks at its comment (with a mouse).
+  let peekTimer;
+  const onOver = (e) => {
+    const link = e.target.closest?.('a.annotation-ref[data-ref]');
+    if (!link || !scope.contains(link) || !byId(link.dataset.ref) || !window.matchMedia('(hover: hover)').matches) return;
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => peek(link.dataset.ref, link.getBoundingClientRect()), 300);
+  };
+  const onOut = (e) => {
+    if (!e.target.closest?.('a.annotation-ref')) return;
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => { if (!peekEl.matches(':hover')) closePeek(); }, 200);
+  };
+  document.addEventListener('pointerover', onOver);
+  document.addEventListener('pointerout', onOut);
+  peekEl.addEventListener('pointerleave', () => { if (peekFor && window.matchMedia('(hover: hover)').matches) closePeek(); });
+
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    closePeek();
+    if (editable) closeSelbar();
+  };
+  const onDown = (e) => {
+    if (!peekEl.hidden && !peekEl.contains(e.target)) closePeek();
+  };
+  document.addEventListener('keydown', onKey);
+  document.addEventListener('pointerdown', onDown);
+  pagesEl.addEventListener('scroll', closePeek, { passive: true });
+
+  /** A copy-link button on each published comment: its address, to share. */
+  if (!editable) {
+    for (const a of list) {
+      const tools = document.createElement('span');
+      tools.className = 'annotation-tools';
+      tools.innerHTML = `<button type="button" data-act="copy" title="Copy the link to this highlight" aria-label="Copy link">${ICON.link}</button>`;
+      a.li.querySelector('.annotation-at')?.after(tools);
+    }
+    side.addEventListener('click', async (e) => {
+      const b = e.target.closest('button[data-act="copy"]');
+      if (!b) return;
+      const id = b.closest('li.annotation').id;
+      await navigator.clipboard?.writeText(new URL(`#${id}`, location.href).href).catch(() => {});
+      b.classList.add('is-done');
+      setTimeout(() => b.classList.remove('is-done'), 1200);
+    });
+  }
+
   const fromHash = () => {
     const id = decodeURIComponent(location.hash.slice(1));
-    if (/^a-[a-z0-9]{4,16}$/.test(id) && list.some((a) => a.id === id)) {
+    if (/^a-[a-z0-9]{4,16}$/.test(id) && byId(id)) {
       showInPdf(id);
       showComment(id);
     }
@@ -263,8 +463,39 @@ export async function mountPaper(el, opts = {}) {
 
   /* ---------- Editing (the admin) ---------- */
 
+  let closeSelbar = () => {};
+  let openEditor = () => {};
+  let renderSide = () => {};
+
   if (editable) {
-    const btn = viewer.querySelector('.paper-highlight-btn');
+    const style = lastStyle();
+    const changed = () => opts.onChange?.(list.map(({ li, ...a }) => a));
+    const swatches = (current, act) => COLORS.map((c) => `<button type="button" class="swatch hl-${c}" data-${act}="${c}" title="${capital(c)}" aria-label="${capital(c)}" aria-pressed="${c === current}"></button>`).join('');
+    const shapes = (current) => SHAPES.map((s) => `<button type="button" class="shape-btn" data-shape="${s}" title="${SHAPE_NAMES[s]}" aria-label="${SHAPE_NAMES[s]}" aria-pressed="${s === current}"><span class="shape-icon shape-${s}">Ab</span></button>`).join('');
+    const setPressed = (root, attr, value) => {
+      for (const b of root.querySelectorAll(`[data-${attr}]`)) b.setAttribute('aria-pressed', String(b.dataset[attr] === value));
+    };
+    const tint = (root, color) => { root.dataset.color = color; };
+
+    function add(a) {
+      list = sortAnnotations([...list, a]);
+      changed();
+      renderSide();
+      drawHighlights();
+    }
+    const fresh = (page, rects, quote, s = style) => ({
+      id: newAnnotationId(), page, rects, quote, comment: '', color: s.color,
+      ...(s.shape !== SHAPES[0] ? { shape: s.shape } : {}), at: new Date().toISOString().slice(0, 10),
+    });
+
+    /* The bar over a selection: a colour makes the highlight at once, in
+       the chosen shape; "Comment" opens the editor. */
+    const selbar = popup('paper-selbar');
+    selbar.setAttribute('role', 'toolbar');
+    selbar.setAttribute('aria-label', 'Highlight the selection');
+    selbar.innerHTML = `<div class="pop-row">${shapes(style.shape)}<span class="pop-sep"></span>${swatches(style.color, 'color')}<span class="pop-sep"></span>
+      <button type="button" class="pop-btn" data-act="comment">${ICON.comment}<span>Comment</span></button></div>`;
+    tint(selbar, style.color);
     let pending = null;
     const pageOf = (node) => (node?.nodeType === 1 ? node : node?.parentElement)?.closest('.paper-page');
 
@@ -297,96 +528,285 @@ export async function mountPaper(el, opts = {}) {
       return { page: Number(pageEl.dataset.page), rects, quote, at: range.getBoundingClientRect() };
     }
 
-    const placeButton = () => {
+    closeSelbar = () => {
+      selbar.hidden = true;
+      pending = null;
+    };
+    const placeSelbar = () => {
+      if (!editorEl.hidden) return;
       pending = selectionHighlight();
-      if (!pending) {
-        btn.hidden = true;
+      if (!pending) return closeSelbar();
+      place(selbar, pending.at);
+    };
+    pagesEl.addEventListener('pointerup', () => setTimeout(placeSelbar, 0));
+    pagesEl.addEventListener('keyup', placeSelbar);
+    let selTimer;
+    // Touch screens adjust a selection with handles, without a pointerup here.
+    const onSelection = () => {
+      clearTimeout(selTimer);
+      selTimer = setTimeout(() => {
+        const sel = window.getSelection();
+        if (sel?.rangeCount && pagesEl.contains(sel.anchorNode)) placeSelbar();
+        else if (!selbar.hidden && (!sel || sel.isCollapsed)) closeSelbar();
+      }, 250);
+    };
+    document.addEventListener('selectionchange', onSelection);
+    pagesEl.addEventListener('scroll', closeSelbar, { passive: true });
+    selbar.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the selection
+    selbar.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b || !pending) return;
+      if (b.dataset.shape) {
+        style.shape = b.dataset.shape;
+        keepStyle(style);
+        setPressed(selbar, 'shape', style.shape);
         return;
       }
-      const v = viewer.getBoundingClientRect();
-      btn.style.left = `${Math.min(v.width - 110, Math.max(0, pending.at.left - v.left))}px`;
-      btn.style.top = `${Math.max(0, pending.at.bottom - v.top + 6)}px`;
-      btn.hidden = false;
-    };
-    pagesEl.addEventListener('pointerup', () => setTimeout(placeButton, 0));
-    pagesEl.addEventListener('keyup', placeButton);
-    pagesEl.addEventListener('scroll', () => { btn.hidden = true; }, { passive: true });
-    btn.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the selection
-    btn.addEventListener('click', () => {
-      if (!pending) return;
-      const a = {
-        id: newAnnotationId(), page: pending.page, rects: pending.rects, quote: pending.quote,
-        comment: '', color: COLORS[0], at: new Date().toISOString().slice(0, 10),
-      };
-      list = sortAnnotations([...list, a]);
+      const sel = pending;
+      if (b.dataset.color) {
+        style.color = b.dataset.color;
+        keepStyle(style);
+        setPressed(selbar, 'color', style.color);
+        tint(selbar, style.color);
+      }
+      const a = fresh(sel.page, sel.rects, sel.quote);
       window.getSelection()?.removeAllRanges();
-      btn.hidden = true;
-      pending = null;
+      closeSelbar();
+      add(a);
+      setActive(a.id);
+      if (b.dataset.act === 'comment') openEditor(a, { isNew: true, rect: sel.at });
+      else showComment(a.id);
+    });
+
+    /* The Area tool: draw a box around a figure, a table or a formula. */
+    const areaBtn = viewer.querySelector('.paper-area-btn');
+    const setArea = (on) => {
+      pagesEl.classList.toggle('is-area', on);
+      areaBtn.setAttribute('aria-pressed', String(on));
+    };
+    areaBtn.addEventListener('click', () => setArea(!pagesEl.classList.contains('is-area')));
+    let drag = null;
+    pagesEl.addEventListener('pointerdown', (e) => {
+      if (!pagesEl.classList.contains('is-area') || e.button > 0) return;
+      const pageEl = e.target.closest('.paper-page');
+      if (!pageEl) return;
+      e.preventDefault();
+      const box = pageEl.getBoundingClientRect();
+      const ghost = document.createElement('div');
+      ghost.className = `paper-hl paper-drawing hl-${style.color} shape-box`;
+      pageEl.querySelector('.paper-highlights').append(ghost);
+      drag = { pageEl, box, x0: e.clientX, y0: e.clientY, ghost, rect: [0, 0, 0, 0] };
+      pagesEl.setPointerCapture(e.pointerId);
+    });
+    pagesEl.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const { box, x0, y0 } = drag;
+      const cx = (v) => Math.min(Math.max(v, box.left), box.right);
+      const cy = (v) => Math.min(Math.max(v, box.top), box.bottom);
+      const l = Math.min(cx(x0), cx(e.clientX));
+      const t = Math.min(cy(y0), cy(e.clientY));
+      const r = [(l - box.left) / box.width, (t - box.top) / box.height,
+        Math.abs(cx(e.clientX) - cx(x0)) / box.width, Math.abs(cy(e.clientY) - cy(y0)) / box.height];
+      drag.rect = r;
+      Object.assign(drag.ghost.style, { left: `${r[0] * 100}%`, top: `${r[1] * 100}%`, width: `${r[2] * 100}%`, height: `${r[3] * 100}%` });
+    });
+    const endDrag = () => {
+      if (!drag) return;
+      const { pageEl, rect, ghost } = drag;
+      drag = null;
+      ghost.remove();
+      quietUntil = Date.now() + 400;
+      if (rect[2] < 0.01 || rect[3] < 0.005) return;
+      setArea(false);
+      const a = fresh(Number(pageEl.dataset.page), [rect], textIn(pageEl, rect), { color: style.color, shape: 'box' });
+      add(a);
+      setActive(a.id);
+      const b = pageEl.getBoundingClientRect();
+      openEditor(a, { isNew: true, rect: { left: b.left + rect[0] * b.width, right: b.left + (rect[0] + rect[2]) * b.width, top: b.top + rect[1] * b.height, bottom: b.top + (rect[1] + rect[3]) * b.height } });
+    };
+    pagesEl.addEventListener('pointerup', endDrag);
+    pagesEl.addEventListener('pointercancel', endDrag);
+
+    /** The PDF's text inside a box of a page (for an area's quote). */
+    function textIn(pageEl, [x, y, w, h]) {
+      const box = pageEl.getBoundingClientRect();
+      const words = [];
+      for (const span of pageEl.querySelectorAll('.textLayer span')) {
+        if (span.children.length) continue;
+        const r = span.getBoundingClientRect();
+        const cx = (r.left + r.width / 2 - box.left) / box.width;
+        const cy = (r.top + r.height / 2 - box.top) / box.height;
+        if (cx >= x && cx <= x + w && cy >= y && cy <= y + h) words.push(span.textContent);
+      }
+      const text = words.join(' ').replace(/\s+/g, ' ').trim();
+      return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+    }
+
+    /* The comment editor: a pop-up by the highlight (a sheet on a phone). */
+    const editorEl = popup('paper-editor');
+    editorEl.setAttribute('role', 'dialog');
+    editorEl.setAttribute('aria-label', 'Comment');
+    let editing = null; // { a, before, isNew }
+
+    openEditor = (a, { isNew = false, rect } = {}) => {
+      if (editing) saveEditor();
+      closeSelbar();
+      closePeek();
+      editing = { a, isNew, before: { comment: a.comment, color: a.color, shape: a.shape } };
+      const others = list.filter((x) => x.id !== a.id);
+      editorEl.innerHTML = `<div class="pop-head"><span class="pop-page">p. ${a.page}</span>${a.quote ? `<span class="pop-quote">“${esc(a.quote)}”</span>` : ''}</div>
+        <textarea rows="4" placeholder="Write a comment… (Markdown)" aria-label="Comment">${esc(a.comment)}</textarea>
+        <div class="pop-row">${shapes(shapeOf(a))}<span class="pop-sep"></span>${swatches(colorOf(a), 'color')}</div>
+        <div class="pop-foot">
+          ${others.length ? `<select data-act="ref" aria-label="Link to another highlight"><option value="">Link a highlight…</option>${others.map((o) => `<option value="${esc(o.id)}">${esc(annotationLabel(o, 40))}</option>`).join('')}</select>` : ''}
+          <button type="button" class="pop-icon" data-act="link" title="Copy a cross-reference to paste in other notes" aria-label="Copy link">${ICON.link}</button>
+          <button type="button" class="pop-icon pop-danger" data-act="delete" title="Delete the highlight" aria-label="Delete">${ICON.trash}</button>
+          <span class="pop-spacer"></span>
+          <button type="button" class="pop-btn" data-act="cancel">Cancel</button>
+          <button type="button" class="pop-btn pop-primary" data-act="save" title="Save (Ctrl+Enter)">Save</button>
+        </div>`;
+      tint(editorEl, colorOf(a));
+      const hl = viewer.querySelector(`.paper-hl[data-id="${CSS.escape(a.id)}"]`);
+      place(editorEl, rect ?? hl?.getBoundingClientRect() ?? commentOf(a.id)?.getBoundingClientRect() ?? viewer.getBoundingClientRect());
+      const ta = editorEl.querySelector('textarea');
+      ta.focus({ preventScroll: true });
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    };
+
+    function closeEditor() {
+      editing = null;
+      editorEl.hidden = true;
+    }
+    function saveEditor() {
+      if (!editing) return;
+      const { a } = editing;
+      a.comment = editorEl.querySelector('textarea').value;
+      closeEditor();
       changed();
       renderSide();
       drawHighlights();
-      const ta = side.querySelector(`[data-annotation="${a.id}"] textarea`);
-      ta?.focus();
-      showComment(a.id);
-    });
-
-    const changed = () => opts.onChange?.(list.map(({ li, ...a }) => a));
-
-    function renderSide() {
-      side.innerHTML = `<h2 class="sc">Comments <span class="count">${list.length}</span></h2>
-        ${list.length ? '' : '<p class="muted">Select text in the PDF, then click <b>Highlight</b>.</p>'}
-        <ol class="annotations">${list.map((a) => `<li class="annotation" data-annotation="${esc(a.id)}">
-          <div class="annotation-head">
-            <a class="annotation-at sc" href="#${esc(a.id)}">p.&nbsp;${a.page}</a>
-            <select aria-label="Colour" data-act="color">${COLORS.map((c) => `<option value="${c}"${c === a.color ? ' selected' : ''}>${c}</option>`).join('')}</select>
-            <button type="button" class="btn btn-small" data-act="link" title="Copy a link to this highlight, to paste in other notes">Copy link</button>
-            <button type="button" class="btn btn-small btn-danger-text" data-act="delete">Delete</button>
-          </div>
-          ${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>` : ''}
-          <textarea rows="3" placeholder="Comment (Markdown; [[other-paper#a-…]] links to another highlight)" aria-label="Comment">${esc(a.comment)}</textarea>
-          <div class="annotation-comment"></div>
-        </li>`).join('')}</ol>`;
-      for (const li of side.querySelectorAll('[data-annotation]')) {
-        const a = list.find((x) => x.id === li.dataset.annotation);
-        li.querySelector('.annotation-comment').innerHTML = a.comment.trim() && opts.renderComment ? opts.renderComment(a.comment) : '';
+    }
+    function cancelEditor() {
+      if (!editing) return;
+      const { a, before, isNew } = editing;
+      closeEditor();
+      if (isNew) { // not wanted after all
+        list = list.filter((x) => x !== a);
+        changed();
       }
+      Object.assign(a, before);
+      if (!a.shape) delete a.shape;
+      drawHighlights();
+      renderSide();
+    }
+    async function deleteAnnotation(a) {
+      if (opts.confirmDelete && !(await opts.confirmDelete(a))) return false;
+      list = list.filter((x) => x !== a);
+      changed();
+      renderSide();
+      drawHighlights();
+      return true;
+    }
+    async function copyLink(a, b) {
+      const link = opts.linkFor ? opts.linkFor(a.id, a) : `[[#${a.id}]]`;
+      await navigator.clipboard?.writeText(link).catch(() => {});
+      b.classList.add('is-done');
+      b.title = 'Copied';
+      setTimeout(() => b.classList.remove('is-done'), 1200);
     }
 
-    side.addEventListener('input', (e) => {
-      const li = e.target.closest('[data-annotation]');
-      const a = li && list.find((x) => x.id === li.dataset.annotation);
-      if (!a || e.target.tagName !== 'TEXTAREA') return;
-      a.comment = e.target.value;
-      li.querySelector('.annotation-comment').innerHTML = a.comment.trim() && opts.renderComment ? opts.renderComment(a.comment) : '';
-      changed();
+    editorEl.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b || !editing) return;
+      const { a } = editing;
+      if (b.dataset.color || b.dataset.shape) {
+        if (b.dataset.color) a.color = b.dataset.color;
+        if (b.dataset.shape) {
+          if (b.dataset.shape === SHAPES[0]) delete a.shape;
+          else a.shape = b.dataset.shape;
+        }
+        style.color = colorOf(a);
+        if (a.rects.length !== 1 || shapeOf(a) !== 'box') style.shape = shapeOf(a);
+        keepStyle(style);
+        setPressed(editorEl, 'color', colorOf(a));
+        setPressed(editorEl, 'shape', shapeOf(a));
+        tint(editorEl, colorOf(a));
+        drawHighlights();
+      } else if (b.dataset.act === 'save') saveEditor();
+      else if (b.dataset.act === 'cancel') cancelEditor();
+      else if (b.dataset.act === 'link') copyLink(a, b);
+      else if (b.dataset.act === 'delete') {
+        editorEl.hidden = true; // out of the way of the confirmation
+        if (await deleteAnnotation(a)) closeEditor();
+        else editorEl.hidden = false;
+      }
     });
-    side.addEventListener('change', (e) => {
-      const li = e.target.closest('[data-annotation]');
-      const a = li && list.find((x) => x.id === li.dataset.annotation);
-      if (!a || e.target.dataset.act !== 'color') return;
-      a.color = e.target.value;
-      drawHighlights();
-      changed();
+    editorEl.addEventListener('change', (e) => {
+      if (e.target.dataset.act !== 'ref' || !e.target.value) return;
+      const ta = editorEl.querySelector('textarea');
+      const ref = `[[#${e.target.value}]]`;
+      const at = ta.selectionStart ?? ta.value.length;
+      ta.setRangeText((at && !/\s$/.test(ta.value.slice(0, at)) ? ' ' : '') + ref, at, ta.selectionEnd ?? at, 'end');
+      e.target.value = '';
+      ta.focus();
     });
+    editorEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        saveEditor();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelEditor();
+      }
+    });
+    // A click elsewhere keeps what was written (as Notion does).
+    const onDownEdit = (e) => {
+      if (editing && !editorEl.contains(e.target) && !e.target.closest?.('dialog')) saveEditor();
+    };
+    document.addEventListener('pointerdown', onDownEdit, true);
+
+    /* The comments beside the PDF: cards, with tools on hover. */
+    renderSide = () => {
+      const back = backlinks(list, opts.notes?.() ?? '');
+      side.innerHTML = `<div class="paper-comments-head"><span>Comments</span><span class="count">${list.length}</span></div>
+        ${list.length ? '' : `<p class="muted paper-hint">Select text in the PDF to highlight it, or draw a box with ${ICON.area}<b>Area</b>.</p>`}
+        <ol class="annotations">${list.map((a) => `<li class="annotation" data-annotation="${esc(a.id)}" data-color="${colorOf(a)}" data-shape="${shapeOf(a)}">
+          <a class="annotation-at" href="#${esc(a.id)}">p.&nbsp;${a.page}</a>
+          <span class="annotation-tools">
+            <button type="button" data-act="edit" title="Edit the comment" aria-label="Edit">${ICON.edit}</button>
+            <button type="button" data-act="link" title="Copy a cross-reference to paste in other notes" aria-label="Copy link">${ICON.link}</button>
+            <button type="button" data-act="delete" title="Delete" aria-label="Delete">${ICON.trash}</button>
+          </span>
+          ${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>` : ''}
+          ${a.comment.trim() ? `<div class="annotation-comment">${commentHtml(a)}</div>` : '<button type="button" class="annotation-add" data-act="edit">Add a comment…</button>'}
+          ${backlinksHtml(back.get(a.id) ?? [], list)}
+        </li>`).join('')}</ol>`;
+      if (activeId) commentOf(activeId)?.classList.add('is-active');
+    };
     side.addEventListener('click', async (e) => {
       const b = e.target.closest('button[data-act]');
       const li = b?.closest('[data-annotation]');
-      const a = li && list.find((x) => x.id === li.dataset.annotation);
+      const a = li && byId(li.dataset.annotation);
       if (!a) return;
-      if (b.dataset.act === 'delete') {
-        if (opts.confirmDelete && !(await opts.confirmDelete(a))) return;
-        list = list.filter((x) => x !== a);
-        changed();
-        renderSide();
-        drawHighlights();
-      } else if (b.dataset.act === 'link') {
-        const link = opts.linkFor ? opts.linkFor(a.id, a) : `[[#${a.id}]]`;
-        await navigator.clipboard?.writeText(link).catch(() => {});
-        b.textContent = 'Copied';
-        setTimeout(() => { b.textContent = 'Copy link'; }, 1500);
-      }
+      if (b.dataset.act === 'edit') {
+        setActive(a.id);
+        showInPdf(a.id);
+        openEditor(a, { rect: li.getBoundingClientRect() });
+      } else if (b.dataset.act === 'delete') deleteAnnotation(a);
+      else if (b.dataset.act === 'link') copyLink(a, b);
+    });
+    side.addEventListener('dblclick', (e) => {
+      const li = e.target.closest('[data-annotation]');
+      const a = li && byId(li.dataset.annotation);
+      if (a && !e.target.closest('a, button')) openEditor(a, { rect: li.getBoundingClientRect() });
     });
     renderSide();
+
+    cleanups.push(() => {
+      document.removeEventListener('selectionchange', onSelection);
+      document.removeEventListener('pointerdown', onDownEdit, true);
+    });
   }
 
   layout();
@@ -395,10 +815,22 @@ export async function mountPaper(el, opts = {}) {
     setAnnotations(next) {
       list = sortAnnotations(next);
       drawHighlights();
+      renderSide();
+    },
+    /** Redraw the comments (the notes changed: "Referenced in"). */
+    refresh() {
+      renderSide();
     },
     destroy() {
       seen.disconnect();
       doc.destroy();
+      document.removeEventListener('click', onRefClick);
+      document.removeEventListener('pointerover', onOver);
+      document.removeEventListener('pointerout', onOut);
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown);
+      for (const f of cleanups) f();
+      for (const n of el.querySelectorAll(':scope > .paper-pop')) n.remove();
     },
   };
 }

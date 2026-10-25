@@ -715,12 +715,26 @@ describe('paper notes: a PDF with highlights and comments', () => {
     assert.equal(back.body.trim(), 'Notes.');
     assert.deepEqual(back.annotations, [a]);
     assert.equal(cleanAnnotation({ ...a, id: 'x' }), null, 'bad ids are dropped');
-    assert.equal(cleanAnnotation({ ...a, color: 'red' }).color, 'yellow');
+    assert.equal(cleanAnnotation({ ...a, color: 'crimson' }).color, 'yellow');
     assert.deepEqual(cleanAnnotation({ ...a, rects: [[2, -1, 0.5, 0.5]] }).rects, [[1, 0, 0.5, 0.5]]);
     assert.match(newAnnotationId(), /^a-[a-z0-9]{6}$/);
     assert.equal(paperPdf({ pdf: 'x.pdf' }), 'x.pdf');
     assert.equal(paperPdf({ pdf: 'https://evil.example/x.pdf' }), '', 'only the blog\'s own storage');
     assert.equal(paperPdf({ pdf: 'x.html' }), '');
+  });
+
+  test('highlights have colours and shapes; references make chips and backlinks', async () => {
+    const { cleanAnnotation, markAnnotationRefs, backlinks, referencedIds } = await import('../js/paper.js');
+    const base = { id: 'a-dddd44', page: 2, rects: [[0, 0, 1, 1]] };
+    assert.equal(cleanAnnotation({ ...base, color: 'purple', shape: 'box' }).shape, 'box');
+    assert.equal(cleanAnnotation({ ...base, color: 'purple' }).color, 'purple');
+    assert.equal(cleanAnnotation({ ...base, shape: 'highlight' }).shape, undefined, 'the default shape is not written');
+    assert.equal(cleanAnnotation({ ...base, shape: 'zigzag', color: 'nope' }).shape, undefined);
+    assert.deepEqual(referencedIds('[[#a-dddd44]] and [[x#a-eeee55|y]]'), ['a-dddd44', 'a-eeee55']);
+    const list = [{ ...base, quote: 'a long quote', comment: '' }, { id: 'a-eeee55', page: 3, rects: [], quote: '', comment: 'see [[#a-dddd44]]' }];
+    assert.deepEqual(backlinks(list, 'Notes on [[#a-dddd44]]').get('a-dddd44'), ['notes', 'a-eeee55']);
+    assert.equal(markAnnotationRefs('<a href="#a-dddd44">#a-dddd44</a>', list),
+      '<a href="#a-dddd44" class="annotation-ref" data-ref="a-dddd44">p. 2 · “a long quote”</a>', 'a bare reference gets the label');
   });
 
   test('a paper post is built with its viewer, comments and cross-references', async () => {
@@ -734,9 +748,11 @@ describe('paper notes: a PDF with highlights and comments', () => {
     const html = articleHtml({ type: 'paper', pdf: 'p.pdf' }, body, (m) => md4c.toHtml(m, { parserFlags: PARSER_FLAGS }));
     assert.match(html, /<div class="paper" data-pdf="p\.pdf">/);
     assert.match(html, /<li class="annotation" id="a-aaaa11" data-page="1" data-color="yellow" data-rects="\[\[0\.1,0\.1,0\.5,0\.02\]\]">/);
+    assert.ok(html.indexOf('class="paper-notes"') < html.indexOf('class="paper"'), 'the notes come first');
+    assert.doesNotMatch(html, /<h2[^>]*>Comments/, 'no numbered heading for the comments');
     assert.match(html, /&lt;b&gt;q&lt;\/b&gt;/, 'quotes are text');
-    assert.match(html, /<strong>Key<\/strong> <a href="#a-aaaa22">/);
-    assert.match(html, /<a href="second\.html#a-bbbb22">the encoder<\/a>/);
+    assert.match(html, /<strong>Key<\/strong> <a href="#a-aaaa22" class="annotation-ref" data-ref="a-aaaa22">/);
+    assert.match(html, /<a href="second\.html#a-bbbb22" class="annotation-ref" data-ref="a-bbbb22">the encoder<\/a>/);
     assert.doesNotMatch(html, /md4c-annotations/);
     assert.deepEqual(postLinks(html), ['second'], 'cross-references count as links (backlinks, graph)');
     const { referencedKeys } = await import('../admin/src/paths.js');
