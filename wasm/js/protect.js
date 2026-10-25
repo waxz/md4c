@@ -75,18 +75,19 @@ export async function digest(text) {
 /** True when a post's front matter asks for password protection. */
 export const wantsPassword = (meta) => Boolean(String(meta?.password ?? '').trim());
 
-const PUBLIC_FIELDS = ['title', 'date', 'updated', 'tags', 'author', 'toc', 'numbered'];
+const PUBLIC_FIELDS = ['title', 'date', 'updated', 'tags', 'author', 'toc', 'numbered', 'type'];
 const clean = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ').trim();
 
 /**
  * The public, encrypted form of a protected post's source.
- * `renderHtml(body)` = the article HTML exactly as the site build makes it.
+ * `renderHtml(body, meta)` = the article HTML exactly as the site build
+ * makes it (articleHtml in blog-render.js).
  */
 export async function protectPost(source, renderHtml) {
   const { meta, body } = parseFrontMatter(source);
   const password = String(meta.password ?? '').trim();
   if (!password) throw new Error('This post has no password');
-  const envelope = await encryptText(renderHtml(body), password);
+  const envelope = await encryptText(renderHtml(body, meta), password);
   const lines = ['---'];
   for (const k of PUBLIC_FIELDS) if (clean(meta[k])) lines.push(`${k}: ${clean(meta[k])}`);
   lines.push('protected: true', `source: ${await digest(source)}`, '---', '',

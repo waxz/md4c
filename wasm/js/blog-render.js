@@ -3,6 +3,7 @@
 
 import { Dialect, Flags, HtmlFlags } from './md4c.js';
 import { SLUG_RE } from './post-format.js';
+import { isPaper, paperHtml, splitAnnotations } from './paper.js';
 
 export const PARSER_FLAGS =
   Dialect.GITHUB | Flags.WIKILINKS | Flags.HIGHLIGHT | Flags.LATEXMATHSPANS;
@@ -17,6 +18,32 @@ export function slugify(s) {
 
 function escAttr(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+}
+
+/**
+ * Where a [[wiki link]] goes: "Some post" -> page of some-post;
+ * "some-paper#a-k3j9x2" -> that highlight in a paper post; "#a-k3j9x2" ->
+ * that highlight on this page. `pageOf(slug)` makes a post's address.
+ */
+export function wikiHref(target, pageOf) {
+  const at = target.indexOf('#');
+  const slug = slugify(at === -1 ? target : target.slice(0, at));
+  const frag = at === -1 ? '' : target.slice(at + 1).replace(/[^A-Za-z0-9_-]/g, '');
+  if (!slug) return frag ? `#${frag}` : '';
+  const page = pageOf(slug);
+  return frag ? `${page.replace(/#.*$/, '')}#${frag}` : page;
+}
+
+/**
+ * The HTML of a post's article from its front matter and body: Markdown
+ * through md4c (`toHtml(markdown)`), made ready for a static page; a paper
+ * post (type: paper) as its PDF, highlights with comments, and notes.
+ */
+export function articleHtml(meta, body, toHtml) {
+  const renderMd = (md) => linkPostsForStaticPage(toHtml(md));
+  if (!isPaper(meta)) return renderMd(body);
+  const { body: notes, annotations } = splitAnnotations(body);
+  return paperHtml(meta, notes, annotations, renderMd);
 }
 
 /**
@@ -37,8 +64,8 @@ export function demoteHeadings(html) {
 export function linkPostsForStaticPage(html) {
   return demoteHeadings(html)
     .replace(/<x-wikilink data-target="([^"]*)">([\s\S]*?)<\/x-wikilink>/g, (_, target, label) => {
-      const slug = slugify(target.replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
-      return slug ? `<a href="${escAttr(slug)}.html">${label}</a>` : label;
+      const href = wikiHref(target.replace(/&quot;/g, '"').replace(/&amp;/g, '&'), (slug) => `${slug}.html`);
+      return href ? `<a href="${escAttr(href)}">${label}</a>` : label;
     })
     .replace(/href="([^"/:#?]+)\.md(#[^"]*)?"/g, (whole, slug, frag = '') =>
       SLUG_RE.test(slug) ? `href="${slug}.html${frag}"` : whole);

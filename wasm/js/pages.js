@@ -432,7 +432,8 @@ ${html}
     title: `${post.title} · ${site.title}`,
     description, canonical: url,
     // unlock.js guards the unlock form even if app.js cannot run.
-    head: locked ? `<script src="${asset(site, root, 'unlock.js')}"></script>\n` : head, main,
+    head: (post.type === 'paper' ? `<link rel="stylesheet" href="${asset(site, root, 'paper.css')}">\n` : '')
+      + (locked ? `<script src="${asset(site, root, 'unlock.js')}"></script>\n` : head), main,
     // Search engines would only see the unlock form.
     robots: locked ? 'noindex' : '',
   });

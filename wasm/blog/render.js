@@ -3,7 +3,7 @@
 
 import DOMPurify from './vendor/dompurify/purify.es.js';
 import { SLUG_RE } from './lib/post-format.js';
-import { PARSER_FLAGS, slugify, SOURCE_POS_FLAGS } from './lib/blog-render.js';
+import { PARSER_FLAGS, slugify, SOURCE_POS_FLAGS, wikiHref } from './lib/blog-render.js';
 
 export { slugify };
 
@@ -71,11 +71,17 @@ function resolveUrls(frag, postUrl, storageBase, postHref) {
  */
 export function renderLive(md4cFs, markdown, { postUrl, storageBase, postHref, sourcePositions = false }) {
   const html = md4cFs.render(markdown, { parserFlags: PARSER_FLAGS, ...(sourcePositions ? { rendererFlags: SOURCE_POS_FLAGS } : {}) });
+  return renderLiveHtml(html, { postUrl, storageBase, postHref });
+}
+
+/** MD4C's HTML (or a page part made of it, e.g. a paper's) -> sanitized DOM fragment, as renderLive. */
+export function renderLiveHtml(html, { postUrl, storageBase, postHref }) {
   const frag = DOMPurify.sanitize(html, { ...PURIFY_CONFIG, RETURN_DOM_FRAGMENT: true });
   resolveUrls(frag, postUrl, storageBase, postHref);
   for (const el of frag.querySelectorAll('x-wikilink')) {
     const a = document.createElement('a');
-    a.href = postHref(slugify(el.dataset.target ?? ''));
+    // [[post]], [[paper#a-…]] (a highlight there) or [[#a-…]] (one here)
+    a.href = wikiHref(el.dataset.target ?? '', postHref) || '#';
     a.append(...el.childNodes);
     el.replaceWith(a);
   }
@@ -345,4 +351,10 @@ export async function finishArticle(article, site, info) {
   }
   if (site.citation && !article.querySelector('.cite')) article.append(citation(site, info));
   await Promise.all([renderMath(prose, site), enhanceCode(prose)]);
+  // A paper post: its PDF beside the comments (the admin's preview shows
+  // the comments only; its own annotator edits them).
+  const paper = prose.querySelector('.paper');
+  if (paper && info.paperViewer !== false) {
+    import('./paper.js').then((m) => m.mountPaper(paper)).catch((err) => console.warn('paper:', err));
+  }
 }

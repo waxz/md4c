@@ -1,0 +1,99 @@
+/* Paper notes: a PDF beside its highlights' comments (blog/paper.js,
+   js/paper.js). Linked from paper posts' pages, and by paper.js itself. */
+
+/* A paper needs room: its page is wider than an article's measure. */
+main.page:has(.paper) { max-width: min(84rem, 100%); }
+main.page:has(.paper) .article-header, main.page:has(.paper) .paper-notes { max-width: var(--measure); margin-left: auto; margin-right: auto; }
+
+.paper {
+  display: grid; grid-template-columns: minmax(0, 1fr) 22rem; gap: 1rem; align-items: start;
+  margin: 0 0 2.5rem; font-family: var(--font-sans);
+}
+@media (max-width: 900px) { .paper { grid-template-columns: 1fr; } }
+
+/* ---------- The PDF ---------- */
+
+.paper-viewer { position: relative; min-width: 0; border: 1px solid var(--rule); border-radius: 6px; background: color-mix(in srgb, var(--muted) 12%, var(--paper)); }
+.paper-fallback { margin: 1rem; }
+.paper-toolbar { display: flex; align-items: center; gap: .3rem; padding: .35rem .5rem; border-bottom: 1px solid var(--rule); background: var(--surface); border-radius: 6px 6px 0 0; font-size: .85rem; }
+.paper-toolbar button { font: inherit; min-width: 2rem; padding: .2rem .5rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); color: var(--ink); cursor: pointer; }
+.paper-pageinfo { margin-left: .5rem; font-variant-numeric: tabular-nums; }
+.paper-download { margin-left: auto; color: var(--accent); text-decoration: none; }
+.paper-pages { height: min(80vh, 60rem); overflow: auto; padding: 12px; outline: none; }
+@media (max-width: 900px) { .paper-pages { height: 70vh; } }
+.paper-loading { margin: 1rem; }
+
+.paper-page {
+  position: relative; margin: 0 auto 12px; background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / .18);
+  --user-unit: 1; --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px; --scale-round-y: 1px;
+}
+.paper-page canvas { position: absolute; inset: 0; display: block; }
+
+/* Highlights lie under the text layer, so the text above stays selectable. */
+.paper-highlights { position: absolute; inset: 0; pointer-events: none; }
+.paper-hl { position: absolute; border-radius: 2px; mix-blend-mode: multiply; }
+.hl-yellow { background: rgb(255 212 0 / .42); }
+.hl-green { background: rgb(80 200 90 / .38); }
+.hl-blue { background: rgb(80 160 255 / .36); }
+.hl-pink { background: rgb(255 100 170 / .36); }
+.paper-hl.is-active { box-shadow: 0 0 0 2px var(--accent); }
+
+/* The text layer (after pdf.js's web/pdf_viewer.css, Apache-2.0): clear
+   text over the drawing, for selecting and copying. */
+.paper-page .textLayer {
+  position: absolute; inset: 0; overflow: clip; opacity: 1; line-height: 1; text-align: initial;
+  -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none;
+  transform-origin: 0 0; caret-color: CanvasText; z-index: 2;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.paper-page .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+.paper-page .textLayer > :not(.markedContent), .paper-page .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1; --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.paper-page .textLayer .markedContent { display: contents; }
+.paper-page .textLayer span[role="img"] { user-select: none; cursor: default; }
+.paper-page .textLayer ::selection { background: rgb(0 90 255 / .28); color: transparent; }
+.paper-page .textLayer br::selection { background: transparent; }
+.paper-page .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+
+.paper-highlight-btn {
+  position: absolute; z-index: 5; font: inherit; font-size: .85rem; font-weight: 600; padding: .35rem .8rem;
+  border: 0; border-radius: 999px; background: var(--accent); color: #fff; box-shadow: 0 3px 12px rgb(0 0 0 / .25); cursor: pointer;
+}
+
+/* ---------- Comments ---------- */
+
+.paper-comments { position: sticky; top: 1rem; max-height: calc(min(80vh, 60rem) + 2.4rem); overflow: auto; padding: .2rem .2rem .5rem; }
+@media (max-width: 900px) { .paper-comments { position: static; max-height: none; } }
+.paper-comments h2 { margin: 0 0 .6rem; font-size: .85rem; font-weight: 400; color: var(--muted); }
+.paper-comments .count { margin-left: .3em; }
+.annotations { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.annotation {
+  padding: .55rem .7rem; border: 1px solid var(--rule); border-left: 4px solid rgb(255 212 0); border-radius: 4px;
+  background: var(--surface); font-size: .9rem; cursor: pointer; scroll-margin: 1rem;
+}
+.annotation[data-color="green"] { border-left-color: rgb(80 200 90); }
+.annotation[data-color="blue"] { border-left-color: rgb(80 160 255); }
+.annotation[data-color="pink"] { border-left-color: rgb(255 100 170); }
+.annotation.is-active, .annotation:target { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.annotation-at { font-size: .75rem; color: var(--muted); text-decoration: none; }
+.annotation-quote { margin: .3rem 0; padding: 0 0 0 .6rem; border-left: 2px solid var(--rule); color: var(--ink-soft); font-family: var(--font-serif); font-size: .92rem; font-style: italic; }
+.annotation-comment { font-family: var(--font-serif); color: var(--ink); overflow-wrap: anywhere; }
+.annotation-comment > :first-child { margin-top: .2rem; }
+.annotation-comment > :last-child { margin-bottom: 0; }
+.annotation-comment:empty { display: none; }
+
+/* Editing (the admin) */
+.annotation-head { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
+.annotation-head .annotation-at { margin-right: auto; }
+.annotation-head select { font: inherit; font-size: .78rem; }
+.annotation textarea { width: 100%; box-sizing: border-box; margin-top: .3rem; font: .88rem/1.45 var(--font-mono, monospace); padding: .4rem; border: 1px solid var(--rule); border-radius: 4px; resize: vertical; }
+
+.paper-notes { margin-top: 1rem; }
+
+@media print { .paper { display: block; } .paper-viewer { display: none; } .paper-comments { position: static; max-height: none; overflow: visible; } }

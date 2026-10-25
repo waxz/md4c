@@ -705,3 +705,56 @@ test("publish.mjs refuses to put posts' Markdown in a public bucket without --so
     return true;
   });
 });
+
+describe('paper notes: a PDF with highlights and comments', () => {
+  test('annotations round-trip through the post, cleaned', async () => {
+    const { splitAnnotations, joinAnnotations, cleanAnnotation, newAnnotationId, paperPdf } = await import('../js/paper.js');
+    const a = { id: 'a-abc123', page: 2, rects: [[0.1, 0.2, 0.5, 0.02]], quote: 'Q "x"', comment: 'C [[other#a-zz9988]]', color: 'green', at: '2026-10-25' };
+    const body = joinAnnotations('Notes.\n', [a]);
+    const back = splitAnnotations(body);
+    assert.equal(back.body.trim(), 'Notes.');
+    assert.deepEqual(back.annotations, [a]);
+    assert.equal(cleanAnnotation({ ...a, id: 'x' }), null, 'bad ids are dropped');
+    assert.equal(cleanAnnotation({ ...a, color: 'red' }).color, 'yellow');
+    assert.deepEqual(cleanAnnotation({ ...a, rects: [[2, -1, 0.5, 0.5]] }).rects, [[1, 0, 0.5, 0.5]]);
+    assert.match(newAnnotationId(), /^a-[a-z0-9]{6}$/);
+    assert.equal(paperPdf({ pdf: 'x.pdf' }), 'x.pdf');
+    assert.equal(paperPdf({ pdf: 'https://evil.example/x.pdf' }), '', 'only the blog\'s own storage');
+    assert.equal(paperPdf({ pdf: 'x.html' }), '');
+  });
+
+  test('a paper post is built with its viewer, comments and cross-references', async () => {
+    const { articleHtml, postLinks } = await import('../js/blog-render.js');
+    const md4c = await loadMd4c(WASM_URL);
+    const { PARSER_FLAGS } = await import('../js/blog-render.js');
+    const { joinAnnotations } = await import('../js/paper.js');
+    const body = joinAnnotations('See [[second#a-bbbb22|the encoder]].', [
+      { id: 'a-aaaa11', page: 1, rects: [[0.1, 0.1, 0.5, 0.02]], quote: '<b>q</b>', comment: '**Key** [[#a-aaaa22]]', color: 'yellow' },
+    ]);
+    const html = articleHtml({ type: 'paper', pdf: 'p.pdf' }, body, (m) => md4c.toHtml(m, { parserFlags: PARSER_FLAGS }));
+    assert.match(html, /<div class="paper" data-pdf="p\.pdf">/);
+    assert.match(html, /<li class="annotation" id="a-aaaa11" data-page="1" data-color="yellow" data-rects="\[\[0\.1,0\.1,0\.5,0\.02\]\]">/);
+    assert.match(html, /&lt;b&gt;q&lt;\/b&gt;/, 'quotes are text');
+    assert.match(html, /<strong>Key<\/strong> <a href="#a-aaaa22">/);
+    assert.match(html, /<a href="second\.html#a-bbbb22">the encoder<\/a>/);
+    assert.doesNotMatch(html, /md4c-annotations/);
+    assert.deepEqual(postLinks(html), ['second'], 'cross-references count as links (backlinks, graph)');
+    const { referencedKeys } = await import('../admin/src/paths.js');
+    assert.deepEqual(referencedKeys(`---\ntype: paper\npdf: p.pdf\n---\n${body}`, 'posts/x.md'), ['posts/p.pdf'], 'publishing copies the PDF');
+  });
+
+  test('a password-protected paper post encrypts its comments too', async () => {
+    const { protectPost, decryptText } = await import('../js/protect.js');
+    const { articleHtml, PARSER_FLAGS } = await import('../js/blog-render.js');
+    const { joinAnnotations } = await import('../js/paper.js');
+    const md4c = await loadMd4c(WASM_URL);
+    const src = `---\ntitle: S\ntype: paper\npdf: p.pdf\npassword: pw\n---\n${joinAnnotations('Secret notes.', [{ id: 'a-cccc33', page: 1, rects: [], quote: 'secret quote', comment: 'secret comment', color: 'blue' }])}`;
+    const env = await protectPost(src, (md, meta) => articleHtml(meta, md, (m) => md4c.toHtml(m, { parserFlags: PARSER_FLAGS })));
+    assert.doesNotMatch(env, /secret/);
+    assert.match(env, /^type: paper$/m, 'the kind of post stays readable (for its stylesheet)');
+    const json = JSON.parse(/```md4c-protected-v1\n(.+)\n```/.exec(env)[1]);
+    const html = await decryptText(json, 'pw');
+    assert.match(html, /secret comment/);
+    assert.match(html, /class="paper"/);
+  });
+});

@@ -381,3 +381,17 @@ button.post-card-link:disabled { cursor: default; opacity: .4; }
 }
 .unsaved-bar span { flex: 1; min-width: 14rem; }
 .unsaved-list .post-card-main { cursor: default; }
+
+/* Paper notes: the PDF annotator in the editor (blog/paper.js, paper.css).
+   The blog's paper styles, with the admin's colours. */
+.preview-pane .paper {
+  --rule: var(--line); --paper: var(--bg); --ink-soft: var(--muted); --font-serif: inherit; --font-sans: inherit; --font-mono: var(--mono);
+  grid-template-columns: 1fr; margin: 0;
+}
+.preview-pane .paper[hidden], .preview-pane iframe[hidden] { display: none; }
+.preview-pane .paper-pages { height: 46vh; }
+.preview-pane .paper-comments { position: static; max-height: 32vh; }
+.paper-switch { display: flex; gap: 2px; margin-bottom: .5rem; padding: 3px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.paper-switch button { flex: 1; font: inherit; font-size: .9rem; padding: .4rem; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.paper-switch button[aria-selected="true"] { background: var(--bg); color: var(--ink); font-weight: 600; }
+.paper-only[hidden] { display: none; }

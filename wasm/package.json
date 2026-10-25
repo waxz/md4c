@@ -22,6 +22,7 @@
     "dompurify": "^3.4.17",
     "jose": "^6.2.12",
     "katex": "^0.19.0",
+    "pdfjs-dist": "^6.4.299",
     "webdav": "^5.11.0"
   },
   "engines": {

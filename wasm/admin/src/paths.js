@@ -160,7 +160,7 @@ export function postSlug(key) {
 /**
  * Keys of the local files a post refers to: Markdown links and images,
  * reference definitions, HTML src/href/poster attributes and the front
- * matter `image:`, `banner:`/`cover:` and `background:`. Relative paths resolve against the post's folder
+ * matter `image:`, `banner:`/`cover:`, `background:` and `pdf:` (paper notes). Relative paths resolve against the post's folder
  * (posts/); "/x" is the store root. External URLs and anchors are ignored.
  */
 export function referencedKeys(markdown, postKey) {
@@ -172,7 +172,7 @@ export function referencedKeys(markdown, postKey) {
   for (const m of markdown.matchAll(/\b(?:src|href|poster)\s*=\s*["']([^"']+)["']/gi)) add(m[1]);
   const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
   // Images named in the front matter: social image, banner, background.
-  for (const m of fm ? fm[1].matchAll(/^(?:image|banner|cover|background)\s*:\s*["']?([^"'\r\n]+?)["']?\s*$/gim) : []) add(m[1]);
+  for (const m of fm ? fm[1].matchAll(/^(?:image|banner|cover|background|pdf)\s*:\s*["']?([^"'\r\n]+?)["']?\s*$/gim) : []) add(m[1]);
 
   const base = postKey.slice(0, postKey.lastIndexOf('/') + 1);
   for (let ref of refs) {

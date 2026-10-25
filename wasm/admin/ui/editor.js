@@ -11,7 +11,10 @@ import { api, ApiError } from './client.js';
 import { flag, parseFrontMatter, SLUG_RE } from './lib/post-format.js';
 import { digest, readProtected } from './lib/protect.js';
 import { slugify } from './lib/blog-render.js';
-import { finishArticle, renderLive } from './render.js';
+import { finishArticle, renderLive, renderLiveHtml } from './render.js';
+import { mountPaper } from './paper.js';
+import { isPaper, joinAnnotations, paperHtml, paperPdf, splitAnnotations } from './lib/paper.js';
+import { PARSER_FLAGS } from './lib/blog-render.js';
 import { attachSourceSync } from './sync.js';
 import { publishPost } from './post-actions.js';
 import { Cancelled } from './tasks.js';
@@ -23,7 +26,7 @@ import {
   storeLabel, toast,
 } from './shared.js';
 
-const KNOWN = ['title', 'date', 'tags', 'author', 'description', 'summary', 'image', 'banner', 'cover', 'background', 'password', 'toc', 'numbered'];
+const KNOWN = ['title', 'date', 'tags', 'author', 'description', 'summary', 'image', 'banner', 'cover', 'background', 'password', 'toc', 'numbered', 'type', 'pdf'];
 let current = null; // the open editor, for the leave-page guard
 
 export function hasUnsavedChanges() {
@@ -51,6 +54,8 @@ function compose(fields, extra, body) {
   for (const k of ['author', 'description', 'image', 'banner', 'background']) {
     if (clean(fields[k])) lines.push(`${k}: ${yamlValue(fields[k])}`);
   }
+  if (fields.type === 'paper') lines.push('type: paper');
+  if (clean(fields.pdf)) lines.push(`pdf: ${yamlValue(fields.pdf)}`);
   if (clean(fields.password)) lines.push(`password: ${clean(fields.password)}`);
   for (const k of ['toc', 'numbered']) if (/^(true|false)$/.test(fields[k] ?? '')) lines.push(`${k}: ${fields[k]}`);
   for (const [k, v] of Object.entries(extra)) if (k !== 'draft') lines.push(`${k}: ${yamlValue(v)}`);
@@ -178,6 +183,9 @@ export async function showEditor(view, store, key, newStore) {
         <label class="field span-2"><span>Author (optional; default: the site's author)</span><input name="author" maxlength="120"></label>
         <div class="field span-2"><span>Banner image above the article (optional)</span><span class="field-row"><input name="banner" aria-label="Banner image" autocapitalize="off" spellcheck="false" placeholder="e.g. banner.jpg"><label class="btn btn-small">Upload<input type="file" accept="image/*" data-image-for="banner" hidden></label></span></div>
         <div class="field span-2"><span>Page background image (optional)</span><span class="field-row"><input name="background" aria-label="Page background image" autocapitalize="off" spellcheck="false" placeholder="e.g. paper.jpg"><label class="btn btn-small">Upload<input type="file" accept="image/*" data-image-for="background" hidden></label></span></div>
+        <label class="field"><span>Kind of post</span><select name="type">
+          <option value="">Article</option><option value="paper">Paper notes: a PDF with highlights and comments</option></select></label>
+        <div class="field paper-only"><span>The PDF</span><span class="field-row"><input name="pdf" aria-label="The PDF" autocapitalize="off" spellcheck="false" placeholder="e.g. paper.pdf"><label class="btn btn-small">Upload<input type="file" accept="application/pdf,.pdf" data-image-for="pdf" hidden></label></span></div>
         <label class="field span-2"><span>Social preview image (optional; default: the banner)</span><input name="image" autocapitalize="off" spellcheck="false"></label>
         <label class="field"><span>Contents box</span><select name="toc">
           <option value="">site default</option><option value="true">show</option><option value="false">hide</option></select></label>
@@ -208,7 +216,14 @@ export async function showEditor(view, store, key, newStore) {
         </div>
         <textarea name="body" spellcheck="true" aria-label="Markdown"></textarea>
       </div>
-      <div class="preview-pane"><iframe title="Preview" src="preview.html"></iframe></div>
+      <div class="preview-pane">
+        <div class="paper-switch" role="tablist" hidden>
+          <button type="button" role="tab" data-view="annotate" aria-selected="true">PDF &amp; comments</button>
+          <button type="button" role="tab" data-view="preview" aria-selected="false">Page preview</button>
+        </div>
+        <div class="paper annotator" hidden><div class="paper-viewer"></div><aside class="paper-comments" aria-label="Comments"></aside></div>
+        <iframe title="Preview" src="preview.html"></iframe>
+      </div>
     </div>
     <div class="editor-actions"></div>
   </form>`;
@@ -233,10 +248,17 @@ export async function showEditor(view, store, key, newStore) {
     set(f.password, m.password);
     set(f.toc, flag(m.toc) ?? (partial ? undefined : ''));
     set(f.numbered, flag(m.numbered) ?? (partial ? undefined : ''));
+    set(f.type, isPaper(m) ? 'paper' : (partial && m.type === undefined ? undefined : ''));
+    set(f.pdf, m.pdf);
     for (const [k, v] of Object.entries(m)) if (!KNOWN.includes(k)) extra[k] = v;
   };
   fillFields(meta);
-  f.body.value = body.replace(/^\r?\n/, ''); // the blank line after the front matter
+  // A paper post's highlights are kept apart from its notes while editing
+  // (the annotator edits them), and put back on saving (text()).
+  const parts = splitAnnotations(body);
+  ed.annotations = parts.annotations;
+  f.body.value = parts.body.replace(/^\r?\n/, ''); // the blank line after the front matter
+  if (parts.annotations.length) f.body.value = f.body.value.replace(/\s+$/, '');
   /**
    * A "---" front matter block typed or pasted at the top of the text (or
    * left there by an earlier save) moves into the fields: the post's real
@@ -267,9 +289,9 @@ export async function showEditor(view, store, key, newStore) {
     {
       title: f.title.value, date: f.date.value, tags: f.tags.value, author: f.author.value, description: f.description.value,
       image: f.image.value, banner: f.banner.value, background: f.background.value, password: f.password.value,
-      toc: f.toc.value, numbered: f.numbered.value,
+      toc: f.toc.value, numbered: f.numbered.value, type: f.type.value, pdf: f.pdf.value,
     },
-    extra, f.body.value
+    extra, f.type.value === 'paper' || ed.annotations.length ? joinAnnotations(f.body.value, ed.annotations) : f.body.value
   );
   const slug = () => f.slug.value.trim();
   // Unsaved changes are kept in this browser, one entry per draft
@@ -383,14 +405,16 @@ export async function showEditor(view, store, key, newStore) {
     const prose = doc.querySelector('.prose');
     const s = slug() || 'untitled';
     // Images resolve through the Worker: the draft store first, then the site.
-    prose.replaceChildren(renderLive({ render: (md, o) => state.md4c.toHtml(md, o) }, f.body.value, {
-      postUrl: api.rawUrl(home(), `posts/${s}.md`),
-      storageBase: api.rawUrl(home(), ''),
-      postHref: () => '#',
-      sourcePositions: true,
-    }));
+    const where = { postUrl: api.rawUrl(home(), `posts/${s}.md`), storageBase: api.rawUrl(home(), ''), postHref: () => '#' };
+    const fs = { render: (md, o) => state.md4c.toHtml(md, o) };
+    prose.replaceChildren(f.type.value === 'paper'
+      // A paper post as published, its comments listed (the PDF is in the annotator).
+      ? renderLiveHtml(paperHtml({ type: 'paper', pdf: f.pdf.value }, f.body.value, ed.annotations,
+        (md) => state.md4c.toHtml(md, { parserFlags: PARSER_FLAGS })), where)
+      : renderLive(fs, f.body.value, { ...where, sourcePositions: true }));
     prose.className = 'prose';
-    await finishArticle(article, { ...state.site, citation: false }, { title: f.title.value, date: f.date.value, slug: s, url: '', toc: f.toc.value })
+    await finishArticle(article, { ...state.site, citation: false },
+      { title: f.title.value, date: f.date.value, slug: s, url: '', toc: f.toc.value, paperViewer: false })
       .catch((err) => console.warn('preview:', err));
     sync.refresh();
   }
@@ -399,6 +423,75 @@ export async function showEditor(view, store, key, newStore) {
     previewTimer = setTimeout(updatePreview, 250);
   };
   iframe.addEventListener('load', updatePreview);
+
+  // ---- Paper notes: the PDF annotator ----
+  const annotatorEl = form.querySelector('.annotator');
+  const paperSwitch = form.querySelector('.paper-switch');
+  let annotator = null;
+  let annotatorFor = null; // the PDF shown (null: none yet)
+  let paperView = 'annotate';
+  const pdfUrl = () => {
+    const ref = paperPdf({ pdf: f.pdf.value });
+    return ref ? new URL(ref, api.rawUrl(home(), `posts/${slug() || 'untitled'}.md`)).href : '';
+  };
+  /** Show the annotator or the page preview; (re)open the PDF when it changed. */
+  function paperUi(reload = false) {
+    const paper = f.type.value === 'paper';
+    for (const el of form.querySelectorAll('.paper-only')) el.hidden = !paper;
+    paperSwitch.hidden = !paper;
+    const annotate = paper && paperView === 'annotate';
+    annotatorEl.hidden = !annotate;
+    iframe.hidden = annotate;
+    for (const b of paperSwitch.querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.view === paperView));
+    if (!annotate) return;
+    const url = pdfUrl();
+    if (!reload && url === annotatorFor) return;
+    annotator?.destroy();
+    annotator = null;
+    annotatorFor = url;
+    if (!url) {
+      annotatorEl.querySelector('.paper-viewer').innerHTML = '<p class="paper-fallback muted">Name the PDF above, or upload it.</p>';
+      annotatorEl.querySelector('.paper-comments').innerHTML = '';
+      return;
+    }
+    mountPaper(annotatorEl, {
+      editable: true,
+      pdfUrl: url,
+      annotations: ed.annotations,
+      onChange: (list) => {
+        ed.annotations = list;
+        edited();
+      },
+      renderComment: (md) => {
+        const box = document.createElement('div');
+        box.append(renderLive({ render: (m, o) => state.md4c.toHtml(m, o) }, md, {
+          postUrl: api.rawUrl(home(), `posts/${slug() || 'untitled'}.md`), storageBase: api.rawUrl(home(), ''), postHref: () => '#',
+        }));
+        return box.innerHTML;
+      },
+      // A cross-reference to paste in other notes: [[this-post#a-…|p. 3: “…”]]
+      linkFor: (id, a) => `[[${slug() || 'this-post'}#${id}|p. ${a.page}${a.quote ? `: “${a.quote.slice(0, 40)}${a.quote.length > 40 ? '…' : ''}”` : ''}]]`,
+      confirmDelete: (a) => confirmDialog('Delete this highlight?', `${a.quote ? `“${a.quote.slice(0, 100)}” ` : ''}and its comment are removed from the post.`, 'Delete'),
+    }).then((h) => { annotator = h; }, (err) => console.warn('annotator:', err));
+  }
+  paperSwitch.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-view]');
+    if (!b) return;
+    paperView = b.dataset.view;
+    paperUi();
+    if (paperView === 'preview') updatePreview();
+  });
+  let pdfTimer;
+  form.addEventListener('input', (e) => {
+    if (e.target === f.pdf) {
+      clearTimeout(pdfTimer);
+      pdfTimer = setTimeout(() => paperUi(), 600);
+    }
+  });
+  form.addEventListener('change', (e) => {
+    if (e.target === f.type || e.target === f.pdf) paperUi();
+  });
+  paperUi();
 
   for (const tab of form.querySelectorAll('.pane-tabs button')) {
     tab.addEventListener('click', () => {
@@ -414,12 +507,16 @@ export async function showEditor(view, store, key, newStore) {
     if (e.target === f.title && !ed.slugTouched) f.slug.value = slugify(f.title.value);
     if (e.target === f.slug) ed.slugTouched = true;
     if (e.target === f.body) liftFrontMatter();
+    edited();
+  });
+  /** After any change (fields, text, highlights and comments). */
+  function edited() {
     lastInput = Date.now();
     // Every change is also kept on this device at once (see the restore offer below).
     stash();
     setDirty(text() !== ed.saved);
     schedulePreview();
-  });
+  }
 
   // ---- Autosave ----
   // Every few seconds, once typing pauses: a draft kept in "This browser" is
@@ -501,7 +598,7 @@ export async function showEditor(view, store, key, newStore) {
       const [key] = await uploadFiles(home(), 'posts/', files);
       if (!key) return;
       f[input.dataset.imageFor].value = key.slice('posts/'.length);
-      form.dispatchEvent(new Event('input', { bubbles: true }));
+      f[input.dataset.imageFor].dispatchEvent(new Event('input', { bubbles: true }));
       schedulePreview();
     });
   }
@@ -530,7 +627,10 @@ export async function showEditor(view, store, key, newStore) {
   const restore = () => {
     const r = parseFrontMatter(kept.text);
     fillFields(r.meta);
-    f.body.value = r.body.replace(/^\r?\n/, '');
+    const kp = splitAnnotations(r.body);
+    ed.annotations = kp.annotations;
+    f.body.value = kp.body.replace(/^\r?\n/, '');
+    paperUi(true);
     if (isNew && kept.slug) f.slug.value = kept.slug;
     setDirty(true);
     schedulePreview();

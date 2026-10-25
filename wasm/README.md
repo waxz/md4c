@@ -250,6 +250,44 @@ event handlers or `javascript:` URLs, and no frames from other origins.
 Posts rendered live in the browser (`#/post/<slug>`, before a rebuild)
 still go through DOMPurify.
 
+### Paper notes
+
+A post can be notes on a paper: the PDF is the main part of the page, with
+highlights on it and a comment beside each, like a reading app.
+
+```markdown
+---
+title: Attention is all you need — notes
+type: paper
+pdf: attention.pdf
+---
+
+General notes, in Markdown. The encoder is discussed in
+[[transformer-survey#a-k3j9x2|the survey]].
+```
+
+- **On the blog,** the PDF is drawn in the page (pdf.js, self-hosted, loaded
+  only on these posts; its text can be selected and copied). Highlights sit
+  on the text in their colour; the comments are listed beside it (below it
+  on a phone). Clicking a comment scrolls the PDF to its highlight; clicking
+  a highlight shows its comment. Each highlight has its own address,
+  `…/attention-notes.html#a-k3j9x2`.
+- **Cross-references:** `[[other-paper#a-…]]` links to a highlight in
+  another paper post (the page opens there), `[[#a-…]]` to one in the same
+  paper; in comments and in the notes. They count as links between posts
+  (backlinks, the graph).
+- **In the admin,** choose *Paper notes* under *Kind of post* and upload
+  the PDF. The right-hand pane shows **PDF & comments**: select text in the
+  PDF and click **Highlight**; write the comment (Markdown) beside it, pick
+  a colour, or **Copy link** for a cross-reference to paste elsewhere.
+  **Page preview** shows the page as published.
+- The highlights are kept in the post's own Markdown, in a
+  ` ```md4c-annotations ` block the editor keeps out of sight: one file to
+  save, autosave, move, publish and encrypt. A password-protected paper post
+  encrypts its comments and notes; the PDF itself is an attachment, public
+  once published (as images are).
+- Without JavaScript the page still lists the comments and links the PDF.
+
 ### Editing from a phone
 
 `admin/` adds an admin app on its own hostname, behind Cloudflare Access.

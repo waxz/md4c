@@ -102,6 +102,20 @@ await mkdir(hljsOut, { recursive: true });
 await cp(join(hljsDir, 'es', 'highlight.min.js'), join(hljsOut, 'highlight.min.js'));
 await cp(join(hljsDir, 'LICENSE'), join(hljsOut, 'LICENSE'));
 
+// pdf.js, for paper notes (blog/paper.js), loaded only on paper posts:
+// the library and its worker (its "legacy" build, which runs in current
+// browsers, not only the newest; as .js, so storage serves them as
+// JavaScript), and the data it fetches as needed (character maps, standard
+// fonts, image decoders, colour profiles). Not its JavaScript-in-PDF engine.
+const pdfjsDir = dirname(require.resolve('pdfjs-dist/package.json'));
+const pdfjsOut = join(out, 'vendor', 'pdfjs');
+await mkdir(pdfjsOut, { recursive: true });
+await cp(join(pdfjsDir, 'legacy', 'build', 'pdf.min.mjs'), join(pdfjsOut, 'pdf.min.js'));
+await cp(join(pdfjsDir, 'legacy', 'build', 'pdf.worker.min.mjs'), join(pdfjsOut, 'pdf.worker.min.js'));
+await cp(join(pdfjsDir, 'LICENSE'), join(pdfjsOut, 'LICENSE'));
+for (const dir of ['cmaps', 'standard_fonts', 'iccs']) await cp(join(pdfjsDir, dir), join(pdfjsOut, dir), { recursive: true });
+await cp(join(pdfjsDir, 'wasm'), join(pdfjsOut, 'wasm'), { recursive: true, filter: (src) => !/quickjs/.test(src) });
+
 // Content-hashed module URLs (see version-assets.mjs). The pages link to
 // app.js, style.css and unlock.js with their versions too: those are kept
 // in assets.json for the site build (publish.mjs, the admin).
@@ -114,7 +128,7 @@ const jsFiles = async (dir) => {
 };
 const blogVersion = await versionAssets(out, await jsFiles(out));
 const assets = {};
-for (const name of ['app.js', 'style.css', 'unlock.js']) assets[name] = await blogVersion(name);
+for (const name of ['app.js', 'style.css', 'unlock.js', 'paper.css']) assets[name] = await blogVersion(name);
 await writeFile(join(out, 'assets.json'), `${JSON.stringify(assets, null, 2)}\n`);
 
 // A starter home page and theme (no posts yet); publish.mjs rebuilds both.
@@ -133,7 +147,7 @@ await rm(adminOut, { recursive: true, force: true });
 await cp(join(root, 'admin', 'ui'), adminOut, { recursive: true });
 await cp(join(out, 'lib'), join(adminOut, 'lib'), { recursive: true });
 await cp(join(out, 'vendor'), join(adminOut, 'vendor'), { recursive: true });
-for (const f of ['render.js', 'style.css']) await cp(join(root, 'blog', f), join(adminOut, f));
+for (const f of ['render.js', 'style.css', 'paper.js', 'paper.css']) await cp(join(root, 'blog', f), join(adminOut, f));
 // The blog's versions, for the pages the admin builds.
 await cp(join(out, 'assets.json'), join(adminOut, 'site-assets.json'));
 await cp(join(root, 'admin', 'src', 'paths.js'), join(adminOut, 'paths.js'));
@@ -152,7 +166,7 @@ const offline = [];
 for (const ent of await readdir(adminOut, { withFileTypes: true, recursive: true })) {
   if (!ent.isFile()) continue;
   const rel = relative(adminOut, join(ent.parentPath ?? ent.path, ent.name)).split(sep).join('/');
-  if (['sw.js', 'offline.json', 'site-assets.json'].includes(rel) || /^vendor\/(katex\/fonts|source-serif-4\/files)\//.test(rel)) continue;
+  if (['sw.js', 'offline.json', 'site-assets.json'].includes(rel) || /^vendor\/(katex\/fonts|source-serif-4\/files|pdfjs\/(cmaps|standard_fonts|iccs|wasm))\//.test(rel)) continue;
   if (/\.(js|mjs|css|wasm)$/.test(rel)) offline.push(`${rel}?v=${await adminVersion(rel)}`);
   if (!/\.(js|mjs)$/.test(rel)) offline.push(rel); // pages, stylesheets the preview links plainly, …
 }

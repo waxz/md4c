@@ -11,14 +11,14 @@
 // full rebuild is requested.
 
 import { StorageError } from '@storagesdk/core';
-import { linkContexts, linkPostsForStaticPage, PARSER_FLAGS, postLinks } from './blog-render.js';
+import { articleHtml, linkContexts, PARSER_FLAGS, postLinks } from './blog-render.js';
 import { isDraft, parseFrontMatter, postMetadata, SLUG_RE } from './post-format.js';
 import { atomFeed, graphPage, homePage, postPage, protectedArticle, robotsTxt, siteRelative, sitemap, themeCss } from './pages.js';
 import { readProtected, wantsPassword } from './protect.js';
 import { normalizeSite } from './site-config.js';
 
 /** Bump when js/pages.js output changes, so the next build redoes every page. */
-export const BUILD_VERSION = 11;
+export const BUILD_VERSION = 12;
 export const INDEX = 'index.json';
 export const CACHE_FILES = 'public, max-age=300';
 // Pages, posts and indexes change in place (an edit, a new password), so
@@ -164,7 +164,8 @@ export async function build(storage, md4c, opts = {}) {
         await put(page, postPage(site, { slug, page, ...metadata }, protectedArticle(locked.envelope)), 'text/html; charset=utf-8', CACHE_PAGES);
       } else {
         metadata = postMetadata(source, render, slug);
-        const html = linkPostsForStaticPage(render(parseFrontMatter(source).body));
+        const parsed = parseFrontMatter(source);
+        const html = articleHtml(parsed.meta, parsed.body, render);
         htmlBySlug.set(slug, html);
         sources.set(slug, source);
         links = postLinks(html, site.url).filter((s) => s !== slug);
@@ -206,7 +207,8 @@ export async function build(storage, md4c, opts = {}) {
   for (const p of posts.slice(0, FEED_ENTRIES)) {
     if (htmlBySlug.has(p.slug) || p.protected) continue;
     const source = sources.get(p.slug) ?? await storage.download(`posts/${p.slug}.md`, { as: 'text' });
-    htmlBySlug.set(p.slug, linkPostsForStaticPage(render(parseFrontMatter(source).body)));
+    const parsed = parseFrontMatter(source);
+    htmlBySlug.set(p.slug, articleHtml(parsed.meta, parsed.body, render));
   }
 
   const index = {

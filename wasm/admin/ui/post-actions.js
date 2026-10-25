@@ -8,7 +8,7 @@
 // title }: its working copy in a draft store and its public copy.
 
 import { api, ApiError } from './client.js';
-import { linkPostsForStaticPage, PARSER_FLAGS } from './lib/blog-render.js';
+import { articleHtml, PARSER_FLAGS } from './lib/blog-render.js';
 import { protectPost, wantsPassword } from './lib/protect.js';
 import { parseFrontMatter } from './lib/post-format.js';
 import { dialog, draftStores, esc, formatSize, getMd4c, publicUrl, rebuildSite, state, storeLabel, toast } from './shared.js';
@@ -137,7 +137,7 @@ export function publishPost(post, { alsoRemove = null } = {}) {
       // Encrypted here, in the browser: the password never leaves the draft.
       step('Encrypting…');
       const [{ text }, md4c] = await Promise.all([api.read(draft.store, draft.key), getMd4c()]);
-      postBody = await protectPost(text, (md) => linkPostsForStaticPage(md4c.toHtml(md, { parserFlags: PARSER_FLAGS })));
+      postBody = await protectPost(text, (md, meta) => articleHtml(meta, md, (m) => md4c.toHtml(m, { parserFlags: PARSER_FLAGS })));
     }
     let overwrite = choice.overwrite;
     let r;

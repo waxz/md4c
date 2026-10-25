@@ -283,6 +283,11 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
     - This works because the preview is rendered with md4c.wasm's
       `SOURCE_POS` flag: each block carries `data-src`, where its text starts
       in the Markdown (`md4c_wasm.c`). Published pages are rendered without it.
+  - **Paper notes** (*Kind of post* → *Paper notes*, then the PDF): the
+    right-hand pane annotates the PDF. Select text, click **Highlight**, write
+    the comment beside it; **Copy link** gives `[[slug#a-…|p. 3: “…”]]` to
+    paste in other notes. **Page preview** shows the published page. See
+    "Paper notes" in the main README.
   - **Autosave.** A few seconds after you stop typing:
     - a draft kept in **This browser** is saved for real (no button, no
       network); its address follows the title while you type it, and the

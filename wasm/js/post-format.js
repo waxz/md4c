@@ -177,6 +177,7 @@ export function postMetadata(source, renderHtml, fallbackTitle) {
   if (meta.background) out.background = meta.background.slice(0, 500);
   if (/^(page|hero)$/.test(meta.backgroundmode ?? '')) out.backgroundMode = meta.backgroundmode;
   if (isIsoDate(updated)) out.updated = updated;
+  if (String(meta.type ?? '').trim().toLowerCase() === 'paper') out.type = 'paper';
   if (flag(meta.toc)) out.toc = flag(meta.toc);
   if (flag(meta.numbered)) out.numbered = flag(meta.numbered);
   return out;
