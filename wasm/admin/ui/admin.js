@@ -12,17 +12,16 @@
 
 import { api } from './client.js';
 import { showPosts } from './posts.js';
+import { others as unsavedOthers, setOpen } from './unsaved.js';
 
 // Views other than the posts list load when first opened.
 let editorModule = null;
 const editor = async () => (editorModule ??= await import('./editor.js'));
 const explorer = () => import('./explorer.js');
-const hasUnsavedChanges = () => editorModule?.hasUnsavedChanges() ?? false;
 import { DEFAULT_SITE, googleTagId, normalizeSite } from './lib/site-config.js';
-import { dialog, esc, init, publicUrl, rebuildSite, reportError, state, toast } from './shared.js';
+import { esc, init, publicUrl, rebuildSite, reportError, state, toast } from './shared.js';
 
 const view = document.getElementById('view');
-let lastHash = location.hash;
 
 function parseRoute() {
   const [, name = 'posts', store = 'site', ...rest] = location.hash.replace(/^#/, '').split('/');
@@ -31,6 +30,7 @@ function parseRoute() {
 
 async function route() {
   const r = parseRoute();
+  if (r.name !== 'edit' && r.name !== 'new') setOpen(''); // no post open: count them all
   const section = { edit: 'posts', new: 'new', view: 'files', text: 'files' }[r.name] ?? r.name;
   document.querySelectorAll('.app-nav a').forEach((a) => {
     a.setAttribute('aria-current', String(a.dataset.route === section));
@@ -44,7 +44,6 @@ async function route() {
     else if (r.name === 'storage') await (await import('./storage.js')).showStorage(view);
     else if (r.name === 'files') await (await explorer()).showFiles(view, r.store, r.path);
     else await showPosts(view);
-    lastHash = location.hash;
     view.focus({ preventScroll: true });
     window.scrollTo(0, 0);
   } catch (err) {
@@ -190,23 +189,30 @@ async function showSettings() {
   });
 }
 
-window.addEventListener('hashchange', async () => {
-  if (hasUnsavedChanges() && location.hash !== lastHash) {
-    const leave = await dialog({
-      title: 'Leave without saving?',
-      body: 'Your changes are kept on this device and can be restored when you open the post again.',
-      buttons: [{ label: 'Stay', value: false }, { label: 'Leave', value: true, kind: 'danger' }],
-    });
-    if (!leave) {
-      history.replaceState(null, '', lastHash);
-      return;
-    }
+// Leaving a post with unsaved changes asks nothing: they are kept in this
+// browser (unsaved.js), and this banner says so, with a link to the list.
+window.addEventListener('hashchange', route);
+
+function renderUnsavedBanner() {
+  const entries = unsavedOthers();
+  let bar = document.querySelector('.unsaved-bar');
+  if (!entries.length || parseRoute().name === 'storage') {
+    bar?.remove();
+    return;
   }
-  route();
-});
-window.addEventListener('beforeunload', (e) => {
-  if (hasUnsavedChanges()) e.preventDefault();
-});
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.className = 'unsaved-bar';
+    bar.setAttribute('role', 'status');
+    (document.querySelector('.signed-out') ?? document.querySelector('.app-bar')).after(bar);
+  }
+  const names = entries.slice(0, 2).map((e) => `“${e.title || e.slug || 'Untitled'}”`).join(', ');
+  bar.innerHTML = `<span><b>${entries.length} draft${entries.length === 1 ? ' has' : 's have'} unsaved changes</b>, kept in this browser:
+    ${esc(names)}${entries.length > 2 ? ` and ${entries.length - 2} more` : ''}.</span>
+    <a class="btn btn-small" href="#/storage">Review</a>`;
+}
+window.addEventListener('unsaved', renderUnsavedBanner);
+window.addEventListener('hashchange', renderUnsavedBanner);
 
 /* ---------- Signed out of Cloudflare Access ---------- */
 
@@ -253,6 +259,7 @@ async function main() {
   document.title = `Admin · ${state.site.title}`;
   if (!location.hash) history.replaceState(null, '', '#/posts');
   route();
+  renderUnsavedBanner();
 }
 
 main();

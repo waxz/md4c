@@ -7,8 +7,9 @@
 //     back to the browser).
 
 import { api, ApiError, browserStores } from './client.js';
-import { confirmDialog, esc, formatSize, reportError, state, toast } from './shared.js';
+import { confirmDialog, esc, formatSize, formatTime, reportError, state, storeLabel, toast } from './shared.js';
 import { localStore } from './local-store.js';
+import { drop as unsavedDrop, list as unsavedList, reopen as unsavedReopen } from './unsaved.js';
 
 // S3-compatible services: endpoint pattern and default region.
 const S3_PROVIDERS = {
@@ -85,6 +86,7 @@ export async function showStorage(view) {
     <p class="hint">Drafts and their images are kept in private storage until you publish. Add a NAS or
       Nextcloud (WebDAV), any S3-compatible bucket, or a GitHub repository. Keep its settings and password in
       this browser only, or in Cloudflare KV to use it from every device.</p>
+    <section class="post-section unsaved-section" id="unsaved"></section>
     <section class="post-section"><h2>Storage <span class="count">${all.length + 2}</span></h2>
       <ul class="post-cards">
         <li class="post-card store-card"><div class="post-card-main"><span class="post-title">Published site</span>
@@ -100,6 +102,12 @@ export async function showStorage(view) {
     </section>
     <div class="store-form-slot"></div>
   </div>`;
+  renderUnsaved(view);
+  const onUnsaved = () => {
+    if (!view.querySelector('.unsaved-section')) window.removeEventListener('unsaved', onUnsaved);
+    else renderUnsaved(view);
+  };
+  window.addEventListener('unsaved', onUnsaved);
   localStore.usage().then((u) => {
     const el = view.querySelector('.local-usage');
     if (el) el.textContent = `${u.posts} post(s), ${u.files} file(s), ${formatSize(u.bytes)}`;
@@ -112,6 +120,37 @@ export async function showStorage(view) {
       openForm(view, all.find((s) => s.id === btn.dataset.id && s.location === btn.dataset.location));
     }
   });
+}
+
+/** Drafts with unsaved changes kept in this browser: reopen or discard each. */
+function renderUnsaved(view) {
+  const box = view.querySelector('.unsaved-section');
+  if (!box) return;
+  const entries = unsavedList();
+  box.hidden = !entries.length;
+  if (!entries.length) {
+    box.innerHTML = '';
+    return;
+  }
+  box.innerHTML = `<h2>Unsaved changes <span class="count">${entries.length}</span></h2>
+    <p class="hint">Text typed but not saved, kept in this browser. Open one to go on (its text is put back), then save it; or discard it.</p>
+    <ul class="post-cards unsaved-list">${entries.map((e, i) => `<li class="post-card">
+      <div class="post-card-main">
+        <span class="post-title">${esc(e.title || e.slug || 'Untitled')}</span>
+        <span class="post-meta"><span class="chip">${esc(e.store ? storeLabel(e.store) : `new post${e.target ? ` · for ${storeLabel(e.target)}` : ''}`)}</span>
+          <span>${esc(formatTime(new Date(e.at).toISOString()))}</span>
+          <span>${esc(e.text.replace(/^---[\s\S]*?\n---\s*/, '').replace(/\s+/g, ' ').slice(0, 80))}</span></span>
+      </div>
+      <button type="button" class="btn btn-small btn-primary" data-unsaved="open" data-i="${i}">Open</button>
+      <button type="button" class="btn btn-small btn-danger-text" data-unsaved="discard" data-i="${i}">Discard</button>
+    </li>`).join('')}</ul>`;
+  box.onclick = async (ev) => {
+    const b = ev.target.closest('[data-unsaved]');
+    if (!b) return;
+    const e = entries[Number(b.dataset.i)];
+    if (b.dataset.unsaved === 'open') unsavedReopen(e);
+    else if (await confirmDialog('Discard unsaved changes?', `The unsaved text of “${e.title || e.slug || 'Untitled'}” is deleted from this browser. The saved draft, if any, stays as it is.`, 'Discard')) unsavedDrop(e.id);
+  };
 }
 
 const field = (name, label, attrs = '', hint = '') =>

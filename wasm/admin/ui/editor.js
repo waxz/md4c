@@ -15,6 +15,7 @@ import { finishArticle, renderLive } from './render.js';
 import { attachSourceSync } from './sync.js';
 import { publishPost } from './post-actions.js';
 import { Cancelled } from './tasks.js';
+import { drop, entryKey, keep, newId, read, setOpen, takeRestore } from './unsaved.js';
 import { LOCAL_ID } from './local-store.js';
 import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
 import {
@@ -57,16 +58,6 @@ function compose(fields, extra, body) {
   return lines.join('\n');
 }
 
-const storeKey = (store, key) => `md4c-admin:${store ?? 'new'}:${key ?? 'new'}`;
-function saveLocal(k, data) {
-  try { localStorage.setItem(k, JSON.stringify({ ...data, at: Date.now() })); } catch {}
-}
-function loadLocal(k) {
-  try { return JSON.parse(localStorage.getItem(k) ?? 'null'); } catch { return null; }
-}
-function dropLocal(k) {
-  try { localStorage.removeItem(k); } catch {}
-}
 
 /** Insert Markdown around the selection of a textarea. */
 function wrapSelection(ta, before, after = '', placeholder = '') {
@@ -281,7 +272,26 @@ export async function showEditor(view, store, key, newStore) {
     extra, f.body.value
   );
   const slug = () => f.slug.value.trim();
-  const local = storeKey(ed.store, ed.key);
+  // Unsaved changes are kept in this browser, one entry per draft
+  // (unsaved.js); the banner and the Storage page list them.
+  const restoreId = takeRestore();
+  ed.newId = isNew && restoreId?.startsWith(entryKey(null, null, '')) ? restoreId.slice(entryKey(null, null, '').length) : newId();
+  const stashKey = () => entryKey(ed.store, ed.key, ed.newId);
+  let stashedAt = stashKey();
+  function stash(content = text()) {
+    const k = stashKey();
+    if (stashedAt !== k) drop(stashedAt); // renamed, or a new post now saved
+    stashedAt = k;
+    if (content === ed.saved) drop(k);
+    else keep(k, { text: content, slug: slug(), title: f.title.value.trim(), store: ed.store, key: ed.key, target: ed.target });
+    setOpen(k);
+  }
+  function unstash() {
+    drop(stashedAt, stashKey(), entryKey(null, null, ed.newId));
+    stashedAt = stashKey();
+    setOpen(stashedAt);
+  }
+  setOpen(stashedAt);
 
   // ---- Actions ----
   const actions = form.querySelector('.editor-actions');
@@ -406,7 +416,7 @@ export async function showEditor(view, store, key, newStore) {
     if (e.target === f.body) liftFrontMatter();
     lastInput = Date.now();
     // Every change is also kept on this device at once (see the restore offer below).
-    saveLocal(local, { text: text(), slug: slug() });
+    stash();
     setDirty(text() !== ed.saved);
     schedulePreview();
   });
@@ -434,7 +444,7 @@ export async function showEditor(view, store, key, newStore) {
     if (content === ed.saved) return setDirty(false);
     const newKey = `posts/${slug()}.md`;
     if (home() !== LOCAL_ID || direct) {
-      saveLocal(local, { text: content, slug: slug() });
+      stash(content);
       ed.backupNote = `Unsaved changes · backed up on this device at ${clock(Date.now())}`;
       return setDirty(true);
     }
@@ -456,7 +466,7 @@ export async function showEditor(view, store, key, newStore) {
       ed.saved = content;
       ed.autosavedAt = Date.now();
       ed.backupNote = '';
-      dropLocal(local);
+      unstash();
       history.replaceState(null, '', editHref(ed.store, ed.key));
       setDirty(text() !== ed.saved);
     } catch (err) {
@@ -516,26 +526,28 @@ export async function showEditor(view, store, key, newStore) {
   }
 
   // Offer to restore text that was typed but never saved (e.g. tab closed).
-  const stash = loadLocal(local);
-  if (stash?.text && stash.text !== source) {
+  const kept = read(stashedAt);
+  const restore = () => {
+    const r = parseFrontMatter(kept.text);
+    fillFields(r.meta);
+    f.body.value = r.body.replace(/^\r?\n/, '');
+    if (isNew && kept.slug) f.slug.value = kept.slug;
+    setDirty(true);
+    schedulePreview();
+  };
+  if (kept?.text && kept.text !== source && restoreId === stashedAt) {
+    restore(); // opened from the list of unsaved changes
+  } else if (kept?.text && kept.text !== source) {
     const box = form.querySelector('.restore');
     box.hidden = false;
-    box.innerHTML = `Unsaved text from ${esc(formatTime(new Date(stash.at).toISOString()))} was found on this device.
+    box.innerHTML = `Unsaved text from ${esc(formatTime(new Date(kept.at).toISOString()))} was found on this device.
       <button type="button" class="btn btn-small" data-restore="yes">Restore it</button>
       <button type="button" class="btn btn-small" data-restore="no">Discard</button>`;
     box.addEventListener('click', (e) => {
       const b = e.target.closest('[data-restore]');
       if (!b) return;
-      if (b.dataset.restore === 'yes') {
-        const r = parseFrontMatter(stash.text);
-        fillFields(r.meta);
-        f.body.value = r.body;
-        if (isNew && stash.slug) f.slug.value = stash.slug;
-        setDirty(true);
-        schedulePreview();
-      } else {
-        dropLocal(local);
-      }
+      if (b.dataset.restore === 'yes') restore();
+      else unstash();
       box.remove();
     });
   }
@@ -628,7 +640,7 @@ export async function showEditor(view, store, key, newStore) {
             ed.etag = (await api.write('site', ed.key, content, ed.etag)).etag;
           }
           ed.saved = content;
-          dropLocal(local);
+          unstash();
           setDirty(false);
           history.replaceState(null, '', editHref(ed.store, ed.key));
           toast('Saved. The site is updating in the background (Activity).', 'success');
@@ -645,7 +657,7 @@ export async function showEditor(view, store, key, newStore) {
           ed.etag = (await api.write(ed.store, ed.key, content, ed.etag)).etag;
         }
         ed.saved = content;
-        dropLocal(local);
+        unstash();
         setDirty(false);
         schedulePreview();
         history.replaceState(null, '', editHref(ed.store, ed.key));

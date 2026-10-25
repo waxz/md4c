@@ -285,9 +285,13 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
       network); its address follows the title while you type it, and the
       status shows *Autosaved at …*;
     - a draft kept in other storage is backed up on this device (*backed
-      up on this device at …*) and offered back if the tab closes before you
-      save; saving it there stays a click, as it costs a request and may
-      need signing in.
+      up on this device at …*); saving it there stays a click, as it costs
+      a request and may need signing in.
+  - **Unsaved changes are never lost, and nothing asks before you leave.**
+    Every draft with unsaved changes (each new post too) keeps its own copy
+    in this browser. A banner at the top says how many there are, with
+    **Review**: the Storage page lists them, to **Open** one (its text is
+    put back) or **Discard** it.
     - Autosave pauses (and says why) if the address is taken or the draft
       was changed in another tab; saving by hand sorts it out.
 - **The draft is the working copy.**

@@ -373,3 +373,11 @@ button.post-card-link:disabled { cursor: default; opacity: .4; }
   background: color-mix(in srgb, var(--accent) 10%, var(--surface)); border-bottom: 1px solid var(--line); font-size: .9rem;
 }
 .signed-out span { flex: 1; min-width: 14rem; }
+
+/* Drafts with unsaved changes, kept in this browser (admin.js, unsaved.js) */
+.unsaved-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; padding: .55rem 1rem;
+  background: color-mix(in srgb, #c98a00 14%, var(--surface)); border-bottom: 1px solid var(--line); font-size: .9rem;
+}
+.unsaved-bar span { flex: 1; min-width: 14rem; }
+.unsaved-list .post-card-main { cursor: default; }
