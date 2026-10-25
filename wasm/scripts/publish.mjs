@@ -31,6 +31,10 @@
 //                    readers get only the pages. Markdown already public is
 //                    moved there. Needed to rebuild a site published from
 //                    the admin.
+//   --public-markdown
+//                    allow the posts' Markdown in the public bucket, readable
+//                    by anyone (refused otherwise, except for the fs adapter);
+//                    use --sources-bucket instead
 //   --full           re-render every page (normally only changed posts are)
 //   --dry-run        print what would change, change nothing
 //
@@ -72,6 +76,7 @@ const { values: args } = parseArgs({
     indexnow: { type: 'boolean', default: false },
     full: { type: 'boolean', default: false },
     'sources-bucket': { type: 'string' },
+    'public-markdown': { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -308,6 +313,14 @@ console.log(`Publishing to ${args.to}${args.to === 'fs' ? ` (${resolve(process.e
 
 if (args.site) await uploadSite(publicStorage);
 if (storage.migrate) await storage.migrate();
+if (!args['no-posts'] && !storage.migrate && args.to !== 'fs' && !args['public-markdown']) {
+  // Uploading posts without a private place for their Markdown would make
+  // every post's source (drafts' text, a password post's password) public.
+  console.error("Refusing to put the posts' Markdown in the public bucket, where anyone could read it.\n"
+    + 'Pass --sources-bucket <a private bucket> (the admin uses its drafts bucket), '
+    + 'or --public-markdown if that is really wanted.');
+  process.exit(2);
+}
 if (!args['no-posts']) await uploadPosts(storage, resolve(args.posts));
 if (dry) {
   console.log('Done (dry run): index.json and pages would be rebuilt.');

@@ -722,6 +722,18 @@ describe('publishing with files', () => {
     assert.equal(await read('site', 'posts/old-post.md'), null);
   });
 
+  test("without a private bucket, a post's Markdown is refused rather than made public", async () => {
+    const bare = { ...env, DRAFTS: undefined, SOURCES: undefined, DRAFT_STORES: undefined };
+    const r = await call('PUT', '/api/file?store=site&key=posts/no-private.md', {
+      body: '---\ntitle: Draft text\n---\n', headers: { 'if-none-match': '*' }, environment: bare,
+    });
+    assert.equal(r.status, 500);
+    assert.match(r.data.error, /never written to the public bucket/);
+    assert.equal(await env.SITE.head('posts/no-private.md'), null);
+    const page = await call('PUT', '/api/file?store=site&key=posts/no-private.png', { body: 'PNG', headers: { 'if-none-match': '*' }, environment: bare });
+    assert.equal(page.status, 201, 'other files are written as usual');
+  });
+
   test('the posts list shows every store', async () => {
     const r = await call('GET', '/api/posts');
     const byKey = (store, k) => r.data.posts.find((p) => p.store === store && p.key === k);

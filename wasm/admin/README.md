@@ -61,8 +61,11 @@ Markdown published before this (in the public bucket) is moved there on
 the next publish or rebuild, and the build log lists each file as
 `private posts/<slug>.md`. A rebuild that cannot see the private Markdown
 (`publish.mjs` without `--sources-bucket`) is refused, so it cannot
-delete every page by mistake. Without a `DRAFTS` bucket (only
-`DRAFT_STORES`), the Markdown stays public, as before.
+delete every page by mistake. Without a private bucket (`DRAFTS` or
+`SOURCES`), publishing is refused rather than putting the Markdown in the
+public bucket. In the Explorer, *Published site* shows each post's
+Markdown with a **🔒 private source** label: it is listed there because it
+belongs to the published post, but it lives in the private bucket.
 
 ## Draft stores
 

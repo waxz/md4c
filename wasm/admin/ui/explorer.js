@@ -160,7 +160,9 @@ function row(store, f) {
   return `<li class="file-row kind-${f.kind}">
     <a class="file-main" href="${esc(openHref(store, f))}">${thumb}
       <span class="name">${esc(name)}</span>
-      <span class="meta">${esc(formatSize(f.size))} · ${esc(formatTime(f.uploaded))}</span>
+      <span class="meta">${esc(formatSize(f.size))} · ${esc(formatTime(f.uploaded))}${
+        store === 'site' && f.kind === 'content' && state.session.privateSources
+          ? ' · <span class="chip" title="Kept in the private drafts bucket: readers get only the page built from it">🔒 private source</span>' : ''}</span>
     </a>
     ${actionable ? `<button type="button" class="row-menu" data-key="${esc(f.key)}" aria-label="Actions for ${esc(name)}">⋯</button>` : ''}
   </li>`;

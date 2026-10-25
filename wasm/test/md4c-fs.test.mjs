@@ -696,3 +696,12 @@ test('a Google tag in the site settings goes in every page, allowed by the CSP',
   assert.doesNotMatch(plain, /googletagmanager/);
   assert.match(plain, new RegExp(CSP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'without a tag the CSP is unchanged');
 });
+
+test("publish.mjs refuses to put posts' Markdown in a public bucket without --sources-bucket", async () => {
+  const env = { ...process.env, R2_BUCKET: 'blog', R2_ACCOUNT_ID: 'acc', R2_ACCESS_KEY_ID: 'id', R2_SECRET_ACCESS_KEY: 'secret', R2_ENDPOINT: 'http://127.0.0.1:9' };
+  await assert.rejects(run(process.execPath, [PUBLISH, '--to', 'r2'], { env }), (err) => {
+    assert.equal(err.code, 2);
+    assert.match(err.stderr, /Refusing to put the posts' Markdown in the public bucket/);
+    return true;
+  });
+});

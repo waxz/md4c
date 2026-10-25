@@ -140,6 +140,9 @@ node scripts/publish.mjs --help
   the same with its drafts bucket, so a site published from the admin is
   rebuilt with `--sources-bucket <the drafts bucket>` (without it the
   rebuild is refused rather than deleting the pages).
+- To R2 or S3, uploading posts without `--sources-bucket` is refused (it
+  would make every post's Markdown public); `--public-markdown` allows it
+  on purpose. The `fs` adapter (a local folder) is not affected.
 - Adapters are chosen with `--to` or `STORAGE_ADAPTER` and configured with
   storagesdk's env vars. For the `fs` adapter, `FS_ROOT`/`FS_FOLDER` default
   to `dist/` and `public`.

@@ -220,6 +220,24 @@ export function withPrivateSources(site, sources) {
 }
 
 /**
+ * The public site when the deploy has no private bucket for the posts'
+ * Markdown: writing a post's source (posts/<slug>.md) is refused rather
+ * than made public, where anyone could read it (a draft's text, a
+ * password post's password). Pages, files and indexes are written as usual.
+ */
+export function withoutPublicSources(site) {
+  return {
+    ...site,
+    async put(key, body, opts) {
+      if (POST_KEY.test(key)) {
+        throw new StoreConfigError("a post's Markdown is never written to the public bucket: bind a private R2 bucket as DRAFTS (or SOURCES) in the admin Worker");
+      }
+      return site.put(key, body, opts);
+    },
+  };
+}
+
+/**
  * A store over any storagesdk Storage (WebDAV, S3, GitHub, ...). storagesdk
  * has no conditional write, so ifMatch is checked just before writing: safe
  * for one admin, not a lock between simultaneous writers.
@@ -796,7 +814,7 @@ async function serverStores(env) {
     const sourcesBucket = env.SOURCES?.put ? env.SOURCES : env.DRAFTS?.put ? env.DRAFTS : null;
     const siteStore = sourcesBucket
       ? withPrivateSources(r2Store(env.SITE), prefixedStore(r2Store(sourcesBucket), env.SOURCES?.put ? '' : '.published/'))
-      : r2Store(env.SITE);
+      : withoutPublicSources(r2Store(env.SITE));
     const stores = new Map([['site', { id: 'site', label: 'Published site', role: 'site', type: 'r2', location: 'deploy', store: siteStore }]]);
     const problems = [];
     for (const cfg of deployedConfigs(env)) {
