@@ -75,13 +75,31 @@ const env = {
   SITE: r2Bucket(dist, 'public'),
   DRAFTS: r2Bucket(dist, 'drafts'),
   SETTINGS: kvNamespace(join(dist, 'kv-settings.json')),
-  ASSETS: { fetch: (req) => fileResponse(join(dist, 'admin'), new URL(req.url).pathname) },
+  ASSETS: { fetch: (req) => cloudflareAssets(join(dist, 'admin'), new URL(req.url)) },
   ACCESS_TEAM_DOMAIN: team,
   ACCESS_AUD: 'local-dev',
   ADMIN_EMAILS: EMAIL,
   PUBLIC_URL: `http://${HOST}:${BLOG_PORT}/`,
   MAX_UPLOAD_MB: '25',
 };
+
+/**
+ * Static files as Cloudflare Workers Assets serves them by default
+ * (html_handling "auto-trailing-slash"): /page.html redirects to /page,
+ * which serves page.html; /index.html redirects to /.
+ */
+async function cloudflareAssets(dir, url) {
+  const m = /^(.*\/)([^/]+)\.html$/.exec(url.pathname);
+  if (m) {
+    const to = m[2] === 'index' ? m[1] : `${m[1]}${m[2]}`;
+    return new Response(null, { status: 307, headers: { location: `${to}${url.search}` } });
+  }
+  if (!/\.[a-z0-9]+$/i.test(url.pathname) && !url.pathname.endsWith('/')) {
+    const html = await fileResponse(dir, `${url.pathname}.html`);
+    if (html.status === 200) return html;
+  }
+  return fileResponse(dir, url.pathname);
+}
 
 // The WebDAV share is added the way you would add yours: as a store saved
 // in KV (what the admin's Storage page writes), on the first start only.

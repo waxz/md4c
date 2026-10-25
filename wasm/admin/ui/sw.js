@@ -28,7 +28,7 @@ self.addEventListener('install', (event) => {
       await Promise.all([INDEX, ...list].map(async (path) => {
         const url = new URL(path, scope).href;
         const r = await fetch(url, { cache: 'no-cache' }).catch(() => null);
-        if (r?.ok && r.type === 'basic') await cache.put(url, r);
+        if (r?.ok && r.type === 'basic' && !signedOut(r)) await cache.put(url, clean(r));
       }));
     } catch (err) {
       console.warn('admin offline cache:', err);
@@ -109,9 +109,20 @@ async function localFile(encoded) {
 
 /* ---------- 2. The app, also when signed out ---------- */
 
-// Access answers a signed-out request with a redirect to its login page.
-const signedOut = (res) => res.type === 'opaqueredirect' || res.type === 'opaque'
+// Access answers a signed-out request with a redirect to its login page,
+// on another origin. (Redirects within the admin are fine: Cloudflare's
+// static files send /preview.html on to /preview.)
+const signedOut = (res) => res.type === 'opaque' || res.type === 'opaqueredirect'
   || (res.redirected && new URL(res.url).origin !== scope.origin);
+
+/**
+ * A response without its "redirected" mark. A page the service worker
+ * answers with a redirected response is refused by the browser (a blank
+ * frame), so redirects are followed here and the result handed on as new.
+ */
+function clean(res) {
+  return res.redirected ? new Response(res.body, { status: res.status, statusText: res.statusText, headers: res.headers }) : res;
+}
 
 async function appFile(req, url) {
   const navigate = req.mode === 'navigate';
@@ -120,10 +131,16 @@ async function appFile(req, url) {
   const key = navigate ? new URL(url.pathname, url).href : url.href;
   const cache = await caches.open(CACHE);
   try {
-    const res = await fetch(req);
+    // A page load is fetched following redirects (a navigation request
+    // would hand back an unusable "opaque redirect"); a redirect to the
+    // Access login on another origin then fails, and the cache answers.
+    const res = navigate
+      ? await fetch(url.href, { credentials: 'same-origin', redirect: 'follow', cache: 'no-cache' })
+      : await fetch(req);
     if (signedOut(res)) throw new Error('signed out');
-    if (res.ok && res.type === 'basic') cache.put(key, res.clone()).catch(() => {});
-    return res;
+    const answer = clean(res);
+    if (answer.ok && res.type === 'basic') cache.put(key, answer.clone()).catch(() => {});
+    return answer;
   } catch {
     const hit = await cache.match(key) ?? (navigate ? await cache.match(INDEX) : null);
     if (hit) return hit;
