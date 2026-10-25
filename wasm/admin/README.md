@@ -280,7 +280,16 @@ To update the admin later, rerun `npm run build && npm run admin:deploy`.
     - This works because the preview is rendered with md4c.wasm's
       `SOURCE_POS` flag: each block carries `data-src`, where its text starts
       in the Markdown (`md4c_wasm.c`). Published pages are rendered without it.
-  - What you type is also kept on the device until it's saved.
+  - **Autosave.** A few seconds after you stop typing:
+    - a draft kept in **This browser** is saved for real (no button, no
+      network); its address follows the title while you type it, and the
+      status shows *Autosaved at …*;
+    - a draft kept in other storage is backed up on this device (*backed
+      up on this device at …*) and offered back if the tab closes before you
+      save; saving it there stays a click, as it costs a request and may
+      need signing in.
+    - Autosave pauses (and says why) if the address is taken or the draft
+      was changed in another tab; saving by hand sorts it out.
 - **The draft is the working copy.**
   - **Save draft** stores the post privately. A published post isn't
     changed by it, and shows *changes not live* until you update the site.

@@ -29,6 +29,8 @@ export function hasUnsavedChanges() {
   return Boolean(current?.dirty);
 }
 
+const clock = (t) => new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -243,7 +245,7 @@ export async function showEditor(view, store, key, newStore) {
     for (const [k, v] of Object.entries(m)) if (!KNOWN.includes(k)) extra[k] = v;
   };
   fillFields(meta);
-  f.body.value = body;
+  f.body.value = body.replace(/^\r?\n/, ''); // the blank line after the front matter
   /**
    * A "---" front matter block typed or pasted at the top of the text (or
    * left there by an earlier save) moves into the fields: the post's real
@@ -311,7 +313,8 @@ export async function showEditor(view, store, key, newStore) {
 
   function setDirty(d) {
     ed.dirty = d;
-    form.querySelector('.save-state').textContent = d ? 'Unsaved changes' : (ed.etag ? 'Saved' : '');
+    form.querySelector('.save-state').textContent = d ? (ed.backupNote || 'Unsaved changes')
+      : ed.etag ? (ed.autosavedAt ? `Autosaved at ${clock(ed.autosavedAt)}` : 'Saved') : '';
     renderStatus();
   }
   if (liftedOnOpen) setDirty(text() !== ed.saved);
@@ -396,14 +399,73 @@ export async function showEditor(view, store, key, newStore) {
   }
 
   // ---- Editing ----
+  let lastInput = 0;
   form.addEventListener('input', (e) => {
     if (e.target === f.title && !ed.slugTouched) f.slug.value = slugify(f.title.value);
     if (e.target === f.slug) ed.slugTouched = true;
     if (e.target === f.body) liftFrontMatter();
-    setDirty(text() !== ed.saved);
+    lastInput = Date.now();
+    // Every change is also kept on this device at once (see the restore offer below).
     saveLocal(local, { text: text(), slug: slug() });
+    setDirty(text() !== ed.saved);
     schedulePreview();
   });
+
+  // ---- Autosave ----
+  // Every few seconds, once typing pauses: a draft kept in "This browser" is
+  // saved for real (no button needed, no network); a draft kept elsewhere
+  // is backed up on this device (saving it there stays a choice: it costs a
+  // request, and may need signing in), and the status says when.
+  const AUTOSAVE_EVERY = 6000;
+  const AUTOSAVE_PAUSE = 2000;
+  let autosaving = null;
+  const timer = setInterval(() => {
+    if (current !== ed || !document.body.contains(form)) {
+      clearInterval(timer);
+      return;
+    }
+    if (ed.dirty && !ed.busy && !autosaving && Date.now() - lastInput >= AUTOSAVE_PAUSE) {
+      autosaving = autosave().finally(() => { autosaving = null; });
+    }
+  }, AUTOSAVE_EVERY / 3);
+
+  async function autosave() {
+    const content = text();
+    if (content === ed.saved) return setDirty(false);
+    const newKey = `posts/${slug()}.md`;
+    if (home() !== LOCAL_ID || direct) {
+      saveLocal(local, { text: content, slug: slug() });
+      ed.backupNote = `Unsaved changes · backed up on this device at ${clock(Date.now())}`;
+      return setDirty(true);
+    }
+    if (!f.title.value.trim() || !SLUG_RE.test(slug())) {
+      ed.backupNote = 'Unsaved changes · autosave starts once the post has a title and an address';
+      return setDirty(true);
+    }
+    if (ed.autosaveOff) return;
+    try {
+      if (!ed.store) {
+        const created = await api.write(LOCAL_ID, newKey, content, null, { ofPublished: ed.published?.key === newKey });
+        Object.assign(ed, { store: LOCAL_ID, key: newKey, etag: created.etag });
+        renderActions();
+      } else {
+        // A new address follows the title while it is typed; a published post keeps its own.
+        if (ed.key !== newKey && !ed.published) await relocate(LOCAL_ID, newKey);
+        ed.etag = (await api.write(LOCAL_ID, ed.key, content, ed.etag)).etag;
+      }
+      ed.saved = content;
+      ed.autosavedAt = Date.now();
+      ed.backupNote = '';
+      dropLocal(local);
+      history.replaceState(null, '', editHref(ed.store, ed.key));
+      setDirty(text() !== ed.saved);
+    } catch (err) {
+      // Taken address, or changed in another tab: saving by hand resolves it.
+      ed.autosaveOff = true;
+      ed.backupNote = `Unsaved changes · autosave paused: ${err.message}`;
+      setDirty(true);
+    }
+  }
 
   const md = {
     bold: () => wrapSelection(f.body, '**', '**', 'bold text'),
@@ -534,6 +596,19 @@ export async function showEditor(view, store, key, newStore) {
 
   async function run(act) {
     if (!validate()) return;
+    if (autosaving) await autosaving; // never two saves at once
+    ed.busy = true;
+    ed.autosaveOff = false;
+    ed.autosavedAt = 0;
+    ed.backupNote = '';
+    try {
+      await runSave(act);
+    } finally {
+      ed.busy = false;
+    }
+  }
+
+  async function runSave(act) {
     const newKey = `posts/${slug()}.md`;
     const content = text();
     for (let attempt = 0; attempt < 3; attempt++) {
