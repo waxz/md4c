@@ -281,7 +281,10 @@ General notes, in Markdown. The encoder is discussed in
   comment lists where it is *referenced in* (the notes, other comments).
   Links to other posts count as links between posts (backlinks, the graph).
 - **In the admin,** choose *Paper notes* under *Kind of post* and upload
-  the PDF. The right-hand pane shows **PDF & comments**. Select text in the
+  the PDF. The editor becomes a single page, as in Notion: a large title,
+  the properties folded under it, the notes written as plain text (the
+  formatting bar comes up while writing; *¶ Link a highlight…* inserts a
+  reference), then the PDF with its comments beside it. Select text in the
   PDF: a bar pops up with the shapes (highlight, underline, strike out,
   box) and eight colours; a colour highlights the selection at once,
   **Comment** opens a pop-up to write the comment (Markdown; *Link a

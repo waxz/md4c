@@ -13,7 +13,7 @@ import { digest, readProtected } from './lib/protect.js';
 import { slugify } from './lib/blog-render.js';
 import { finishArticle, renderLive, renderLiveHtml } from './render.js';
 import { mountPaper } from './paper.js';
-import { isPaper, joinAnnotations, paperHtml, paperPdf, splitAnnotations } from './lib/paper.js';
+import { annotationLabel, isPaper, joinAnnotations, paperHtml, paperPdf, sortAnnotations, splitAnnotations } from './lib/paper.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
 import { attachSourceSync } from './sync.js';
 import { publishPost } from './post-actions.js';
@@ -172,6 +172,7 @@ export async function showEditor(view, store, key, newStore) {
       <span class="save-state muted" aria-live="polite"></span>
     </div>
     <div class="restore" hidden></div>
+    <input class="doc-title" aria-label="Title" placeholder="Untitled" maxlength="200">
     <details class="meta-fields" ${isNew ? 'open' : ''}>
       <summary>Title, date, tags…</summary>
       <div class="grid">
@@ -196,6 +197,10 @@ export async function showEditor(view, store, key, newStore) {
           `<option value="${esc(s.id)}"${s.id === ed.target ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select></label>` : ''}
       </div>
     </details>
+    <div class="paper-switch" role="tablist" hidden>
+      <button type="button" role="tab" data-view="annotate" aria-selected="true">Write</button>
+      <button type="button" role="tab" data-view="preview" aria-selected="false">Page preview</button>
+    </div>
     <div class="pane-tabs" role="tablist">
       <button type="button" role="tab" data-pane="write" aria-selected="true">Write</button>
       <button type="button" role="tab" data-pane="preview" aria-selected="false">Preview</button>
@@ -213,14 +218,11 @@ export async function showEditor(view, store, key, newStore) {
           <button type="button" data-md="math" title="Math">∑</button>
           <label class="tb-upload" title="Insert images">Image<input type="file" accept="image/*" multiple hidden></label>
           <label class="tb-upload" title="Attach files: audio, video, PDF, HTML, anything">File<input type="file" multiple hidden></label>
+          <select class="md-ref paper-only" aria-label="Link a highlight" title="Link a highlight of the PDF ([[#a-…]])"></select>
         </div>
         <textarea name="body" spellcheck="true" aria-label="Markdown"></textarea>
       </div>
       <div class="preview-pane">
-        <div class="paper-switch" role="tablist" hidden>
-          <button type="button" role="tab" data-view="annotate" aria-selected="true">PDF &amp; comments</button>
-          <button type="button" role="tab" data-view="preview" aria-selected="false">Page preview</button>
-        </div>
         <div class="paper annotator" hidden><div class="paper-viewer"></div><aside class="paper-comments" aria-label="Comments"></aside></div>
         <iframe title="Preview" src="preview.html"></iframe>
       </div>
@@ -426,6 +428,46 @@ export async function showEditor(view, store, key, newStore) {
 
   // ---- Paper notes: the PDF annotator ----
   const annotatorEl = form.querySelector('.annotator');
+  const docTitle = form.querySelector('.doc-title');
+  docTitle.addEventListener('input', () => {
+    f.title.value = docTitle.value;
+    f.title.dispatchEvent(new Event('input', { bubbles: true })); // the slug, unsaved changes
+  });
+  docTitle.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      f.body.focus();
+    }
+  });
+  f.title.addEventListener('input', () => {
+    if (docTitle.value !== f.title.value) docTitle.value = f.title.value;
+  });
+  /** On a paper's page, the notes grow with their text (the page scrolls, not the box). */
+  function grow() {
+    if (!form.classList.contains('is-paper')) {
+      f.body.style.height = '';
+      return;
+    }
+    const y = window.scrollY;
+    f.body.style.height = 'auto';
+    f.body.style.height = `${f.body.scrollHeight + 2}px`;
+    window.scrollTo(0, y);
+  }
+  f.body.addEventListener('input', grow);
+  // "¶ Link a highlight…": [[#a-…]] at the cursor, a chip on the page.
+  const refSelect = form.querySelector('.md-ref');
+  function fillRefs() {
+    const list = sortAnnotations(ed.annotations);
+    refSelect.innerHTML = `<option value="">¶ Link a highlight…</option>${list.length
+      ? list.map((a) => `<option value="${esc(a.id)}">${esc(annotationLabel(a, 40))}</option>`).join('')
+      : '<option value="" disabled>No highlights yet: select text in the PDF</option>'}`;
+  }
+  refSelect.addEventListener('change', () => {
+    if (!refSelect.value) return;
+    const before = f.body.value.slice(0, f.body.selectionStart);
+    wrapSelection(f.body, `${before && !/\s$/.test(before) ? ' ' : ''}[[#${refSelect.value}]]`, '', '');
+    refSelect.value = '';
+  });
   const paperSwitch = form.querySelector('.paper-switch');
   let annotator = null;
   let annotatorFor = null; // the PDF shown (null: none yet)
@@ -439,6 +481,15 @@ export async function showEditor(view, store, key, newStore) {
     const paper = f.type.value === 'paper';
     for (const el of form.querySelectorAll('.paper-only')) el.hidden = !paper;
     paperSwitch.hidden = !paper;
+    // A paper post is edited as one page (as in Notion): title, notes, then
+    // the PDF with its comments; "Page preview" shows it as published.
+    form.classList.toggle('is-paper', paper);
+    form.dataset.paperView = paperView;
+    form.style.setProperty('--bar-h', `${document.querySelector('.app-bar')?.offsetHeight ?? 0}px`);
+    if (docTitle.value !== f.title.value) docTitle.value = f.title.value;
+    f.body.placeholder = paper ? 'Write your notes… Select text in the PDF below to highlight it and comment.' : '';
+    fillRefs();
+    grow();
     const annotate = paper && paperView === 'annotate';
     annotatorEl.hidden = !annotate;
     iframe.hidden = annotate;
@@ -460,6 +511,7 @@ export async function showEditor(view, store, key, newStore) {
       annotations: ed.annotations,
       onChange: (list) => {
         ed.annotations = list;
+        fillRefs();
         edited();
       },
       renderComment: (md) => {
@@ -661,8 +713,11 @@ export async function showEditor(view, store, key, newStore) {
   // ---- Saving ----
   function validate() {
     if (!f.title.value.trim()) {
-      form.querySelector('.meta-fields').open = true;
-      f.title.focus();
+      if (form.classList.contains('is-paper')) docTitle.focus();
+      else {
+        form.querySelector('.meta-fields').open = true;
+        f.title.focus();
+      }
       toast('Give the post a title.', 'error');
       return false;
     }
