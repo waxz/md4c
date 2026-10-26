@@ -547,3 +547,12 @@ a.annotation-ref {
 a.annotation-ref::before { content: "↗"; margin-right: .2em; font-size: .8em; color: var(--accent); }
 a.annotation-ref[href^="#"]::before { content: "¶"; }
 a.annotation-ref:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* Graph labels with math (graph.js): typeset HTML over the canvas. */
+.graph-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.graph-label {
+  position: absolute; left: 0; top: 0; white-space: nowrap; font-family: inherit; font-size: 12px; line-height: 1.25;
+  color: var(--ink); text-shadow: 0 0 3px var(--surface), 0 0 3px var(--surface), 0 0 2px var(--surface); will-change: transform;
+}
+.graph-label.is-lit { color: var(--accent); }
+.graph-label .katex { font-size: 1.05em; }

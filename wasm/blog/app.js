@@ -336,7 +336,7 @@ async function showConnections(article, slug) {
   const { graphData, neighbourhood, drawGraph } = await import('./graph.js');
   // A paper's comments are in its graph too, with what they link to.
   const local = neighbourhood(graphData(items, { postHref: hrefOfPost, highlights: true }), `p:${slug}`, own?.highlights?.length ? 2 : 1);
-  drawGraph(box.querySelector('.graph-box'), local, { focus: `p:${slug}`, label: 'always' });
+  drawGraph(box.querySelector('.graph-box'), local, { focus: `p:${slug}`, label: 'always', typeset: (el) => renderMath(el, site) });
 }
 
 /** graph.html: every post, the links between them, and the same as a list. */
@@ -365,7 +365,7 @@ async function showGraph() {
       highlights: Boolean(view.querySelector('#graph-notes')?.checked),
     });
     drawn?.destroy();
-    drawn = drawGraph(box, g);
+    drawn = drawGraph(box, g, { typeset: (el) => renderMath(el, site) });
     const posts = g.nodes.filter((n) => n.kind === 'post').length;
     const links = g.edges.filter((e) => !e.tag).reduce((n, e) => n + (e.both ? 2 : 1), 0);
     view.querySelector('.graph-count').textContent =

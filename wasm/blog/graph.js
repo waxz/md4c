@@ -18,6 +18,11 @@
 // Colours come from the page's CSS variables, so the graph follows the
 // theme and dark mode.
 
+/** A label as HTML, its $…$ as <x-equation>s to typeset (as js/paper.js mathText). */
+const mathText = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
+  .replace(/\$\$([^$]+?)\$\$/g, '<x-equation type="display">$1</x-equation>')
+  .replace(/\$([^$\n]+?)\$/g, '<x-equation>$1</x-equation>');
+
 const POST = 'post';
 const TAG = 'tag';
 const MISSING = 'missing';
@@ -79,7 +84,7 @@ export function graphData(items, { postHref, tags = false, tagHref, highlights =
         if (!h?.id) continue;
         const paperHref = postHref(slug, e);
         nodes.set(`h:${h.id}`, {
-          id: `h:${h.id}`, kind: NOTE, label: String(h.label || h.id).replace(/\$/g, ''), // (no typesetting on a canvas) color: NOTE_RGB[h.color] ? h.color : 'yellow',
+          id: `h:${h.id}`, kind: NOTE, label: String(h.label || h.id), color: NOTE_RGB[h.color] ? h.color : 'yellow',
           href: paperHref.includes('#') ? paperHref : `${paperHref}#${h.id}`, paperHref, slug, highlight: h.id,
         });
         join(`p:${slug}`, `h:${h.id}`, true); // part of its paper: no direction
@@ -164,15 +169,25 @@ function cssColour(el, name, fallback) {
  *   focus    node id drawn larger and in the accent colour (a post's own node)
  *   onOpen   (node) => void, on click; default: follow node.href
  *   label    'auto' (labels fade in as you zoom) | 'always'
+ *   typeset  (element) => void: typesets <x-equation>s (KaTeX). Labels
+ *            with $…$ math are then HTML laid over the canvas, typeset;
+ *            without it their math is shown as plain text.
  * Returns { destroy() }.
  */
-export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
+export function drawGraph(box, g, { focus = '', onOpen, label = 'auto', typeset } = {}) {
   const canvas = document.createElement('canvas');
   canvas.className = 'graph-canvas';
   canvas.setAttribute('role', 'img');
   canvas.setAttribute('aria-label', `Graph of ${g.nodes.length} article${g.nodes.length === 1 ? '' : 's'} and their links`);
   box.append(canvas);
   const ctx = canvas.getContext('2d');
+  // Labels with math: typeset HTML over the canvas, moved with their nodes.
+  const overlay = document.createElement('div');
+  overlay.className = 'graph-labels';
+  overlay.setAttribute('aria-hidden', 'true');
+  box.append(overlay);
+  const MATH = /\$[^$]+\$/;
+  const htmlLabels = new Map(); // node id -> element
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const adj = adjacency(g);
@@ -186,6 +201,14 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
       ...node, x: node.id === focus ? 0 : Math.cos(a) * r, y: node.id === focus ? 0 : Math.sin(a) * r,
       vx: 0, vy: 0, degree: adj.get(node.id).size, fixed: false,
     };
+    if (typeset && MATH.test(node.label)) {
+      const el = document.createElement('span');
+      el.className = 'graph-label';
+      el.innerHTML = mathText(node.label.length > 80 ? `${node.label.slice(0, 79)}…` : node.label);
+      overlay.append(el);
+      typeset(el);
+      htmlLabels.set(node.id, el);
+    }
     sim.radius = node.kind === NOTE ? 3.2 + Math.sqrt(sim.degree) : (node.id === focus ? 6 : 3.5) + Math.sqrt(sim.degree) * 1.6;
     byId.set(node.id, sim);
     return sim;
@@ -385,9 +408,18 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
     for (const p of nodes) {
       const strong = (lit && lit.has(p.id)) || p.id === focus;
       const a = strong ? 1 : lit ? fade * 0.2 : fade;
+      const html = htmlLabels.get(p.id);
+      if (html) {
+        // Laid over the canvas, at the node's place on the screen.
+        html.style.opacity = String(a <= 0.02 ? 0 : a);
+        html.style.transform = `translate(${p.x * view.scale + view.tx}px, ${(p.y + p.radius) * view.scale + view.ty + 3}px) translateX(-50%)`;
+        html.classList.toggle('is-lit', p === hover);
+        continue;
+      }
       if (a <= 0.02) continue;
       ctx.globalAlpha = a;
-      const text = p.label.length > 40 ? `${p.label.slice(0, 39)}…` : p.label;
+      const plain = p.label.replace(/\$([^$]+)\$/g, '$1'); // (no typesetting here)
+      const text = plain.length > 40 ? `${plain.slice(0, 39)}…` : plain;
       ctx.lineWidth = 3 / view.scale;
       ctx.strokeStyle = colours.surface;
       ctx.strokeText(text, p.x, p.y + p.radius + 3 / view.scale);
@@ -581,6 +613,7 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
       ro.disconnect();
       scheme.removeEventListener('change', onScheme);
       canvas.remove();
+      overlay.remove();
     },
   };
 }

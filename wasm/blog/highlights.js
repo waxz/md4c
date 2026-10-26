@@ -71,7 +71,7 @@ export function renderHighlights(view, papers, { hash = true, linkOf = (p, h) =>
       if (!details.open || drawn) return;
       const { graphData, drawGraph } = await import('./graph.js');
       const g = graphData(graph.items, { postHref: graph.postHref, highlights: true, commentsOnly: true });
-      drawn = drawGraph(details.querySelector('.graph-box'), g, graph.onOpen ? { onOpen: graph.onOpen } : {});
+      drawn = drawGraph(details.querySelector('.graph-box'), g, { ...(graph.onOpen ? { onOpen: graph.onOpen } : {}), typeset });
     });
   }
   const out = view.querySelector('.hl-papers');
