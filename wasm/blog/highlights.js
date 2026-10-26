@@ -2,6 +2,10 @@
 // comments (index.json keeps a short form of each: js/paper.js
 // annotationSummary), to filter by tag and search. A tag can be given in
 // the address: highlights.html#tag=method.
+//
+//   showHighlights(view, items, hrefOfPost)   the blog's page, from index.json
+//   renderHighlights(view, papers, opts)      the list itself (also the admin's
+//                                             Comments page, with drafts)
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -30,6 +34,16 @@ export function showHighlights(view, items, hrefOfPost) {
     view.innerHTML = '<p class="muted">No highlights yet. <a href="index.html">All articles</a></p>';
     return;
   }
+  renderHighlights(view, papers);
+}
+
+/**
+ * The highlights of `papers` ([{ title, href, list: [annotationSummary], badge? }]),
+ * with a search box and the tags to filter by. opts.hash: keep the tag in
+ * the address (#tag=…); opts.linkOf(paper, highlight): a highlight's link;
+ * opts.onOpen(paper, highlight, event): a highlight's link was followed.
+ */
+export function renderHighlights(view, papers, { hash = true, linkOf = (p, h) => `${p.href}#${h.id}`, onOpen } = {}) {
   const counts = new Map();
   for (const p of papers) for (const h of p.list) for (const t of h.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
   const tags = [...counts].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
@@ -45,7 +59,7 @@ export function showHighlights(view, items, hrefOfPost) {
     <div class="hl-papers"></div>`;
   const out = view.querySelector('.hl-papers');
   const search = view.querySelector('.hl-search');
-  let tag = counts.has(tagFromHash()) ? tagFromHash() : '';
+  let tag = hash && counts.has(tagFromHash()) ? tagFromHash() : '';
 
   const render = () => {
     const q = search.value.trim().toLowerCase();
@@ -57,9 +71,9 @@ export function showHighlights(view, items, hrefOfPost) {
       shown += list.length;
       if (!list.length) return '';
       return `<section class="hl-paper">
-        <h2 class="hl-paper-title"><a href="${esc(p.href)}">${esc(p.title)}</a> <span class="count">${list.length}</span></h2>
+        <h2 class="hl-paper-title"><a href="${esc(p.href)}">${esc(p.title)}</a> <span class="count">${list.length}</span>${p.badge ? ` <span class="hl-badge">${esc(p.badge)}</span>` : ''}</h2>
         <ol class="annotations hl-list">${list.map((h) => `<li class="annotation${!h.comment && h.label.startsWith('“') ? ' is-quote-label' : ''}" data-color="${esc(h.color)}">
-          <a class="annotation-at" href="${esc(`${p.href}#${h.id}`)}" title="Page ${h.page}">${esc(h.label)}</a>
+          <a class="annotation-at" href="${esc(linkOf(p, h))}" data-paper="${papers.indexOf(p)}" data-id="${esc(h.id)}" title="Page ${h.page}">${esc(h.label)}</a>
           ${h.tags?.length ? `<div class="annotation-tags">${h.tags.map((t) => `<button type="button" class="annotation-tag" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}
           ${h.quote ? `<blockquote class="annotation-quote">${esc(h.quote)}</blockquote>` : ''}
           ${h.comment && h.comment !== h.label ? `<p class="annotation-comment">${esc(h.comment)}</p>` : ''}
@@ -71,16 +85,24 @@ export function showHighlights(view, items, hrefOfPost) {
   };
 
   view.addEventListener('click', (e) => {
+    const open = e.target.closest('a.annotation-at[data-id]');
+    if (open && onOpen) {
+      const p = papers[Number(open.dataset.paper)];
+      onOpen(p, p.list.find((h) => h.id === open.dataset.id), e);
+      return;
+    }
     const b = e.target.closest('button[data-tag]');
     if (!b) return;
     tag = b.closest('.annotation') && tag === b.dataset.tag ? '' : b.dataset.tag;
-    history.replaceState(null, '', tag ? `#tag=${encodeURIComponent(tag)}` : location.pathname + location.search);
+    if (hash) history.replaceState(null, '', tag ? `#tag=${encodeURIComponent(tag)}` : location.pathname + location.search);
     render();
   });
   search.addEventListener('input', render);
-  window.addEventListener('hashchange', () => {
-    tag = counts.has(tagFromHash()) ? tagFromHash() : '';
-    render();
-  });
+  if (hash) {
+    window.addEventListener('hashchange', () => {
+      tag = counts.has(tagFromHash()) ? tagFromHash() : '';
+      render();
+    });
+  }
   render();
 }

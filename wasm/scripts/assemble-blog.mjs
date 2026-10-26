@@ -147,7 +147,7 @@ await rm(adminOut, { recursive: true, force: true });
 await cp(join(root, 'admin', 'ui'), adminOut, { recursive: true });
 await cp(join(out, 'lib'), join(adminOut, 'lib'), { recursive: true });
 await cp(join(out, 'vendor'), join(adminOut, 'vendor'), { recursive: true });
-for (const f of ['render.js', 'style.css', 'paper.js', 'paper.css']) await cp(join(root, 'blog', f), join(adminOut, f));
+for (const f of ['render.js', 'style.css', 'paper.js', 'paper.css', 'highlights.js']) await cp(join(root, 'blog', f), join(adminOut, f));
 // The blog's versions, for the pages the admin builds.
 await cp(join(out, 'assets.json'), join(adminOut, 'site-assets.json'));
 await cp(join(root, 'admin', 'src', 'paths.js'), join(adminOut, 'paths.js'));

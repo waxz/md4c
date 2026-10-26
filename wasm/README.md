@@ -284,7 +284,8 @@ General notes, in Markdown. The encoder is discussed in
   the PDF. The editor becomes a single page, as in Notion: a large title,
   the properties folded under it, the notes written as plain text (the
   formatting bar comes up while writing; *¶ Link a highlight…* inserts a
-  reference), then the PDF with its comments beside it. Select text in the
+  reference), then the PDF with its comments beside it, as wide as the
+  window. Select text in the
   PDF: a bar pops up with the shapes (highlight, underline, strike out,
   box) and eight colours; a colour highlights the selection at once,
   **Comment** opens a pop-up to write the comment (Markdown; *Link a
@@ -305,6 +306,10 @@ General notes, in Markdown. The encoder is discussed in
   paper, to filter by tag (`highlights.html#tag=method`) or search. Add it
   to the menu with a `links` entry in the site settings if you like.
   Password-protected papers stay out of it.
+- **Comments** in the admin's menu lists the highlights and comments of
+  every paper in one place, drafts included (published papers from
+  `index.json`, drafts read from their stores): search them, filter by
+  tag, and open one to land on it in the editor.
 - The highlights are kept in the post's own Markdown, in a
   ` ```md4c-annotations ` block the editor keeps out of sight: one file to
   save, autosave, move, publish and encrypt. A password-protected paper post

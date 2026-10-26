@@ -13,6 +13,7 @@ import { digest, readProtected } from './lib/protect.js';
 import { slugify } from './lib/blog-render.js';
 import { finishArticle, renderLive, renderLiveHtml } from './render.js';
 import { mountPaper } from './paper.js';
+import { SHOW_KEY } from './comments.js';
 import { annotationLabel, isPaper, joinAnnotations, paperHtml, paperPdf, sortAnnotations, splitAnnotations } from './lib/paper.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
 import { attachSourceSync } from './sync.js';
@@ -532,7 +533,16 @@ export async function showEditor(view, store, key, newStore) {
       notes: () => f.body.value,
       knownTags: () => siteTags,
       confirmDelete: (a) => confirmDialog('Delete this highlight?', `${a.quote ? `“${a.quote.slice(0, 100)}” ` : ''}and its comment are removed from the post.`, 'Delete'),
-    }).then((h) => { annotator = h; }, (err) => console.warn('annotator:', err));
+    }).then((h) => {
+      annotator = h;
+      // Opened from the Comments page: go to that highlight.
+      let id = null;
+      try {
+        id = sessionStorage.getItem(SHOW_KEY);
+        sessionStorage.removeItem(SHOW_KEY);
+      } catch {}
+      if (id && h) setTimeout(() => h.show(id), 300);
+    }, (err) => console.warn('annotator:', err));
   }
   paperSwitch.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-view]');

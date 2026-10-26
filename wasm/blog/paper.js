@@ -953,6 +953,14 @@ export async function mountPaper(el, opts = {}) {
       drawHighlights();
       renderSide();
     },
+    /** Show highlight `id`: the PDF at it, its comment. */
+    show(id) {
+      if (!byId(id)) return false;
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      showInPdf(id);
+      showComment(id);
+      return true;
+    },
     /** Redraw the comments (the notes changed: "Referenced in"). */
     refresh() {
       renderSide();

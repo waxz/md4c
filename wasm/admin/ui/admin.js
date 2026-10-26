@@ -9,6 +9,7 @@
 //   #/view/<store>/<key>        file details; #/text/<store>/<key> text editor
 //   #/storage                   draft stores; add WebDAV, S3 or GitHub storage
 //   #/settings                  site settings and rebuild
+//   #/comments                  every paper's highlights and comments (comments.js)
 
 import { api } from './client.js';
 import { showPosts } from './posts.js';
@@ -42,6 +43,7 @@ async function route() {
     else if (r.name === 'text') await (await editor()).showTextEditor(view, r.store, r.path);
     else if (r.name === 'settings') await showSettings();
     else if (r.name === 'storage') await (await import('./storage.js')).showStorage(view);
+    else if (r.name === 'comments') await (await import('./comments.js')).showComments(view);
     else if (r.name === 'files') await (await explorer()).showFiles(view, r.store, r.path);
     else await showPosts(view);
     view.focus({ preventScroll: true });

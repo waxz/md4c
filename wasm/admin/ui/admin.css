@@ -423,9 +423,15 @@ button.post-card-link:disabled { cursor: default; opacity: .4; }
   font: 1.05rem/1.75 var(--font); color: var(--ink);
 }
 .editor.is-paper .write-pane textarea::placeholder { color: color-mix(in srgb, var(--muted) 60%, transparent); }
-.editor.is-paper .preview-pane .paper { grid-template-columns: minmax(0, 1fr) 21rem; gap: 1rem; }
-.editor.is-paper .preview-pane .paper-pages { height: min(78vh, 60rem); }
-.editor.is-paper .preview-pane .paper-comments { position: sticky; top: calc(var(--bar-h, 0px) + .5rem); max-height: calc(min(78vh, 60rem) + 2.4rem); }
+/* The PDF and its comments take the window's whole width (beyond the
+   editor's column), for reading a paper at a comfortable size. */
+.editor.is-paper .preview-pane .paper {
+  --wide: min(1900px, calc(100vw - 40px));
+  width: var(--wide); margin-left: calc((100% - var(--wide)) / 2);
+  grid-template-columns: minmax(0, 1fr) clamp(20rem, 24vw, 28rem); gap: 1.2rem;
+}
+.editor.is-paper .preview-pane .paper-pages { height: min(86vh, 72rem); }
+.editor.is-paper .preview-pane .paper-comments { position: sticky; top: calc(var(--bar-h, 0px) + .5rem); max-height: calc(min(86vh, 72rem) + 2.4rem); }
 @media (max-width: 900px) {
   .editor.is-paper .preview-pane .paper { grid-template-columns: 1fr; }
   .editor.is-paper .preview-pane .paper-pages { height: 70vh; }
@@ -438,3 +444,14 @@ button.post-card-link:disabled { cursor: default; opacity: .4; }
 .paper-switch button[aria-selected="true"] { background: var(--bg); color: var(--ink); font-weight: 600; }
 .editor.is-paper .paper-switch button[aria-selected="true"] { background: color-mix(in srgb, var(--muted) 14%, transparent); }
 .paper-only[hidden] { display: none; }
+
+/* Comments: every paper's highlights (comments.js, blog/highlights.js),
+   with the blog's paper styles in the admin's colours. */
+.hl-admin { --rule: var(--line); --paper: var(--bg); --ink-soft: var(--muted); --font-serif: var(--font); --font-sans: var(--font); }
+.hl-admin h1 { margin: .5rem 0 .3rem; }
+.hl-intro { margin: 0 0 1rem; }
+.hl-summary { margin: 0 0 .4rem; font-size: .85rem; }
+.hl-badge { font: 500 .72rem var(--font); color: var(--warn); border: 1px solid currentColor; border-radius: 999px; padding: 0 .45em; vertical-align: middle; }
+.hl-admin .hl-paper-title { font-size: 1.05rem; }
+.hl-admin .hl-paper-title a { color: var(--ink); }
+.hl-admin .annotation { cursor: default; }
