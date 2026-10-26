@@ -65,7 +65,9 @@ export function linkPostsForStaticPage(html) {
   return demoteHeadings(html)
     .replace(/<x-wikilink data-target="([^"]*)">([\s\S]*?)<\/x-wikilink>/g, (_, target, label) => {
       const href = wikiHref(target.replace(/&quot;/g, '"').replace(/&amp;/g, '&'), (slug) => `${slug}.html`);
-      return href ? `<a href="${escAttr(href)}">${label}</a>` : label;
+      // A link to a paper's highlight ([[paper#a-…]]) is a reference chip.
+      const ref = /#(a-[a-z0-9]{4,16})$/.exec(href);
+      return href ? `<a href="${escAttr(href)}"${ref ? ` class="annotation-ref" data-ref="${ref[1]}"` : ''}>${label}</a>` : label;
     })
     .replace(/href="([^"/:#?]+)\.md(#[^"]*)?"/g, (whole, slug, frag = '') =>
       SLUG_RE.test(slug) ? `href="${slug}.html${frag}"` : whole);

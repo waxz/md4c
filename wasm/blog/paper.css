@@ -142,15 +142,6 @@ main.page:has(.paper) .article-header, main.page:has(.paper) .paper-notes { max-
 .annotation-add { display: block; margin-top: .3rem; padding: .15rem 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: .86rem; cursor: text; }
 .annotation-add:hover { color: var(--ink); }
 
-/* A link to a highlight: a chip (in the notes and in comments). */
-a.annotation-ref {
-  padding: .05em .35em; border-radius: 4px; color: inherit; text-decoration: none; white-space: normal;
-  background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 35%, transparent);
-}
-a.annotation-ref::before { content: "↗"; margin-right: .2em; font-size: .8em; color: var(--accent); }
-a.annotation-ref[href^="#"]::before { content: "¶"; }
-a.annotation-ref:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-
 /* ---------- Pop-ups: peek, selection bar, comment editor ---------- */
 
 .paper-pop {

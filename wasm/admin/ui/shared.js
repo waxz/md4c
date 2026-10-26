@@ -64,7 +64,7 @@ export async function init() {
     if (err.code !== 'offline') throw err;
     const last = remembered().session ?? {};
     state.session = {
-      email: last.email ?? '', publicUrl: last.publicUrl ?? '', kv: false, problems: [], maxUploadMb: 25,
+      email: last.email ?? '', publicUrl: last.publicUrl ?? '', kv: false, problems: [], maxUploadMb: 100,
       stores: [{ id: 'site', label: 'Published site', role: 'site', type: 'r2', location: 'deploy' }, LOCAL_STORE],
       offline: true,
     };

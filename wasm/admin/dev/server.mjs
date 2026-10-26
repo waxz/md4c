@@ -80,7 +80,7 @@ const env = {
   ACCESS_AUD: 'local-dev',
   ADMIN_EMAILS: EMAIL,
   PUBLIC_URL: `http://${HOST}:${BLOG_PORT}/`,
-  MAX_UPLOAD_MB: '25',
+  MAX_UPLOAD_MB: '100',
 };
 
 /**

@@ -217,13 +217,84 @@ async function checkNewKey(stores, entry, key, ignore) {
   }
 }
 
-async function readBody(request, env) {
-  const mb = Number(env.MAX_UPLOAD_MB ?? 25);
+// The largest upload: "maxUploadMb" in the site settings (the admin's
+// Settings page), else MAX_UPLOAD_MB, else 100 MB, which is also the most
+// Cloudflare takes in one request on the Free and Pro plans (Business: 200,
+// Enterprise: 500). Read from index.json at most every 30 seconds.
+const UPLOAD_CEILING_MB = 500;
+let uploadLimit = { at: 0, mb: 0 };
+async function uploadLimitMb(env, stores) {
+  if (Date.now() - uploadLimit.at > 30_000) {
+    let mb = 0;
+    try {
+      const index = await stores.get('site').store.get('index.json');
+      if (index) mb = Number(JSON.parse(new TextDecoder().decode(index.body))?.site?.maxUploadMb) || 0;
+    } catch {}
+    uploadLimit = { at: Date.now(), mb };
+  }
+  const mb = uploadLimit.mb > 0 ? uploadLimit.mb : Number(env.MAX_UPLOAD_MB) || 100;
+  return Math.min(Math.max(1, mb), UPLOAD_CEILING_MB);
+}
+
+// Larger files than this are streamed between R2 buckets, never held whole
+// in the Worker's memory (128 MB).
+const STREAM_BYTES = 8 * 1024 * 1024;
+
+/** A stream of `size` bytes, as R2 wants it (a known length). */
+function sized(stream, size) {
+  if (typeof FixedLengthStream !== 'function') return stream;
+  const f = new FixedLengthStream(size);
+  stream.pipeTo(f.writable).catch(() => {});
+  return f.readable;
+}
+
+/**
+ * The request's body: an ArrayBuffer, or for a large attachment going to
+ * a store that streams (R2), the stream itself.
+ */
+async function readBody(request, env, stores, entry, kind) {
+  const mb = await uploadLimitMb(env, stores);
   const limit = mb * 1024 * 1024;
-  if (Number(request.headers.get('content-length')) > limit) throw new ApiError(413, `Files are limited to ${mb} MB`);
+  const length = Number(request.headers.get('content-length'));
+  const tooBig = () => new ApiError(413, `Files are limited to ${mb} MB (Settings: "Largest upload")`, { code: 'too-large', limitMb: mb });
+  if (length > limit) throw tooBig();
+  if (kind === 'asset' && entry.store.streams && length > STREAM_BYTES && request.body) return sized(request.body, length);
   const body = await request.arrayBuffer();
-  if (body.byteLength > limit) throw new ApiError(413, `Files are limited to ${mb} MB`);
+  if (body.byteLength > limit) throw tooBig();
   return body;
+}
+
+/** Whether two stores hold the same file at `key` (sizes, then etags, then the bytes when small). */
+async function sameFile(a, b, key, ma, mb) {
+  if (ma.size !== mb.size) return false;
+  if (ma.etag && ma.etag === mb.etag) return true; // R2: the MD5 of the bytes
+  if (ma.size > STREAM_BYTES) {
+    // Too large to read whole: digest both as they stream (Workers' DigestStream).
+    if (typeof crypto.DigestStream !== 'function' || !a.store.stream || !b.store.stream) return false;
+    const digest = async (store) => {
+      const s = await store.stream(key);
+      if (!s) return '';
+      const d = new crypto.DigestStream('SHA-256');
+      await s.body.pipeTo(d);
+      return [...new Uint8Array(await d.digest)].join(',');
+    };
+    const [x, y] = await Promise.all([digest(a.store), digest(b.store)]);
+    return Boolean(x) && x === y;
+  }
+  const [x, y] = await Promise.all([a.store.get(key), b.store.get(key)]);
+  return Boolean(x && y) && sameBytes(x.body, y.body);
+}
+
+/** Copy `key` from one store to another: streamed when large and both are R2. */
+async function copyFile(from, to, key, size, opts) {
+  if (size > STREAM_BYTES && from.store.stream && to.store.streams) {
+    const s = await from.store.stream(key);
+    if (!s) throw new ApiError(404, `${key} not found`, { code: 'not-found' });
+    return to.store.put(key, sized(s.body, s.meta.size), opts);
+  }
+  const f = await from.store.get(key);
+  if (!f) throw new ApiError(404, `${key} not found`, { code: 'not-found' });
+  return to.store.put(key, f.body, opts);
 }
 
 const putOpts = (key, ifMatch) => ({
@@ -257,8 +328,9 @@ async function writeFile(request, env, stores, entry, key, ofPublished) {
   const kind = requireWritable(entry, key);
   const ifMatch = request.headers.get('if-match');
   const ifNoneMatch = request.headers.get('if-none-match');
-  const body = await readBody(request, env);
+  const body = await readBody(request, env, stores, entry, kind);
   if (entry.role === 'site' && kind === 'content') checkNotPlainProtected(new TextDecoder().decode(body));
+  if (entry.role === 'site' && key === 'index.json') uploadLimit.at = 0; // the settings may have changed
 
   if (ifNoneMatch === '*') {
     // The draft of a published post shares its slug with the public copy.
@@ -401,10 +473,10 @@ async function publish(request, stores) {
   const conflicts = [];
   for (const key of referencedKeys(new TextDecoder().decode(post.body), from.key)) {
     if (classify('drafts', key) !== 'asset') continue;
-    const draftFile = await src.store.get(key);
-    if (!draftFile) continue; // already public, or simply missing
+    const draftMeta = await src.store.head(key);
+    if (!draftMeta) continue; // already public, or simply missing
     if (skip.has(key)) {
-      plan.push({ key, action: 'skip', size: draftFile.meta.size });
+      plan.push({ key, action: 'skip', size: draftMeta.size });
       continue;
     }
     const publicMeta = await site.store.head(key);
@@ -415,13 +487,13 @@ async function publish(request, stores) {
         conflicts.push({ key, reason: err.message });
         continue;
       }
-      plan.push({ key, action: 'copy', size: draftFile.meta.size, body: draftFile.body });
-    } else if (await sameBytes(draftFile.body, (await site.store.get(key)).body)) {
-      plan.push({ key, action: 'identical', size: draftFile.meta.size });
+      plan.push({ key, action: 'copy', size: draftMeta.size, write: true });
+    } else if (await sameFile(src, site, key, draftMeta, publicMeta)) {
+      plan.push({ key, action: 'identical', size: draftMeta.size });
     } else if (overwrite.has(key)) {
-      plan.push({ key, action: 'overwrite', size: draftFile.meta.size, body: draftFile.body, ifMatch: publicMeta.etag });
+      plan.push({ key, action: 'overwrite', size: draftMeta.size, write: true, ifMatch: publicMeta.etag });
     } else {
-      conflicts.push({ key, size: draftFile.meta.size, reason: 'a different file with this name is already public' });
+      conflicts.push({ key, size: draftMeta.size, reason: 'a different file with this name is already public' });
     }
   }
   if (body.dryRun) {
@@ -443,8 +515,8 @@ async function publish(request, stores) {
 
   // Files first, so the post never goes live with missing images.
   for (const step of plan) {
-    if (!step.body) continue;
-    const written = await site.store.put(step.key, step.body, putOpts(step.key, step.ifMatch));
+    if (!step.write) continue;
+    const written = await copyFile(src, site, step.key, step.size, putOpts(step.key, step.ifMatch));
     if (!written) throw new ApiError(412, `${step.key} changed on the site during publishing; try again`, { code: 'changed' });
   }
   const published = await site.store.put(from.key, publicBody, putOpts(from.key, live && body.siteIfMatch ? live.etag : undefined));
@@ -475,19 +547,19 @@ async function copyToSite(request, stores) {
     throw new ApiError(400, postSlug(from.key) ? 'Publish posts from the editor' : `${from.key} cannot be public`,
       { code: postSlug(from.key) ? 'use-publish' : 'bad-path' });
   }
-  const file = await src.store.get(from.key);
+  const file = await src.store.head(from.key);
   if (!file) throw new ApiError(404, `${from.key} not found`, { code: 'not-found' });
   const current = await site.store.head(from.key);
   if (!current) {
     await checkPathShape(site, from.key);
-    return json({ action: 'copy', file: info(site, await site.store.put(from.key, file.body, putOpts(from.key))) }, 201);
+    return json({ action: 'copy', file: info(site, await copyFile(src, site, from.key, file.size, putOpts(from.key))) }, 201);
   }
-  if (await sameBytes(file.body, (await site.store.get(from.key)).body)) return json({ action: 'identical', file: info(site, current) });
+  if (await sameFile(src, site, from.key, file, current)) return json({ action: 'identical', file: info(site, current) });
   if (!body.overwrite) {
     throw new ApiError(409, `A different ${from.key} is already public`, { code: 'exists', current: info(site, current) });
   }
   const ifMatch = body.ifMatch ? stripQuotes(body.ifMatch) : current.etag;
-  const written = await site.store.put(from.key, file.body, putOpts(from.key, ifMatch));
+  const written = await copyFile(src, site, from.key, file.size, putOpts(from.key, ifMatch));
   if (!written) throw new ApiError(412, `The public ${from.key} was changed elsewhere`, { code: 'changed', current: info(site, current) });
   return json({ action: 'overwrite', file: info(site, written) });
 }
@@ -507,9 +579,11 @@ function bodyResponse(key, obj) {
 async function readFile(stores, storeId, key, fallbackToSite) {
   requireKey(key);
   const entry = storeOf(stores, storeId);
-  let obj = await entry.store.get(key);
+  // R2 hands a file over as a stream: a large PDF never sits in memory.
+  const read = (store) => (store.stream && classify('drafts', key) === 'asset' ? store.stream(key) : store.get(key));
+  let obj = await read(entry.store);
   if (!obj && fallbackToSite && entry.role === 'drafts' && classify('drafts', key) === 'asset') {
-    obj = await stores.get('site').store.get(key);
+    obj = await read(stores.get('site').store);
   }
   if (!obj) throw new ApiError(404, `${key} not found`, { code: 'not-found' });
   return bodyResponse(key, obj);
@@ -763,7 +837,7 @@ export async function handleApi(request, env, user) {
           // Published posts' Markdown is kept out of the public bucket.
           privateSources: Boolean(stores.get('site').store.privateSources),
           problems: stores.problems,
-          maxUploadMb: Number(env.MAX_UPLOAD_MB ?? 25),
+          maxUploadMb: await uploadLimitMb(env, stores),
         });
       case 'GET /api/posts':
         return await listPosts(stores);

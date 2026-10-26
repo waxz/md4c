@@ -537,3 +537,12 @@ main.page:focus { outline: none; }
   .full-graph { height: 70vh; }
 }
 @media print { .connections, .graph-box { display: none; } }
+
+/* A link to a highlight of a paper ([[paper#a-…]]): a chip, in any post. */
+a.annotation-ref {
+  padding: .05em .35em; border-radius: 4px; color: inherit; text-decoration: none; white-space: normal;
+  background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 35%, transparent);
+}
+a.annotation-ref::before { content: "↗"; margin-right: .2em; font-size: .8em; color: var(--accent); }
+a.annotation-ref[href^="#"]::before { content: "¶"; }
+a.annotation-ref:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }

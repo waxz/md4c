@@ -47,7 +47,9 @@ ACCESS_TEAM_DOMAIN = "https://your-team.cloudflareaccess.com"
 ACCESS_AUD = "paste the Access application's Audience (AUD) tag here"
 ADMIN_EMAILS = "you@example.com"
 PUBLIC_URL = "https://blog.example.com/"
-MAX_UPLOAD_MB = "25"
+# The largest upload (MB) when the admin's Settings set none; Cloudflare
+# takes at most 100 MB per request on the Free and Pro plans.
+MAX_UPLOAD_MB = "100"
 
 # Draft stores: add WebDAV, S3-compatible or GitHub storage from the admin's
 # Storage page, kept in KV (above) or in your browser; no secrets or

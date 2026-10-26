@@ -25,6 +25,7 @@ import { decryptText, readProtected, WrongPasswordError } from './lib/protect.js
 import { esc, finishArticle, formatDate, renderLive } from './render.js';
 import { applySite, normalizeSite } from './theme.js';
 import { webSearch } from './lib/site-config.js';
+import { isAutoLabel } from './lib/paper.js';
 
 const SITE_ROOT = new URL('./', import.meta.url).href;
 const app = document.getElementById('app');
@@ -241,6 +242,7 @@ async function showLivePost(slug) {
     storageBase: fs.baseUrl,
     postHref: (s) => `index.html#/post/${s}`,
   }));
+  nameHighlightRefs(article);
   await finishArticle(article, site, {
     title: meta.title, date: meta.date, author: meta.author, slug,
     url: `${SITE_ROOT}index.html#/post/${slug}`,
@@ -253,6 +255,19 @@ async function showLivePost(slug) {
 const indexItems = () => (Array.isArray(indexDoc.items) ? indexDoc.items : [])
   .filter((e) => e && typeof e === 'object' && e.metadata && /^posts\/[^/]+\.md$/.test(e.path ?? ''));
 const slugOfItem = (e) => e.path.slice('posts/'.length, -'.md'.length);
+/**
+ * Links to highlights in other papers ([[paper#a-…]]) show the highlight's
+ * current short name (index.json has every paper's), unless their text was
+ * written by hand.
+ */
+function nameHighlightRefs(root) {
+  const byId = new Map(indexItems().flatMap((e) => (Array.isArray(e.highlights) ? e.highlights : []).map((h) => [h.id, h])));
+  for (const a of root.querySelectorAll('a.annotation-ref[data-ref]')) {
+    const h = byId.get(a.dataset.ref);
+    if (h?.label && isAutoLabel(a.textContent, a.dataset.ref)) a.textContent = h.label;
+  }
+}
+
 const hrefOfPost = (slug, item) =>
   (item?.page ? new URL(item.page, SITE_ROOT).href : `${SITE_ROOT}index.html#/post/${slug}`);
 
@@ -460,6 +475,7 @@ async function main() {
       }
       if (unlocked) await unlocked;
       const canonical = document.querySelector('link[rel="canonical"]')?.href;
+      nameHighlightRefs(article);
       await finishArticle(article, site, { ...article.dataset, url: canonical || location.href.split('#')[0] });
       await showConnections(article, article.dataset.slug);
       return;

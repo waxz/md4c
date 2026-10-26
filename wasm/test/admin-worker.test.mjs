@@ -743,3 +743,26 @@ describe('publishing with files', () => {
     assert.equal(byKey('drafts', 'posts/d1.md').status, 'draft');
   });
 });
+
+describe('large uploads', () => {
+  test('the limit comes from the settings; large files stream into and between R2 buckets', async () => {
+    const index = await read('site', 'index.json');
+    await put('site', 'index.json', JSON.stringify({ version: 1, site: { title: 'T', maxUploadMb: 12 }, items: [] }));
+    assert.equal((await call('GET', '/api/session')).data.maxUploadMb, 12, 'the settings raise the deploy\'s 1 MB');
+    const big = new Uint8Array(9 * 1024 * 1024).map((_, i) => i % 251);
+    const r = await create('drafts', 'posts/big-paper.pdf', big);
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.size, big.length);
+    const copied = await postJson('/api/copy', { from: { store: 'drafts', key: 'posts/big-paper.pdf' } });
+    assert.equal(copied.status, 201, JSON.stringify(copied.data));
+    const back = await call('GET', '/api/file?store=site&key=posts%2Fbig-paper.pdf');
+    assert.equal(back.status, 200);
+    // Identical by R2's etags (MD5) or a streamed digest; this test's R2 stand-in has neither, so it asks.
+    const again = await postJson('/api/copy', { from: { store: 'drafts', key: 'posts/big-paper.pdf' } });
+    assert.ok(again.data.action === 'identical' || again.data.code === 'exists', JSON.stringify(again.data));
+    const tooBig = await create('drafts', 'posts/huge.pdf', new Uint8Array(13 * 1024 * 1024));
+    assert.equal(tooBig.status, 413);
+    assert.match(tooBig.data.error ?? JSON.stringify(tooBig.data), /12 MB/);
+    await put('site', 'index.json', typeof index === 'string' ? index : JSON.stringify(index ?? { version: 1, items: [] }));
+  });
+});

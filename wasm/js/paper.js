@@ -180,6 +180,16 @@ export function annotationSummary(a) {
 }
 
 /**
+ * Whether a reference's text was made for it, not written by hand: the
+ * bare target ([[#a-…]], [[paper#a-…]]) or the old "p. 3: “…”" labels.
+ * Such text is replaced by the highlight's current name.
+ */
+export function isAutoLabel(text, id) {
+  const t = String(text ?? '').replace(/&nbsp;|\u00a0/g, ' ').trim();
+  return t === id || t === `#${id}` || t.endsWith(`#${id}`) || /^p\.\s?\d+(\s*[:·][\s\S]*)?$/.test(t);
+}
+
+/**
  * Links to highlights in rendered HTML become reference chips
  * (class "annotation-ref", data-ref = the id). A bare [[#a-…]] to one of
  * `annotations` gets that highlight's label as its text.
@@ -187,7 +197,7 @@ export function annotationSummary(a) {
 export function markAnnotationRefs(html, annotations = []) {
   const ownLabel = (id, label) => {
     const own = annotations.find((a) => a.id === id);
-    return own && label.trim().replace(/^#/, '') === id ? esc(annotationLabel(own)) : label;
+    return own && isAutoLabel(label, id) ? esc(annotationLabel(own)) : label;
   };
   return String(html)
     // Not yet links (the browser's live rendering turns these into links later)
@@ -196,7 +206,7 @@ export function markAnnotationRefs(html, annotations = []) {
     .replace(/<a href="([^"#]*)#(a-[a-z0-9]{4,16})"([^>]*)>([\s\S]*?)<\/a>/g, (whole, page, id, rest, label) => {
     if (/class="(?!annotation-ref")/.test(rest)) return whole;
     rest = rest.replace(/\s(?:class|data-ref)="[^"]*"/g, '');
-    return `<a href="${page}#${id}" class="annotation-ref" data-ref="${id}"${rest}>${page ? label : ownLabel(id, label)}</a>`;
+    return `<a href="${page}#${id}" class="annotation-ref" data-ref="${id}"${rest}>${ownLabel(id, label)}</a>`;
   });
 }
 

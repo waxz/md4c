@@ -34,6 +34,9 @@
 //                                    store without it lists everything and
 //                                    the API folds the result)
 //   peek(key, bytes)              -> the first bytes of a file as text, or null
+// R2 stores also stream large files instead of holding them in memory:
+//   streams: true                 put() takes a ReadableStream (of a known length)
+//   stream(key)                   -> { meta, body: ReadableStream } | null
 // with Meta = { key, size, etag, uploaded: Date, contentType, summary? }.
 // `summary` ({ title, date, tags }) is what the posts list shows; R2 keeps
 // it as custom metadata, written with each post, so listing needs no reads.
@@ -79,9 +82,14 @@ export function r2Store(bucket) {
       const o = await bucket.get(key);
       return o ? { meta: meta(o), body: await o.arrayBuffer() } : null;
     },
+    streams: true,
+    async stream(key) {
+      const o = await bucket.get(key);
+      return o ? { meta: meta(o), body: o.body } : null;
+    },
     async put(key, body, { contentType, cacheControl, ifMatch } = {}) {
       // A post carries its summary, so the posts list never has to read it.
-      const summary = SUMMARY_KEY.test(key)
+      const summary = SUMMARY_KEY.test(key) && body instanceof ArrayBuffer
         ? postSummary(new TextDecoder().decode(new Uint8Array(body, 0, Math.min(body.byteLength, PEEK_BYTES * 2))))
         : null;
       const o = await bucket.put(key, body, {
@@ -121,6 +129,13 @@ export function prefixedStore(store, prefix) {
       return o ? { ...o, meta: strip(o.meta) } : null;
     },
     put: async (key, body, opts) => strip(await store.put(prefix + key, body, opts)),
+    streams: Boolean(store.streams),
+    ...(store.stream ? {
+      async stream(key) {
+        const o = await store.stream(prefix + key);
+        return o ? { ...o, meta: strip(o.meta) } : null;
+      },
+    } : {}),
     delete: (key) => store.delete(prefix + key),
     async list(sub = '', cursor, opts) {
       const page = await store.list(prefix + sub, cursor, opts);
@@ -158,6 +173,9 @@ export function withPrivateSources(site, sources) {
   }
   return {
     privateSources: true,
+    // Attachments (never sources) stream as the site's store does.
+    streams: Boolean(site.streams),
+    ...(site.stream ? { stream: (key) => (isSource(key) ? null : site.stream(key)) } : {}),
     async head(key) {
       return isSource(key) ? (await sources.head(key)) ?? site.head(key) : site.head(key);
     },

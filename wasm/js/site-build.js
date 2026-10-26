@@ -105,7 +105,9 @@ export async function build(storage, md4c, opts = {}) {
   // The site's own files' versions (assets.json): pages link app.js?v=…
   const site = { ...siteSettings(rawSite), assets: opts.assets ?? previous?.build?.assets ?? {} };
   // New versions of the site's code mean every page links new addresses.
-  const siteHash = fnv1a(JSON.stringify([rawSite ?? null, site.assets]));
+  // (The admin's upload limit changes no page.)
+  const { maxUploadMb: _limit, ...pageSite } = rawSite && typeof rawSite === 'object' ? rawSite : { _: rawSite };
+  const siteHash = fnv1a(JSON.stringify([rawSite && typeof rawSite === 'object' ? pageSite : rawSite ?? null, site.assets]));
   const full = Boolean(opts.full) || previous?.build?.version !== BUILD_VERSION || previous?.build?.site !== siteHash;
   const known = new Map((previous?.items ?? [])
     .filter((e) => e && typeof e === 'object' && e.page && e.etag && e.metadata)

@@ -31,6 +31,7 @@
 //       "indexNowKey": "0123456789abcdef0123456789abcdef",    // publish --indexnow
 //       "googleTag": "G-XXXXXXXXXX",  // Google tag (gtag.js) on every page:
 //                                     // Analytics, and Search Console checks
+//       "maxUploadMb": 100,           // the admin's largest upload (MB); 0: the deploy's
 //       "search": "google"            // full-text search of the posts on the
 //                                     // web: google | bing | duckduckgo | none
 //     },
@@ -85,6 +86,7 @@ export const DEFAULT_SITE = Object.freeze({
   verification: {},
   indexNowKey: '',
   googleTag: '',
+  maxUploadMb: 0,
   search: 'google',
 });
 
@@ -188,6 +190,7 @@ export function normalizeSite(raw, base) {
     ),
     indexNowKey: /^[A-Za-z0-9-]{8,128}$/.test(r.indexNowKey ?? '') ? r.indexNowKey : '',
     googleTag: googleTagId(r.googleTag),
+    maxUploadMb: Number.isInteger(Number(r.maxUploadMb)) && Number(r.maxUploadMb) > 0 ? Math.min(Number(r.maxUploadMb), 500) : 0,
     search: r.search === 'none' || SEARCH_ENGINES[r.search] ? r.search : DEFAULT_SITE.search,
   };
 }

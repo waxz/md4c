@@ -751,6 +751,11 @@ describe('paper notes: a PDF with highlights and comments', () => {
     assert.equal(annotationLabel({ page: 1, title: 'Model-free RL', quote: 'q' }), 'Model-free RL', 'a title names it');
     assert.equal(annotationLabel({ page: 1, quote: 'q', comment: 'Add **definition** of [[#a-x|model]] free\n\nMore.' }), 'Add definition of model free', 'else its comment');
     assert.equal(annotationLabel({ page: 4 }), 'Page 4');
+    const { isAutoLabel } = await import('../js/paper.js');
+    assert.ok(isAutoLabel('p. 1: “Attention is…”', 'a-x') && isAutoLabel('p.&nbsp;3', 'a-x') && isAutoLabel('paper#a-x', 'a-x'));
+    assert.ok(!isAutoLabel('the encoder', 'a-x'), 'text written by hand stays');
+    assert.equal(markAnnotationRefs('<a href="this.html#a-dddd44">p. 2: “a long…”</a>', list),
+      '<a href="this.html#a-dddd44" class="annotation-ref" data-ref="a-dddd44">“a long quote”</a>', 'old "p. N" labels take the name');
     assert.deepEqual(cleanTags('#Method, deep learning, method,, 強化学習'), ['method', 'deep-learning', '強化学習']);
     assert.deepEqual(cleanAnnotation({ ...base, title: ' T ', tags: ['A b'] }).tags, ['a-b']);
     assert.deepEqual(annotationSummary({ ...base, quote: 'x', comment: '', tags: ['m'], color: 'red' }), { id: 'a-dddd44', page: 2, label: '“x”', quote: 'x', tags: ['m'], color: 'red' });

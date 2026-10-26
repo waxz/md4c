@@ -96,6 +96,11 @@ export async function uploadFiles(store, prefix, files) {
     }
     if (isPost && name !== file.name) toast(`${file.name} is saved as ${name}: a post's address uses lowercase letters, digits and dashes.`, 'info');
     const body = isPost ? await withTitle(file) : await resizeImage(file);
+    const limitMb = state.session?.maxUploadMb ?? 100;
+    if (store !== 'local' && body.size > limitMb * 1024 * 1024) { // this browser's store has no limit
+      toast(`${file.name} is ${formatSize(body.size)}: uploads are limited to ${limitMb} MB. Raise "Largest upload" in Settings.`, 'error');
+      continue;
+    }
     try {
       try {
         await api.write(store, key, body, null);

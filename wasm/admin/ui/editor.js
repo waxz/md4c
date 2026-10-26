@@ -527,8 +527,8 @@ export async function showEditor(view, store, key, newStore) {
         }));
         return box.innerHTML;
       },
-      // A cross-reference to paste in other notes: [[this-post#a-…|p. 3: “…”]]
-      linkFor: (id, a) => `[[${slug() || 'this-post'}#${id}|p. ${a.page}${a.quote ? `: “${a.quote.slice(0, 40)}${a.quote.length > 40 ? '…' : ''}”` : ''}]]`,
+      // A cross-reference to paste in other notes: [[this-post#a-…|its short name]]
+      linkFor: (id, a) => `[[${slug() || 'this-post'}#${id}|${annotationLabel(a, 60).replace(/[[\]|]/g, '')}]]`,
       notes: () => f.body.value,
       knownTags: () => siteTags,
       confirmDelete: (a) => confirmDialog('Delete this highlight?', `${a.quote ? `“${a.quote.slice(0, 100)}” ` : ''}and its comment are removed from the post.`, 'Delete'),

@@ -63,7 +63,8 @@ export function r2Bucket(root, folder) {
         const current = await head(key);
         if (!current || current.etag !== opts.onlyIf.etagMatches) return null;
       }
-      const body = typeof value === 'string' ? value : new Uint8Array(value);
+      const body = typeof value === 'string' ? value
+        : value instanceof ReadableStream ? new Uint8Array(await new Response(value).arrayBuffer()) : new Uint8Array(value);
       await storage.upload(key, body, { contentType: opts.httpMetadata?.contentType });
       custom.delete(key);
       const written = await head(key);
