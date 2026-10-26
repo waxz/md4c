@@ -173,6 +173,10 @@ export function referencedKeys(markdown, postKey) {
   const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
   // Images named in the front matter: social image, banner, background.
   for (const m of fm ? fm[1].matchAll(/^(?:image|banner|cover|background|pdf)\s*:\s*["']?([^"'\r\n]+?)["']?\s*$/gim) : []) add(m[1]);
+  // The post's BibTeX files ("bibliography: refs.bib, ../assets/more.bib").
+  for (const m of fm ? fm[1].matchAll(/^bibliography\s*:\s*["']?([^"'\r\n]+?)["']?\s*$/gim) : []) {
+    for (const p of m[1].split(/[,\s]+/)) if (p) add(p);
+  }
 
   const base = postKey.slice(0, postKey.lastIndexOf('/') + 1);
   for (let ref of refs) {

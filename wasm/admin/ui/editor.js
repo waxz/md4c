@@ -14,6 +14,7 @@ import { slugify } from './lib/blog-render.js';
 import { finishArticle, renderLive, renderLiveHtml, renderMath } from './render.js';
 import { mountPaper } from './paper.js';
 import { SHOW_KEY } from './comments.js';
+import { citeStyle, parseBibtex, referenceText } from './lib/cite.js';
 import { annotationLabel, isPaper, joinAnnotations, paperHtml, paperPdf, sortAnnotations, splitAnnotations } from './lib/paper.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
 import { attachSourceSync } from './sync.js';
@@ -27,7 +28,7 @@ import {
   storeLabel, toast,
 } from './shared.js';
 
-const KNOWN = ['title', 'date', 'tags', 'author', 'description', 'summary', 'image', 'banner', 'cover', 'background', 'password', 'toc', 'numbered', 'type', 'pdf'];
+const KNOWN = ['title', 'date', 'tags', 'author', 'description', 'summary', 'image', 'banner', 'cover', 'background', 'password', 'toc', 'numbered', 'type', 'pdf', 'bibliography', 'citestyle'];
 let current = null; // the open editor, for the leave-page guard
 
 export function hasUnsavedChanges() {
@@ -57,6 +58,8 @@ function compose(fields, extra, body) {
   }
   if (fields.type === 'paper') lines.push('type: paper');
   if (clean(fields.pdf)) lines.push(`pdf: ${yamlValue(fields.pdf)}`);
+  if (clean(fields.bibliography)) lines.push(`bibliography: ${yamlValue(fields.bibliography)}`);
+  if (/^(numeric|author-year)$/.test(fields.citestyle ?? '')) lines.push(`citestyle: ${fields.citestyle}`);
   if (clean(fields.password)) lines.push(`password: ${clean(fields.password)}`);
   for (const k of ['toc', 'numbered']) if (/^(true|false)$/.test(fields[k] ?? '')) lines.push(`${k}: ${fields[k]}`);
   for (const [k, v] of Object.entries(extra)) if (k !== 'draft') lines.push(`${k}: ${yamlValue(v)}`);
@@ -188,6 +191,9 @@ export async function showEditor(view, store, key, newStore) {
         <label class="field"><span>Kind of post</span><select name="type">
           <option value="">Article</option><option value="paper">Paper notes: a PDF with highlights and comments</option></select></label>
         <div class="field paper-only"><span>The PDF</span><span class="field-row"><input name="pdf" aria-label="The PDF" autocapitalize="off" spellcheck="false" placeholder="e.g. paper.pdf"><label class="btn btn-small">Upload<input type="file" accept="application/pdf,.pdf" data-image-for="pdf" hidden></label></span></div>
+        <div class="field"><span>Bibliography: BibTeX file(s) to cite from (optional; the site's is used too)</span><span class="field-row"><input name="bibliography" aria-label="Bibliography" autocapitalize="off" spellcheck="false" placeholder="e.g. refs.bib"><label class="btn btn-small">Upload<input type="file" accept=".bib,text/x-bibtex,text/plain" data-image-for="bibliography" hidden></label></span></div>
+        <label class="field"><span>Citation style</span><select name="citestyle">
+          <option value="">site default</option><option value="author-year">author–year: (Vaswani et al., 2017)</option><option value="numeric">numeric: [1]</option></select></label>
         <label class="field span-2"><span>Social preview image (optional; default: the banner)</span><input name="image" autocapitalize="off" spellcheck="false"></label>
         <label class="field"><span>Contents box</span><select name="toc">
           <option value="">site default</option><option value="true">show</option><option value="false">hide</option></select></label>
@@ -219,6 +225,8 @@ export async function showEditor(view, store, key, newStore) {
           <button type="button" data-md="math" title="Math">∑</button>
           <label class="tb-upload" title="Insert images">Image<input type="file" accept="image/*" multiple hidden></label>
           <label class="tb-upload" title="Attach files: audio, video, PDF, HTML, anything">File<input type="file" multiple hidden></label>
+          <select class="md-cite" aria-label="Cite a reference" title="Cite an entry of the bibliography ([@key])"><option value="">Cite…</option></select>
+          <select class="md-xref" aria-label="Refer to a figure, table, equation or section" title="Refer to a labelled figure, table, equation or section (@fig:x)"><option value="">Ref…</option></select>
           <select class="md-ref paper-only" aria-label="Link a highlight" title="Link a highlight of the PDF ([[#a-…]])"></select>
         </div>
         <textarea name="body" spellcheck="true" aria-label="Markdown"></textarea>
@@ -253,6 +261,8 @@ export async function showEditor(view, store, key, newStore) {
     set(f.numbered, flag(m.numbered) ?? (partial ? undefined : ''));
     set(f.type, isPaper(m) ? 'paper' : (partial && m.type === undefined ? undefined : ''));
     set(f.pdf, m.pdf);
+    set(f.bibliography, m.bibliography);
+    set(f.citestyle, m.citestyle || m['cite-style'] ? citeStyle(m.citestyle || m['cite-style']) : (partial ? undefined : ''));
     for (const [k, v] of Object.entries(m)) if (!KNOWN.includes(k)) extra[k] = v;
   };
   fillFields(meta);
@@ -293,6 +303,7 @@ export async function showEditor(view, store, key, newStore) {
       title: f.title.value, date: f.date.value, tags: f.tags.value, author: f.author.value, description: f.description.value,
       image: f.image.value, banner: f.banner.value, background: f.background.value, password: f.password.value,
       toc: f.toc.value, numbered: f.numbered.value, type: f.type.value, pdf: f.pdf.value,
+      bibliography: f.bibliography.value, citestyle: f.citestyle.value,
     },
     extra, f.type.value === 'paper' || ed.annotations.length ? joinAnnotations(f.body.value, ed.annotations) : f.body.value
   );
@@ -417,10 +428,59 @@ export async function showEditor(view, store, key, newStore) {
       : renderLive(fs, f.body.value, { ...where, sourcePositions: true }));
     prose.className = 'prose';
     await finishArticle(article, { ...state.site, citation: false },
-      { title: f.title.value, date: f.date.value, slug: s, url: '', toc: f.toc.value, paperViewer: false })
+      {
+        title: f.title.value, date: f.date.value, slug: s, url: '', toc: f.toc.value, paperViewer: false,
+        bibliography: bibUrls(), citeStyle: f.citestyle.value || state.site.citeStyle,
+        nocite: extra.nocite,
+      })
       .catch((err) => console.warn('preview:', err));
     sync.refresh();
   }
+  /* ---- Citations: the .bib files (the post's, then the site's), through the Worker ---- */
+  function bibUrls() {
+    const keys = String(f.bibliography.value).split(/[,\s]+/).filter((p) => /\.bib$/i.test(p) && !/^[a-z]+:|^\/\//i.test(p))
+      .map((p) => decodeURIComponent(new URL(p, `https://x/posts/${slug() || 'untitled'}.md`).pathname.slice(1)));
+    const site = String(state.rawSite?.bibliography ?? '');
+    if (/\.bib$/i.test(site) && !/^[a-z]+:|^\/\//i.test(site)) keys.push(site.replace(/^\/+/, ''));
+    return keys.map((k) => (k.startsWith('posts/') ? api.rawUrl(home(), k) : api.rawUrl('site', k)));
+  }
+  /** "Cite…": the entries of the post's bibliographies and its ```bibtex blocks. */
+  const citeSelect = form.querySelector('.md-cite');
+  const xrefSelect = form.querySelector('.md-xref');
+  async function fillCite() {
+    const texts = await Promise.all(bibUrls().map((u) => fetch(u).then((r) => (r.ok ? r.text() : ''), () => '')));
+    const inline = [...f.body.value.matchAll(/```(?:bibtex|bib)[^\n]*\n([\s\S]*?)```/g)].map((m) => m[1]);
+    const entries = new Map();
+    for (const t of [...texts, ...inline]) for (const [k, e] of parseBibtex(t)) entries.set(k, e);
+    citeSelect.innerHTML = `<option value="">Cite…</option>${entries.size
+      ? [...entries.values()].map((e) => `<option value="${esc(e.key)}" title="${esc(referenceText(e))}">${esc(e.key)}: ${esc(referenceText(e).slice(0, 70))}</option>`).join('')
+      : '<option value="" disabled>No bibliography: name a .bib file above, or add a ```bibtex block</option>'}`;
+  }
+  function fillXref() {
+    const labels = [...new Set([...f.body.value.matchAll(/\{#((?:fig|tbl|eq|sec):[\w.:-]+)\}/g)].map((m) => m[1]))];
+    xrefSelect.innerHTML = `<option value="">Ref…</option>${labels.length
+      ? labels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')
+      : '<option value="" disabled>No labels yet: add {#fig:name} after an image, {#sec:name} after a heading…</option>'}`;
+  }
+  citeSelect.addEventListener('focus', fillCite);
+  citeSelect.addEventListener('pointerdown', () => { if (citeSelect.options.length < 2) fillCite(); });
+  xrefSelect.addEventListener('focus', fillXref);
+  xrefSelect.addEventListener('pointerdown', fillXref);
+  const insertAtCursor = (text) => {
+    const before = f.body.value.slice(0, f.body.selectionStart);
+    wrapSelection(f.body, `${before && !/\s$/.test(before) ? ' ' : ''}${text}`, '', '');
+  };
+  citeSelect.addEventListener('change', () => {
+    if (!citeSelect.value) return;
+    insertAtCursor(`[@${citeSelect.value}]`);
+    citeSelect.value = '';
+  });
+  xrefSelect.addEventListener('change', () => {
+    if (!xrefSelect.value) return;
+    insertAtCursor(`@${xrefSelect.value}`);
+    xrefSelect.value = '';
+  });
+
   const schedulePreview = () => {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(updatePreview, 250);

@@ -22,7 +22,7 @@ import { Md4cFs } from './lib/md4c-fs.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
 import { flag, isDraft, parseFrontMatter, parseTags, postMetadata, SLUG_RE } from './lib/post-format.js';
 import { decryptText, readProtected, WrongPasswordError } from './lib/protect.js';
-import { esc, finishArticle, formatDate, renderLive, renderMath } from './render.js';
+import { bibliographyUrls, esc, finishArticle, formatDate, renderLive, renderMath } from './render.js';
 import { applySite, normalizeSite } from './theme.js';
 import { webSearch } from './lib/site-config.js';
 import { isAutoLabel } from './lib/paper.js';
@@ -237,8 +237,9 @@ async function showLivePost(slug) {
   const numbered = flag(meta.numbered);
   if (numbered) document.documentElement.dataset.numbered = numbered;
   if (flag(meta.toc)) article.dataset.toc = flag(meta.toc);
+  const postUrl = await fs.storage.url(path);
   article.querySelector('.prose').append(renderLive(fs, body, {
-    postUrl: await fs.storage.url(path),
+    postUrl,
     storageBase: fs.baseUrl,
     postHref: (s) => `index.html#/post/${s}`,
   }));
@@ -246,6 +247,8 @@ async function showLivePost(slug) {
   await finishArticle(article, site, {
     title: meta.title, date: meta.date, author: meta.author, slug,
     url: `${SITE_ROOT}index.html#/post/${slug}`,
+    bibliography: [...bibliographyUrls(meta.bibliography, postUrl), ...(site.bibliography ? [site.bibliography] : [])],
+    citeStyle: meta.citestyle || meta['cite-style'], nocite: meta.nocite,
   });
   await showConnections(article, slug);
 }

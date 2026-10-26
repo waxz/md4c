@@ -31,6 +31,8 @@
 //       "indexNowKey": "0123456789abcdef0123456789abcdef",    // publish --indexnow
 //       "googleTag": "G-XXXXXXXXXX",  // Google tag (gtag.js) on every page:
 //                                     // Analytics, and Search Console checks
+//       "bibliography": "assets/references.bib", // BibTeX for every post's citations
+//       "citeStyle": "author-year",   // or "numeric": (Vaswani et al., 2017) or [1]
 //       "maxUploadMb": 100,           // the admin's largest upload (MB); 0: the deploy's
 //       "search": "google"            // full-text search of the posts on the
 //                                     // web: google | bing | duckduckgo | none
@@ -87,6 +89,8 @@ export const DEFAULT_SITE = Object.freeze({
   indexNowKey: '',
   googleTag: '',
   maxUploadMb: 0,
+  bibliography: '',
+  citeStyle: 'author-year',
   search: 'google',
 });
 
@@ -170,6 +174,8 @@ export function normalizeSite(raw, base) {
     banner: safeUrl(r.banner, base),
     backgroundMode: oneOf(r.backgroundMode, BG_MODES, DEFAULT_SITE.backgroundMode),
     stylesheet: safeUrl(r.stylesheet, base),
+    bibliography: /\.bib$/i.test(String(r.bibliography ?? '')) ? safeUrl(r.bibliography, base) : '',
+    citeStyle: /^num/i.test(String(r.citeStyle ?? '')) ? 'numeric' : 'author-year',
     numberedHeadings: bool(r.numberedHeadings, DEFAULT_SITE.numberedHeadings),
     toc: bool(r.toc, DEFAULT_SITE.toc),
     graph: bool(r.graph, DEFAULT_SITE.graph),

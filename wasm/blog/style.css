@@ -556,3 +556,37 @@ a.annotation-ref:hover { background: color-mix(in srgb, var(--accent) 16%, trans
 }
 .graph-label.is-lit { color: var(--accent); }
 .graph-label .katex { font-size: 1.05em; }
+
+/* ---------- Citations, references and cross-references (render.js, js/cite.js) ---------- */
+
+.prose .cite-group { white-space: normal; }
+.prose a.cite-ref { color: inherit; text-decoration: none; border-bottom: 1px dotted color-mix(in srgb, var(--accent) 60%, transparent); }
+.prose a.cite-ref:hover { color: var(--accent); border-bottom-style: solid; }
+.prose .cite-missing { color: var(--accent); font-weight: 600; }
+.prose a.xref { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.prose a.xref:hover { color: var(--accent); }
+.prose a.xref.xref-missing { color: var(--accent); font-weight: 600; }
+.references { margin: 3rem 0 1rem; padding-top: 1.2rem; border-top: 1px solid var(--rule); }
+.prose h2.references-title { counter-increment: none; margin-top: 0; }
+:root[data-numbered="true"] .prose h2.references-title::before { content: none; }
+.toc li.toc-unnumbered { counter-increment: none; }
+:root[data-numbered="true"] .toc li.toc-unnumbered > a::before { content: none; }
+.prose .references-list { padding-left: 0; margin: 0; font-size: .92rem; line-height: 1.55; }
+.references-list li { margin: 0 0 .7em; overflow-wrap: anywhere; }
+.references-list.author-year { list-style: none; }
+.references-list.author-year li { padding-left: 1.6em; text-indent: -1.6em; } /* hanging indent */
+.prose .references-list.numeric { padding-left: 2.4em; }
+.references-list.numeric li::marker { content: "[" counter(list-item) "] "; color: var(--muted); font-variant-numeric: tabular-nums; }
+.references-list li:target { background: color-mix(in srgb, var(--accent) 9%, transparent); border-radius: 3px; }
+.references-list a { overflow-wrap: anywhere; }
+.ref-backs { white-space: nowrap; }
+.ref-back { text-decoration: none; color: var(--muted); font-size: .85em; }
+.ref-back:hover { color: var(--accent); }
+.prose .cite-ref:target, .prose figure:target, .prose .table-wrap:target, .prose .eq-numbered:target { background: color-mix(in srgb, var(--accent) 9%, transparent); border-radius: 3px; }
+/* A labelled equation: numbered on the right. */
+.prose .eq-numbered { display: flex; align-items: center; gap: 1rem; margin: 1em 0; }
+.prose .eq-numbered > :first-child { flex: 1; min-width: 0; overflow-x: auto; }
+.prose .eq-number { flex: none; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+/* A table's caption ("Table: …"), numbered. */
+.prose table caption { caption-side: top; margin: 0 auto .6em; font-family: var(--font-sans); font-size: .84rem; line-height: 1.5; color: var(--muted); text-align: center; }
+.prose table caption::before { content: "Table " counter(table) ". "; font-weight: 600; color: var(--ink-soft); }

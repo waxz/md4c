@@ -415,6 +415,9 @@ export function postPage(site, post, html) {
   const main = `<a class="back-link sc" href="${root}index.html">← All articles</a>
 <article data-slug="${esc(post.slug)}" data-title="${esc(post.title)}" data-date="${esc(post.date)}" data-author="${esc(post.author ?? '')}" data-numbered="${numbered}"${
   post.toc ? ` data-toc="${esc(post.toc)}"` : ''}${
+  post.bibliography ? ` data-bibliography="${esc(post.bibliography)}"` : ''}${
+  post.citeStyle ? ` data-cite-style="${esc(post.citeStyle)}"` : ''}${
+  post.nocite ? ` data-nocite="${esc(post.nocite)}"` : ''}${
   background ? ` data-background="${esc(background)}" data-background-mode="${esc(post.backgroundMode || 'page')}"` : ''}>
   ${banner ? `<figure class="post-banner"><img src="${esc(banner)}" alt="" decoding="async"></figure>` : ''}
   <header class="article-header">

@@ -75,7 +75,7 @@ export async function digest(text) {
 /** True when a post's front matter asks for password protection. */
 export const wantsPassword = (meta) => Boolean(String(meta?.password ?? '').trim());
 
-const PUBLIC_FIELDS = ['title', 'date', 'updated', 'tags', 'author', 'toc', 'numbered', 'type'];
+const PUBLIC_FIELDS = ['title', 'date', 'updated', 'tags', 'author', 'toc', 'numbered', 'type', 'bibliography', 'citestyle', 'nocite'];
 const clean = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ').trim();
 
 /**

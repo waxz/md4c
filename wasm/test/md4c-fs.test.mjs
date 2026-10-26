@@ -731,6 +731,60 @@ test("publish.mjs refuses to put posts' Markdown in a public bucket without --so
   });
 });
 
+describe('citations and a bibliography', () => {
+  const BIB = `@string{nips = "Advances in Neural Information Processing Systems"}
+@inproceedings{vaswani2017, title = {Attention is All you Need}, author = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki},
+  booktitle = nips, pages = {5998--6008}, year = 2017, doi = {https://doi.org/10.5555/3295222.3295349}}
+@article{jurgen, author = "J{\\"u}rgen Schmidhuber", title = "Deep Learning in Neural Networks", journal = {Neural Networks}, volume = 61, pages = "85--117", year = 2015}
+@book{sutton, author = {Richard S. Sutton and Andrew G. Barto}, title = {Reinforcement Learning}, publisher = {MIT Press}, year = {2018}}
+@misc{oa1, author = {{OpenAI}}, title = {B report}, year = 2019}
+@misc{oa2, author = {{OpenAI}}, title = {A report}, year = 2019}
+@misc{broken, title = {no end`;
+
+  test('BibTeX is read: strings, braces, accents, names', async () => {
+    const { parseBibtex, texToText } = await import('../js/cite.js');
+    const bib = parseBibtex(BIB);
+    assert.deepEqual([...bib.keys()], ['vaswani2017', 'jurgen', 'sutton', 'oa1', 'oa2']);
+    assert.equal(bib.get('vaswani2017').fields.booktitle, 'Advances in Neural Information Processing Systems');
+    assert.equal(texToText('J{\\"u}rgen \\c{c}a --- {\\ss} $x_{1}$'), 'Jürgen ça — ß $x_{1}$', 'accents as letters, math kept');
+  });
+
+  test('citations in both styles, and the references list', async () => {
+    const { parseBibtex, citationTokens, createBibliography } = await import('../js/cite.js');
+    const bib = parseBibtex(BIB);
+    const text = 'As @vaswani2017 show [@jurgen, p. 3; see @sutton] and [-@vaswani2017]. [@oa1; @oa2] [@nope] @fig:one [@sec:intro] {#eq:e1} a@b.com.';
+    const tokens = citationTokens(text, (k) => bib.has(k));
+    assert.deepEqual(tokens.filter((t) => t.xref || t.label), [{ xref: 'fig:one' }, { xref: 'sec:intro' }, { label: 'eq:e1' }]);
+    assert.ok(tokens.at(-1).text.endsWith('a@b.com.'), 'an e-mail address is not a citation');
+    const plain = (style) => {
+      const b = createBibliography(bib, { style });
+      b.use(tokens.flatMap((t) => t.cite?.map((c) => c.key) ?? []));
+      return [tokens.filter((t) => t.cite).map((t) => b.citationHtml(t).replace(/<[^>]+>/g, '')), b.referencesHtml()];
+    };
+    const [ay, refs] = plain('author-year');
+    assert.deepEqual(ay, ['Vaswani et al. (2017)', '(Schmidhuber, 2015, p. 3; see Sutton &amp; Barto, 2018)', '(2017)',
+      '(OpenAI, 2019b; OpenAI, 2019a)', '(nope?)']);
+    assert.match(refs, /<li id="ref-vaswani2017">Vaswani, A\., Shazeer, N\., &amp; Parmar, N\. \(2017\)\. Attention is All you Need\. In <em>Advances in Neural Information Processing Systems<\/em> \(pp\. 5998–6008\)\. <a href="https:\/\/doi\.org\/10\.5555\/3295222\.3295349"/);
+    assert.match(refs, /href="#cite-vaswani2017-1"[^>]*>↩<\/a> <a [^>]*href="#cite-vaswani2017-2"/, 'each citation is linked back');
+    assert.ok(refs.indexOf('ref-oa2') < refs.indexOf('ref-jurgen') && refs.indexOf('ref-jurgen') < refs.indexOf('ref-vaswani2017'), 'sorted by author');
+    assert.match(refs, /OpenAI \(2019a\)\. A report/);
+    const [num, numRefs] = plain('numeric');
+    assert.deepEqual(num, ['Vaswani et al. [1]', '[2, p. 3, see 3]', '[1]', '[4, 5]', '[nope?]']);
+    assert.ok(numRefs.indexOf('ref-vaswani2017') < numRefs.indexOf('ref-jurgen'), 'in order of citation');
+  });
+
+  test('a post names its .bib files; they are published with it', async () => {
+    const { postMetadata } = await import('../js/post-format.js');
+    const m = postMetadata('---\ntitle: T\nbibliography: refs.bib, ../assets/more.bib\ncitestyle: numeric\nnocite: "*"\n---\nx', () => '<p>x</p>', 't');
+    assert.deepEqual([m.bibliography, m.citeStyle, m.nocite], ['refs.bib, ../assets/more.bib', 'numeric', '*']);
+    const { referencedKeys } = await import('../admin/src/paths.js');
+    assert.deepEqual(referencedKeys('---\ntitle: T\nbibliography: refs.bib, ../assets/more.bib\n---\nx', 'posts/t.md').sort(), ['assets/more.bib', 'posts/refs.bib']);
+    const { postPage } = await import('../js/pages.js');
+    const { siteSettings } = await import('../js/site-build.js');
+    assert.match(postPage(siteSettings({}), { slug: 't', page: 'posts/t.html', ...m }, '<p>x</p>'), /data-bibliography="refs\.bib, \.\.\/assets\/more\.bib" data-cite-style="numeric" data-nocite="\*"/);
+  });
+});
+
 describe('paper notes: a PDF with highlights and comments', () => {
   test('annotations round-trip through the post, cleaned', async () => {
     const { splitAnnotations, joinAnnotations, cleanAnnotation, newAnnotationId, paperPdf } = await import('../js/paper.js');

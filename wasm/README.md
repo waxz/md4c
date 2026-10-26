@@ -250,6 +250,59 @@ event handlers or `javascript:` URLs, and no frames from other origins.
 Posts rendered live in the browser (`#/post/<slug>`, before a rebuild)
 still go through DOMPurify.
 
+### Citations, references and cross-references
+
+Posts cite and cross-reference as a paper does (Pandoc's syntax):
+
+```markdown
+---
+title: Notes on attention
+bibliography: refs.bib          # next to the post; several: a.bib, ../assets/b.bib
+citestyle: numeric              # optional: author-year (the default) or numeric
+nocite: "*"                     # optional: also list entries not cited ("*": all)
+---
+
+# Introduction {#sec:intro}
+
+Transformers [@vaswani2017] replaced recurrence, as @vaswani2017 show
+[see also @sutton, ch. 3; -@jurgen]. The model is in @fig:arch, the
+results in @tbl:results, the score in @eq:attn; see @sec:method.
+
+![The architecture](arch.png){#fig:arch}
+
+$$\mathrm{softmax}(QK^T/\sqrt{d_k})V$$ {#eq:attn}
+
+| Model | BLEU |
+|-------|------|
+| Base  | 27.3 |
+
+Table: Results on WMT 2014 {#tbl:results}
+```
+
+- **Citations:** `[@key]` → (Vaswani et al., 2017), `[@a, p. 5; see @b]`
+  → (A, 2019, p. 5; see B, 2020), `[-@key]` → (2017), and `@key` in the
+  text → Vaswani et al. (2017). The numeric style gives [1], [1, p. 5; see 2].
+  Same authors and year are told apart (2019a, 2019b). A key not in the
+  bibliography shows as **key?**. Hovering a citation shows the reference.
+- **References** (APA-like) are listed at the end of the post, sorted by
+  author (author–year) or numbered in order of citation, each linked back
+  to where it is cited. They are in the Contents box, unnumbered.
+- **Bibliographies:** the post's `.bib` files, the site's (Settings:
+  *Bibliography*, e.g. `assets/references.bib`, for every post), and
+  ` ```bibtex ` blocks in the post itself. BibTeX `@string`s, accents
+  (`{\"u}`), `--`, DOIs and URLs are understood; math in titles is
+  typeset. Publishing copies the post's `.bib` files with it.
+- **Cross-references:** a label `{#fig:…}` after an image, `{#tbl:…}` in a
+  table's `Table: …` caption line (just before or after the table),
+  `{#eq:…}` after a `$$…$$` equation (which is then numbered), `{#sec:…}`
+  after a heading. `@fig:x` (or `[@fig:x]`) becomes *Figure 2*, `@tbl:x`
+  *Table 1*, `@eq:x` *Equation (3)*, `@sec:x` *Section 2.1*, each a link;
+  a label that does not exist shows as `fig:x??`.
+- **In the admin,** the post's fields have *Bibliography* (upload a
+  `.bib`) and *Citation style*; the toolbar's **Cite…** lists the entries
+  to insert `[@key]`, and **Ref…** the labels in the post to insert
+  `@fig:x`. Settings has the site's bibliography and default style.
+
 ### Paper notes
 
 A post can be notes on a paper: the PDF is the main part of the page, with

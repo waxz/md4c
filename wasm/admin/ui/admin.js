@@ -71,6 +71,11 @@ async function showSettings() {
       <label class="field"><span>Largest upload, in MB (PDFs, images, files; empty: ${esc(String(state.session.maxUploadMb ?? 100))} MB now)</span>
         <input data-key="maxUploadMb" type="number" min="1" max="500" step="1" inputmode="numeric" aria-label="Largest upload in MB" placeholder="100">
         <small class="muted">Cloudflare takes at most 100 MB in one upload on the Free and Pro plans (Business 200, Enterprise 500).</small></label>
+      <div class="field"><span>Bibliography: a BibTeX file every post can cite from ([@key])</span><span class="field-row">
+        <input data-key="bibliography" aria-label="Bibliography" autocapitalize="off" spellcheck="false" placeholder="assets/references.bib">
+        <label class="btn btn-small">Upload<input type="file" accept=".bib,text/x-bibtex,text/plain" data-upload="bibliography" hidden></label></span></div>
+      <label class="field"><span>Citation style (a post's "citestyle:" can say otherwise)</span><select data-key="citeStyle">
+        <option value="author-year">author–year: (Vaswani et al., 2017)</option><option value="numeric">numeric: [1]</option></select></label>
       <label class="field"><span>Google tag ID (paste the ID or Google's whole snippet; empty: none)</span>
         <input data-key="googleTag" aria-label="Google tag ID" autocapitalize="characters" spellcheck="false" placeholder="G-XXXXXXXXXX"></label>
       <label class="field"><span>Background shown</span><select data-key="backgroundMode">
@@ -129,7 +134,7 @@ async function showSettings() {
     }
     for (const el of formFields) {
       if (el.type === 'checkbox') el.checked = typeof obj[el.dataset.key] === 'boolean' ? obj[el.dataset.key] : DEFAULT_SITE[el.dataset.key];
-      else if (document.activeElement !== el) el.value = obj[el.dataset.key] ?? (el.tagName === 'SELECT' ? 'hero' : '');
+      else if (document.activeElement !== el) el.value = obj[el.dataset.key] ?? (el.tagName === 'SELECT' ? (DEFAULT_SITE[el.dataset.key] || 'hero') : '');
     }
   };
   const setKey = (key, value) => {

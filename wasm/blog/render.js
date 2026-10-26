@@ -4,6 +4,7 @@
 import DOMPurify from './vendor/dompurify/purify.es.js';
 import { SLUG_RE } from './lib/post-format.js';
 import { PARSER_FLAGS, slugify, SOURCE_POS_FLAGS, wikiHref } from './lib/blog-render.js';
+import { citationTokens, citeStyle, createBibliography, parseBibtex } from './lib/cite.js';
 
 export { slugify };
 
@@ -111,6 +112,7 @@ function headingId(text) {
 function demoteHeadingElements(root) {
   if (!root.querySelector('h1')) return;
   for (const h of [...root.querySelectorAll('h1, h2, h3, h4, h5')].reverse()) {
+    if (h.classList.contains('references-title')) continue; // made an h2 already
     const next = document.createElement(`h${Number(h.tagName[1]) + 1}`);
     for (const a of h.attributes) next.setAttribute(a.name, a.value);
     next.append(...h.childNodes);
@@ -118,13 +120,138 @@ function demoteHeadingElements(root) {
   }
 }
 
-/** Figures from lone images, scrollable tables, heading anchors, lazy images. */
+/* ---------- Citations and a bibliography (js/cite.js) ---------- */
+
+const bibFiles = new Map(); // url -> { at, text: Promise<string> }
+/** A .bib file's text ('' when it cannot be read); kept 15 s (the admin's preview asks often). */
+function bibFile(url) {
+  const hit = bibFiles.get(url);
+  if (hit && Date.now() - hit.at < 15_000) return hit.text;
+  const text = fetch(url, { cache: 'no-cache' })
+    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .catch((err) => {
+      console.warn(`bibliography ${url}:`, err.message ?? err);
+      return '';
+    });
+  bibFiles.set(url, { at: Date.now(), text });
+  return text;
+}
+
+/** The .bib files a post names (front matter "bibliography: a.bib, ../assets/b.bib"), as URLs. */
+export const bibliographyUrls = (value, base) => String(value ?? '').split(/[,\s]+/)
+  .filter((p) => /\.bib$/i.test(p) && !/^[a-z][a-z0-9+.-]*:|^\/\//i.test(p))
+  .map((p) => new URL(p, base).href);
+
+const fragment = (html) => document.createRange().createContextualFragment(html);
+
+/**
+ * Citations in an article: [@key], @key, [-@key] become citations in the
+ * post's style, and the entries cited are listed under "References" at
+ * its end. Entries: info.bibliography (.bib URLs: the post's, the site's)
+ * and ```bibtex blocks in the post (taken out of the page). Also marks the
+ * cross-references (@fig:x, {#fig:x}, …) for typeset() to number.
+ */
+export async function applyCitations(prose, site, info = {}) {
+  let inline = '';
+  for (const code of prose.querySelectorAll('pre > code.language-bibtex, pre > code.language-bib')) {
+    inline += `\n${code.textContent}`;
+    code.parentElement.remove();
+  }
+  const texts = await Promise.all((info.bibliography ?? []).map(bibFile));
+  const entries = new Map();
+  for (const text of [...texts, inline]) for (const [k, e] of parseBibtex(text)) entries.set(k, e);
+
+  const skip = 'code, pre, kbd, script, style, textarea, x-equation, .katex, a, .references';
+  const walker = document.createTreeWalker(prose, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (!/[@{]/.test(n.data) || n.parentElement?.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  const found = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const tokens = citationTokens(n.data, (k) => entries.has(k));
+    if (tokens.some((t) => t.text === undefined)) found.push([n, tokens]);
+  }
+  const bib = createBibliography(entries, { style: citeStyle(info.citeStyle || site.citeStyle), nocite: info.nocite });
+  for (const [, tokens] of found) for (const t of tokens) if (t.cite) bib.use(t.cite.map((c) => c.key));
+  for (const [node, tokens] of found) {
+    const out = document.createDocumentFragment();
+    for (const t of tokens) {
+      if (t.text !== undefined) out.append(t.text);
+      else if (t.cite) out.append(fragment(bib.citationHtml(t)));
+      else if (t.xref) {
+        const a = document.createElement('a');
+        a.className = 'xref';
+        a.href = `#${t.xref}`;
+        a.dataset.xref = t.xref;
+        a.textContent = t.xref; // typeset() writes "Figure 2"
+        out.append(a);
+      } else if (t.label) {
+        const span = document.createElement('span');
+        span.className = 'xref-label';
+        span.dataset.label = t.label;
+        out.append(span);
+      }
+    }
+    node.replaceWith(out);
+  }
+  const refs = bib.referencesHtml();
+  if (refs) prose.append(fragment(refs));
+}
+
+/**
+ * Cross-references, as in a paper: {#fig:x}, {#tbl:x}, {#eq:x}, {#sec:x}
+ * label a figure (after its image), a table (in its "Table: …" caption),
+ * a display equation (after it: numbered) or a heading; @fig:x (or
+ * [@fig:x]) becomes "Figure 2", "Table 1", "Equation (3)", "Section 2.1".
+ */
+function crossReferences(root) {
+  for (const s of root.querySelectorAll('span.xref-label')) {
+    const label = s.dataset.label;
+    let prev = s.previousSibling;
+    while (prev && prev.nodeType === 3 && !prev.data.trim()) prev = prev.previousSibling;
+    if (prev?.nodeType === 1 && prev.matches('x-equation[type="display"]')) {
+      prev.id = label;
+      prev.dataset.label = label;
+    } else {
+      const target = s.closest('figure, .table-wrap, h2, h3, h4, h5, h6, p, li, blockquote');
+      if (target && !target.id.includes(':')) target.id = label;
+    }
+    s.remove();
+  }
+  let eq = 0;
+  for (const e of root.querySelectorAll('x-equation[data-label]')) e.dataset.number = String(++eq);
+  const figures = [...root.querySelectorAll('figure')];
+  const tables = [...root.querySelectorAll('.table-wrap')];
+  const sections = new Map();
+  const n = [0, 0, 0];
+  for (const h of root.querySelectorAll('h2, h3, h4')) {
+    if (h.classList.contains('references-title') || h.closest('.paper-comments, .toc')) continue;
+    const level = Number(h.tagName[1]) - 2;
+    n[level]++;
+    for (let i = level + 1; i < n.length; i++) n[i] = 0;
+    sections.set(h, n.slice(0, level + 1).join('.'));
+  }
+  for (const a of root.querySelectorAll('a.xref[data-xref]')) {
+    const el = root.querySelector(`#${CSS.escape(a.dataset.xref)}`);
+    let text = '';
+    if (el?.matches('figure')) text = `Figure ${figures.indexOf(el) + 1}`;
+    else if (el?.matches('.table-wrap')) text = `Table ${tables.indexOf(el) + 1}`;
+    else if (el?.matches('x-equation') && el.dataset.number) text = `Equation (${el.dataset.number})`;
+    else if (el && sections.has(el)) text = `Section ${sections.get(el)}`;
+    a.textContent = text || `${a.dataset.xref}??`;
+    a.classList.toggle('xref-missing', !text);
+  }
+}
+
+/** Figures from lone images, scrollable tables, heading anchors, lazy images, cross-references. */
 export function typeset(root) {
   for (const p of root.querySelectorAll('p')) {
-    const img = p.firstElementChild;
-    if (p.children.length !== 1 || img.tagName !== 'IMG' || p.textContent.trim()) continue;
+    const labels = [...p.querySelectorAll(':scope > span.xref-label')];
+    const kids = [...p.children].filter((c) => !labels.includes(c));
+    const img = kids[0];
+    if (kids.length !== 1 || img.tagName !== 'IMG' || p.textContent.trim()) continue;
     const figure = document.createElement('figure');
     if (p.dataset.src) figure.dataset.src = p.dataset.src;
+    if (labels[0]) figure.id = labels[0].dataset.label;
     figure.append(img);
     const caption = img.getAttribute('title') || img.getAttribute('alt');
     if (caption) {
@@ -140,10 +267,31 @@ export function typeset(root) {
     wrap.className = 'table-wrap';
     table.replaceWith(wrap);
     wrap.append(table);
+    // A caption, as Pandoc writes it: "Table: …" (or ": …") just before or after the table.
+    for (const p of [wrap.previousElementSibling, wrap.nextElementSibling]) {
+      if (p?.tagName !== 'P' || !/^\s*(table)?\s*:\s/i.test(p.textContent) || table.caption) continue;
+      const caption = table.createCaption();
+      caption.append(...p.childNodes);
+      const first = caption.firstChild;
+      if (first?.nodeType === 3) first.data = first.data.replace(/^\s*(table)?\s*:\s*/i, '');
+      const label = caption.querySelector('span.xref-label');
+      if (label) {
+        wrap.id = label.dataset.label;
+        label.remove();
+      }
+      p.remove();
+    }
   }
   demoteHeadingElements(root);
   const used = new Set();
   for (const h of root.querySelectorAll('h2, h3, h4, h5, h6')) {
+    const label = h.querySelector('span.xref-label');
+    if (label) { // {#sec:intro}
+      h.id = label.dataset.label;
+      label.remove();
+      used.add(h.id);
+      continue;
+    }
     let id = `sec-${headingId(h.textContent) || 'section'}`;
     for (let i = 2; used.has(id); i++) id = id.replace(/(-\d+)?$/, `-${i}`);
     used.add(id);
@@ -153,6 +301,7 @@ export function typeset(root) {
     img.loading = 'lazy';
     img.decoding = 'async';
   }
+  crossReferences(root);
 }
 
 /**
@@ -163,7 +312,7 @@ export function typeset(root) {
  */
 export function buildToc(prose, site, toc = '') {
   if (toc === 'false' || (!site.toc && toc !== 'true')) return null;
-  const all = [...prose.querySelectorAll(':scope > h2, :scope > h3, :scope > h4')].filter((h) => h.id);
+  const all = [...prose.querySelectorAll(':scope > h2, :scope > h3, :scope > h4, :scope > .references > h2')].filter((h) => h.id);
   const levels = [...new Set(all.map((h) => Number(h.tagName[1])))].sort();
   const [topLevel, subLevel] = levels;
   const heads = all.filter((h) => Number(h.tagName[1]) <= (subLevel ?? topLevel));
@@ -180,6 +329,7 @@ export function buildToc(prose, site, toc = '') {
     a.href = `#${encodeURIComponent(h.id)}`;
     a.textContent = h.textContent;
     li.append(a);
+    if (h.classList.contains('references-title')) li.className = 'toc-unnumbered';
     if (Number(h.tagName[1]) === topLevel) {
       top.append(li);
       sub = null;
@@ -251,6 +401,18 @@ export async function renderMath(container, site) {
     katex.render(eq.textContent, out, {
       displayMode: display, throwOnError: false, strict: 'ignore', trust: false, maxExpand: 1000,
     });
+    if (display && eq.dataset.number) {
+      // A labelled equation ({#eq:x}): numbered on the right, as in a paper.
+      const box = document.createElement('div');
+      box.className = 'eq-numbered';
+      box.id = eq.id;
+      const num = document.createElement('span');
+      num.className = 'eq-number';
+      num.textContent = `(${eq.dataset.number})`;
+      box.append(out, num);
+      eq.replaceWith(box);
+      continue;
+    }
     eq.replaceWith(out);
   }
 }
@@ -344,6 +506,15 @@ export async function enhanceCode(container) {
 /** Everything an article needs once its .prose is in the page. */
 export async function finishArticle(article, site, info) {
   const prose = article.querySelector('.prose');
+  await applyCitations(prose, site, {
+    // A list of URLs, or the front matter's value (the page's data-bibliography).
+    bibliography: Array.isArray(info.bibliography) ? info.bibliography : [
+      ...bibliographyUrls(info.bibliography ?? article.dataset.bibliography, info.base ?? location.href),
+      ...(site.bibliography ? [site.bibliography] : []),
+    ],
+    citeStyle: info.citeStyle ?? article.dataset.citeStyle,
+    nocite: info.nocite ?? article.dataset.nocite,
+  }).catch((err) => console.warn('citations:', err));
   typeset(prose);
   article.querySelector('.toc')?.remove(); // finishing again (the editor's preview)
   // Authors who number their own headings keep their numbers, unduplicated.

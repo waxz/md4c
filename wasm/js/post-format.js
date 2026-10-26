@@ -180,5 +180,10 @@ export function postMetadata(source, renderHtml, fallbackTitle) {
   if (String(meta.type ?? '').trim().toLowerCase() === 'paper') out.type = 'paper';
   if (flag(meta.toc)) out.toc = flag(meta.toc);
   if (flag(meta.numbered)) out.numbered = flag(meta.numbered);
+  // Citations (js/cite.js): the post's .bib files, style, and entries listed uncited.
+  if (meta.bibliography) out.bibliography = String(meta.bibliography).slice(0, 500);
+  const style = meta.citestyle || meta['cite-style'];
+  if (style) out.citeStyle = /^num/i.test(style) ? 'numeric' : 'author-year';
+  if (meta.nocite) out.nocite = String(meta.nocite).slice(0, 2000);
   return out;
 }

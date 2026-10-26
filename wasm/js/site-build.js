@@ -19,7 +19,7 @@ import { normalizeSite } from './site-config.js';
 import { annotationSummary, isPaper, referencedIds, sortAnnotations, splitAnnotations } from './paper.js';
 
 /** Bump when js/pages.js output changes, so the next build redoes every page. */
-export const BUILD_VERSION = 14;
+export const BUILD_VERSION = 15;
 export const INDEX = 'index.json';
 export const CACHE_FILES = 'public, max-age=300';
 // Pages, posts and indexes change in place (an edit, a new password), so
