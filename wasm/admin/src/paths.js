@@ -76,7 +76,7 @@ const TYPES = {
 };
 
 export const FOLDER_MARKER = '.keep';
-const GENERATED_ROOT = new Set(['index.json', 'index.html', 'graph.html', 'theme.css', 'robots.txt', 'sitemap.xml', 'feed.xml']);
+const GENERATED_ROOT = new Set(['index.json', 'index.html', 'graph.html', 'highlights.html', 'theme.css', 'robots.txt', 'sitemap.xml', 'feed.xml']);
 const INDEXNOW_KEY_FILE = /^[A-Za-z0-9-]{8,128}\.txt$/;
 
 export function extension(key) {
@@ -94,7 +94,7 @@ export function contentTypeFor(key) {
 export function cacheControlFor(key) {
   // Pages, posts and indexes are revalidated on every visit (see
   // js/site-build.js CACHE_PAGES); attachments may be reused for minutes.
-  return /^(index\.(json|html)|graph\.html|sitemap\.xml|feed\.xml|posts\/[^/]+\.(md|html))$/.test(key)
+  return /^(index\.(json|html)|graph\.html|highlights\.html|sitemap\.xml|feed\.xml|posts\/[^/]+\.(md|html))$/.test(key)
     ? 'public, no-cache' : 'public, max-age=300';
 }
 

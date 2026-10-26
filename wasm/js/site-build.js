@@ -13,12 +13,13 @@
 import { StorageError } from '@storagesdk/core';
 import { articleHtml, linkContexts, PARSER_FLAGS, postLinks } from './blog-render.js';
 import { isDraft, parseFrontMatter, postMetadata, SLUG_RE } from './post-format.js';
-import { atomFeed, graphPage, homePage, postPage, protectedArticle, robotsTxt, siteRelative, sitemap, themeCss } from './pages.js';
+import { atomFeed, graphPage, highlightsPage, homePage, postPage, protectedArticle, robotsTxt, siteRelative, sitemap, themeCss } from './pages.js';
 import { readProtected, wantsPassword } from './protect.js';
 import { normalizeSite } from './site-config.js';
+import { annotationSummary, isPaper, sortAnnotations, splitAnnotations } from './paper.js';
 
 /** Bump when js/pages.js output changes, so the next build redoes every page. */
-export const BUILD_VERSION = 13;
+export const BUILD_VERSION = 14;
 export const INDEX = 'index.json';
 export const CACHE_FILES = 'public, max-age=300';
 // Pages, posts and indexes change in place (an edit, a new password), so
@@ -127,6 +128,7 @@ export async function build(storage, md4c, opts = {}) {
     let metadata;
     let links = [];
     let context = {};
+    let highlights = [];
     const etag = item.etag;
     let size = item.size;
     let lastModified = item.lastModified;
@@ -135,6 +137,7 @@ export async function build(storage, md4c, opts = {}) {
       metadata = prior.metadata; // unchanged since the last build
       links = prior.links;
       context = prior.context ?? {};
+      highlights = Array.isArray(prior.highlights) ? prior.highlights : [];
     } else {
       const fileItem = await storage.download(item.path);
       const source = new TextDecoder().decode(fileItem.body);
@@ -171,6 +174,8 @@ export async function build(storage, md4c, opts = {}) {
         links = postLinks(html, site.url).filter((s) => s !== slug);
         const around = linkContexts(html, site.url);
         context = Object.fromEntries(links.filter((s) => around[s]).map((s) => [s, around[s]]));
+        // A paper's highlights, for the overview of all of them (highlights.html).
+        if (isPaper(parsed.meta)) highlights = sortAnnotations(splitAnnotations(parsed.body).annotations).map(annotationSummary);
         await put(page, postPage(site, { slug, page, ...metadata }, html), 'text/html; charset=utf-8', CACHE_PAGES);
       }
       rendered.push(slug);
@@ -187,6 +192,7 @@ export async function build(storage, md4c, opts = {}) {
       links,
       // Where each link appears: [text before, link text, text after].
       ...(Object.keys(context).length ? { context } : {}),
+      ...(highlights.length ? { highlights } : {}),
     });
   }
 
@@ -230,6 +236,12 @@ export async function build(storage, md4c, opts = {}) {
   } else if (await storage.head('graph.html').then(() => true, () => false)) {
     log('delete graph.html');
     await storage.delete('graph.html');
+  }
+  if (items.some((e) => e.highlights)) {
+    await put('highlights.html', highlightsPage(site), 'text/html; charset=utf-8', CACHE_INDEX);
+  } else if (await storage.head('highlights.html').then(() => true, () => false)) {
+    log('delete highlights.html');
+    await storage.delete('highlights.html');
   }
   if (site.url) {
     await put('sitemap.xml', sitemap(site, posts), 'application/xml', CACHE_INDEX);

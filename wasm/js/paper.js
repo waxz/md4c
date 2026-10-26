@@ -12,8 +12,8 @@
 //
 //   ```md4c-annotations
 //   [{"id":"a-k3j9x2","page":3,"rects":[[0.12,0.31,0.62,0.02]],
-//     "quote":"…","comment":"Markdown","color":"yellow","shape":"underline",
-//     "at":"2026-10-25"}]
+//     "title":"Model-free RL","quote":"…","comment":"Markdown","tags":["definition"],
+//     "color":"yellow","shape":"underline","at":"2026-10-25"}]
 //   ```
 //
 // The highlights live in the post's own Markdown (one file to save, sync,
@@ -34,7 +34,22 @@ export const isPaper = (meta) => String(meta?.type ?? '').trim().toLowerCase() =
 
 const clamp01 = (n) => Math.min(1, Math.max(0, Number(n) || 0));
 
-/** One annotation, checked: { id, page, rects, quote, comment, color, shape?, at? }, or null. */
+/**
+ * Tags of a comment, cleaned: lower case, no "#", spaces as dashes, at most
+ * 12 of 32 letters. From a list or a comma-separated text.
+ */
+export function cleanTags(v) {
+  const list = Array.isArray(v) ? v : String(v ?? '').split(/[,\n]/);
+  const out = [];
+  for (const t of list) {
+    const tag = String(t ?? '').trim().replace(/^#+/, '').toLowerCase().replace(/\s+/g, '-')
+      .replace(/[^\p{L}\p{N}_-]/gu, '').slice(0, 32);
+    if (tag && !out.includes(tag)) out.push(tag);
+  }
+  return out.slice(0, 12);
+}
+
+/** One annotation, checked: { id, page, rects, title?, quote, comment, tags?, color, shape?, at? }, or null. */
 export function cleanAnnotation(a) {
   if (!a || typeof a !== 'object' || !ID_RE.test(a.id ?? '')) return null;
   const page = Math.trunc(Number(a.page));
@@ -47,8 +62,10 @@ export function cleanAnnotation(a) {
     id: a.id,
     page,
     rects,
+    ...(String(a.title ?? '').trim() ? { title: String(a.title).trim().slice(0, 120) } : {}),
     quote: String(a.quote ?? '').slice(0, 2000),
     comment: String(a.comment ?? '').slice(0, 20000),
+    ...(cleanTags(a.tags).length ? { tags: cleanTags(a.tags) } : {}),
     color: COLORS.includes(a.color) ? a.color : COLORS[0],
     ...(SHAPES.includes(a.shape) && a.shape !== SHAPES[0] ? { shape: a.shape } : {}),
     ...(a.at ? { at: String(a.at).slice(0, 30) } : {}),
@@ -119,10 +136,47 @@ export function backlinks(annotations, notes = '') {
   return map;
 }
 
-/** A short label for a highlight: "p. 3 · “the first words…”". */
-export function annotationLabel(a, words = 48) {
-  const q = String(a?.quote ?? '').trim();
-  return `p. ${a?.page ?? '?'}${q ? ` · “${q.length > words ? `${q.slice(0, words).trimEnd()}…` : q}”` : ''}`;
+const cut = (s, n) => (s.length > n ? `${s.slice(0, n).replace(/\s+\S*$/, '').trimEnd() || s.slice(0, n)}…` : s);
+
+/** A comment's first line as plain text (its Markdown marks taken out). */
+export function plainText(md) {
+  return String(md ?? '')
+    .replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, '$1') // [[target|label]]
+    .replace(/\[\[[^\]]*\]\]/g, '') // [[target]]
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1') // links, images
+    .replace(/<[^>]+>/g, '')
+    .replace(/[*_`~>#$]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The short name of a highlight: its title, else the first line of its
+ * comment, else the start of its quote (“…”), else its page.
+ */
+export function annotationLabel(a, len = 48) {
+  if (String(a?.title ?? '').trim()) return cut(a.title.trim(), len);
+  const line = plainText(String(a?.comment ?? '').split(/\n\s*\n/)[0]);
+  if (line) return cut(line, len);
+  const q = String(a?.quote ?? '').replace(/\s+/g, ' ').trim();
+  if (q) return `“${cut(q, len)}”`;
+  return `Page ${a?.page ?? '?'}`;
+}
+
+/** Whether a highlight is named by its quote (no title, no comment): the quote is not shown twice. */
+export const namedByQuote = (a) => !String(a?.title ?? '').trim() && !plainText(String(a?.comment ?? '').split(/\n\s*\n/)[0]) && Boolean(String(a?.quote ?? '').trim());
+
+/** What index.json keeps of a highlight, for the overview of all of them (highlights.html). */
+export function annotationSummary(a) {
+  return {
+    id: a.id,
+    page: a.page,
+    label: annotationLabel(a, 80),
+    ...(a.quote ? { quote: cut(a.quote.replace(/\s+/g, ' ').trim(), 280) } : {}),
+    ...(a.comment?.trim() ? { comment: cut(plainText(a.comment), 400) } : {}),
+    ...(a.tags?.length ? { tags: a.tags } : {}),
+    color: a.color,
+  };
 }
 
 /**
@@ -146,6 +200,11 @@ export function markAnnotationRefs(html, annotations = []) {
   });
 }
 
+/** A comment's tags, as buttons (they filter the comments). */
+export const tagsHtml = (tags) => (tags?.length
+  ? `<div class="annotation-tags">${tags.map((t) => `<button type="button" class="annotation-tag" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>\n`
+  : '');
+
 /** The "Referenced in" line of a comment (from = an entry of backlinks()). */
 export const backlinksHtml = (from, list) => (from.length
   ? `<div class="annotation-backlinks"><span class="muted">Referenced in</span> ${from.map((f) => (f === 'notes'
@@ -164,9 +223,9 @@ export function paperHtml(meta, body, annotations, renderMd) {
   const list = sortAnnotations(annotations);
   const back = backlinks(list, body);
   const md = (m) => markAnnotationRefs(renderMd(m), list);
-  const items = list.map((a) => `<li class="annotation" id="${esc(a.id)}" data-page="${a.page}" data-color="${esc(a.color)}"${a.shape ? ` data-shape="${esc(a.shape)}"` : ''} data-rects="${esc(JSON.stringify(a.rects))}">
-<a class="annotation-at" href="#${esc(a.id)}">p.&nbsp;${a.page}</a>
-${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>\n` : ''}<div class="annotation-comment">
+  const items = list.map((a) => `<li class="annotation${namedByQuote(a) ? ' is-quote-label' : ''}" id="${esc(a.id)}" data-page="${a.page}" data-color="${esc(a.color)}"${a.shape ? ` data-shape="${esc(a.shape)}"` : ''}${a.tags?.length ? ` data-tags="${esc(a.tags.join(' '))}"` : ''} data-rects="${esc(JSON.stringify(a.rects))}">
+<a class="annotation-at" href="#${esc(a.id)}" title="Page ${a.page}">${esc(annotationLabel(a, 60))}</a>
+${tagsHtml(a.tags)}${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>\n` : ''}<div class="annotation-comment">
 ${a.comment.trim() ? md(a.comment) : ''}</div>
 ${backlinksHtml(back.get(a.id), list)}</li>`).join('\n');
   const notes = body.trim() ? `<div class="paper-notes" id="paper-notes">
@@ -177,7 +236,7 @@ ${md(body)}</div>
     ? `<p class="paper-fallback"><a href="${esc(pdf)}">Open the PDF</a></p>`
     : '<p class="paper-fallback">No PDF: name one in the front matter (<code>pdf: paper.pdf</code>).</p>'}</div>
 <aside class="paper-comments" aria-label="Comments">
-<div class="paper-comments-head"><span>Comments</span><span class="count">${list.length}</span></div>
+<div class="paper-comments-head"><span>Comments</span><span class="count">${list.length}</span><a class="paper-all" href="../highlights.html">All highlights</a></div>
 ${list.length ? `<ol class="annotations">\n${items}\n</ol>` : '<p class="muted">No highlights yet.</p>'}
 </aside>
 </div>

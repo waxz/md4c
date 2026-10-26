@@ -456,6 +456,24 @@ export function graphPage(site) {
   });
 }
 
+/**
+ * highlights.html: every highlight of the paper-notes posts, with their
+ * comments, to filter by tag or search (blog/highlights.js, from index.json).
+ */
+export function highlightsPage(site) {
+  const main = `<p class="section-label sc">Highlights</p>
+<p class="graph-help muted">The highlights and comments of every paper. Choose a tag, or search.</p>
+<div id="highlights-view"><noscript><p>This list needs JavaScript. <a href="index.html">All articles</a></p></noscript></div>`;
+  return documentHtml({
+    site, root: '', page: 'highlights',
+    title: `Highlights · ${site.title}`,
+    description: `Highlights and comments from the papers of ${site.title}`,
+    canonical: site.url ? `${site.url}highlights.html` : '',
+    head: `<link rel="stylesheet" href="${asset(site, '', 'paper.css')}">\n`,
+    main, robots: 'noindex, follow',
+  });
+}
+
 export function atomFeed(site, posts, htmlBySlug) {
   const updated = posts.reduce((m, p) => ((p.updated || p.date) > m ? (p.updated || p.date) : m), '1970-01-01');
   const entries = posts.slice(0, 30).map((p) => {

@@ -288,11 +288,23 @@ General notes, in Markdown. The encoder is discussed in
   PDF: a bar pops up with the shapes (highlight, underline, strike out,
   box) and eight colours; a colour highlights the selection at once,
   **Comment** opens a pop-up to write the comment (Markdown; *Link a
-  highlight…* inserts a reference; Ctrl+Enter saves, Esc cancels). The
+  highlight…* inserts a reference; Ctrl+Enter saves, Esc cancels). In the
+  same pop-up: a **short name** for the comment (shown as its heading;
+  without one, the first line of the comment, else the start of the
+  quote), the **quote** itself (correct it when the PDF's text came out
+  wrong), and **tags**. When a selection landed in the wrong place,
+  **Move** (the ⛶ button) and select the right text, or draw a box. The
   **Area** tool draws a box around a figure, a table or a formula. Click a
   highlight (or ✎ on its card) to edit it; the cards also copy a
   cross-reference to paste elsewhere, and delete. The last colour and
   shape are remembered. **Page preview** shows the page as published.
+- **Tags** on comments filter them: the tags in use are listed above the
+  comments of a paper (a tag on a card does the same), and the highlights
+  not tagged so fade in the PDF. **All highlights** (`highlights.html`,
+  linked from every paper) lists the highlights and comments of every
+  paper, to filter by tag (`highlights.html#tag=method`) or search. Add it
+  to the menu with a `links` entry in the site settings if you like.
+  Password-protected papers stay out of it.
 - The highlights are kept in the post's own Markdown, in a
   ` ```md4c-annotations ` block the editor keeps out of sight: one file to
   save, autosave, move, publish and encrypt. A password-protected paper post

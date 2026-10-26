@@ -468,6 +468,11 @@ async function main() {
       await showGraph();
       return;
     }
+    if (page === 'highlights') {
+      const { showHighlights } = await import('./highlights.js');
+      showHighlights(document.getElementById('highlights-view'), indexItems(), hrefOfPost);
+      return;
+    }
     const live = /^#\/post\/([^/?#]+)/.exec(location.hash);
     if (live) {
       await showLivePost(decodeURIComponent(live[1]));

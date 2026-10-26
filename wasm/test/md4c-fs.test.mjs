@@ -519,6 +519,7 @@ describe('links between posts (graph) and section headings', () => {
       + '[live](../index.html#/post/gamma), [[Not Written]], [self](alpha.md), [elsewhere](https://other.example/posts/x.html) and ![](pic.png).');
     await post('beta', '# Install\n\nText.\n\n## Step 1\n\n```sh\n# not a heading\n```\n\n# Use\n\nBack to [alpha](alpha.md).');
     await post('gamma', 'No links.');
+    await writeFile(join(dir, 'posts', 'reading.md'), `---\ntitle: Reading\ndate: 2026-10-03\ntype: paper\npdf: r.pdf\n---\n\nNotes.\n\n\`\`\`md4c-annotations\n[\n${JSON.stringify({ id: 'a-rrrr11', page: 2, rects: [], title: 'Key idea', quote: 'the quote', comment: 'Why it **matters**', tags: ['method'], color: 'blue' })}\n]\n\`\`\`\n`);
     await writeFile(join(dir, 'posts', 'locked.md'), '---\ntitle: Locked\ndate: 2026-10-02\npassword: pw\n---\n\nSecret [[Alpha]] link.\n');
     await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
   });
@@ -536,6 +537,17 @@ describe('links between posts (graph) and section headings', () => {
       'where each link appears: text before, link text, text after');
     assert.deepEqual(items.find((i) => i.path === 'posts/beta.md').context.alpha, ['Back to ', 'alpha', '.']);
     assert.equal(items.find((i) => i.path === 'posts/locked.md').context, undefined);
+  });
+
+  test('paper highlights are listed in index.json, for highlights.html', async () => {
+    const items = JSON.parse(await read('index.json')).items;
+    assert.deepEqual(items.find((i) => i.path === 'posts/reading.md').highlights,
+      [{ id: 'a-rrrr11', page: 2, label: 'Key idea', quote: 'the quote', comment: 'Why it matters', tags: ['method'], color: 'blue' }]);
+    assert.equal(items.find((i) => i.path === 'posts/alpha.md').highlights, undefined);
+    const page = await read('highlights.html');
+    assert.match(page, /data-page="highlights"/);
+    assert.match(page, /paper\.css/);
+    assert.match(await read('posts/reading.html'), /data-tags="method"[\s\S]*title="Page 2">Key idea<\/a>/);
   });
 
   test('a Graph page, linked from every page', async () => {
@@ -561,7 +573,7 @@ describe('links between posts (graph) and section headings', () => {
     const items = JSON.parse(await read('index.json')).items;
     const g = graphData(items, { postHref: (s) => `${s}.html` });
     assert.deepEqual(g.nodes.map((n) => `${n.id}:${n.kind}`).sort(),
-      ['p:alpha:post', 'p:beta:post', 'p:gamma:post', 'p:locked:post', 'p:not-written:missing']);
+      ['p:alpha:post', 'p:beta:post', 'p:gamma:post', 'p:locked:post', 'p:not-written:missing', 'p:reading:post']);
     assert.deepEqual(g.edges.map((e) => `${e.source}>${e.target}${e.both ? ' both' : ''}`).sort(),
       ['p:alpha>p:beta both', 'p:alpha>p:gamma', 'p:alpha>p:not-written'], 'links both ways are one edge, with both arrows');
     const near = neighbourhood(g, 'p:gamma', 1);
@@ -734,7 +746,14 @@ describe('paper notes: a PDF with highlights and comments', () => {
     const list = [{ ...base, quote: 'a long quote', comment: '' }, { id: 'a-eeee55', page: 3, rects: [], quote: '', comment: 'see [[#a-dddd44]]' }];
     assert.deepEqual(backlinks(list, 'Notes on [[#a-dddd44]]').get('a-dddd44'), ['notes', 'a-eeee55']);
     assert.equal(markAnnotationRefs('<a href="#a-dddd44">#a-dddd44</a>', list),
-      '<a href="#a-dddd44" class="annotation-ref" data-ref="a-dddd44">p. 2 · “a long quote”</a>', 'a bare reference gets the label');
+      '<a href="#a-dddd44" class="annotation-ref" data-ref="a-dddd44">“a long quote”</a>', 'a bare reference gets the label');
+    const { annotationLabel, cleanTags, annotationSummary } = await import('../js/paper.js');
+    assert.equal(annotationLabel({ page: 1, title: 'Model-free RL', quote: 'q' }), 'Model-free RL', 'a title names it');
+    assert.equal(annotationLabel({ page: 1, quote: 'q', comment: 'Add **definition** of [[#a-x|model]] free\n\nMore.' }), 'Add definition of model free', 'else its comment');
+    assert.equal(annotationLabel({ page: 4 }), 'Page 4');
+    assert.deepEqual(cleanTags('#Method, deep learning, method,, 強化学習'), ['method', 'deep-learning', '強化学習']);
+    assert.deepEqual(cleanAnnotation({ ...base, title: ' T ', tags: ['A b'] }).tags, ['a-b']);
+    assert.deepEqual(annotationSummary({ ...base, quote: 'x', comment: '', tags: ['m'], color: 'red' }), { id: 'a-dddd44', page: 2, label: '“x”', quote: 'x', tags: ['m'], color: 'red' });
   });
 
   test('a paper post is built with its viewer, comments and cross-references', async () => {

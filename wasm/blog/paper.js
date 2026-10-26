@@ -21,7 +21,8 @@
 // blog's own scripts), loaded on first use, with eval off.
 
 import {
-  COLORS, SHAPES, annotationLabel, backlinks, backlinksHtml, markAnnotationRefs, newAnnotationId, sortAnnotations,
+  COLORS, SHAPES, annotationLabel, backlinks, backlinksHtml, cleanTags, markAnnotationRefs, namedByQuote, newAnnotationId,
+  sortAnnotations, tagsHtml,
 } from './lib/paper.js';
 
 const PDFJS = new URL('./vendor/pdfjs/', import.meta.url);
@@ -86,7 +87,9 @@ function readAnnotations(el) {
     } catch {}
     return {
       id: li.id, page: Number(li.dataset.page), rects, color: li.dataset.color, shape: li.dataset.shape, li,
+      title: li.querySelector('.annotation-at')?.textContent ?? '',
       quote: li.querySelector('.annotation-quote')?.textContent ?? '',
+      tags: (li.dataset.tags ?? '').split(' ').filter(Boolean),
     };
   });
 }
@@ -135,6 +138,7 @@ export async function mountPaper(el, opts = {}) {
   const cleanups = [];
   let activeId = ''; // the highlight shown
   let quietUntil = 0; // a click that ends drawing a box is not a click on it
+  let filterTag = ''; // the comments shown: those with this tag ('' all)
 
   let zoom = 1;
   const pages = []; // { n, el, base: viewport at scale 1, rendered: scale, task }
@@ -235,6 +239,7 @@ export async function mountPaper(el, opts = {}) {
       }
     }
     if (activeId) setActive(activeId);
+    if (filterTag) applyFilter();
   }
 
   const flash = (node) => node?.animate?.([{ outline: '3px solid var(--accent, #8b1e2d)' }, { outline: '3px solid transparent' }], { duration: 1400 });
@@ -324,7 +329,7 @@ export async function mountPaper(el, opts = {}) {
     if (!a) return;
     peekFor = id;
     const comment = commentHtml(a);
-    peekEl.innerHTML = `<div class="pop-head"><span class="pop-page hl-${colorOf(a)}">p. ${a.page}</span>${withGo ? `<button type="button" class="pop-link" data-go="${esc(id)}">Show comment ↓</button>` : ''}</div>
+    peekEl.innerHTML = `<div class="pop-head"><span class="pop-label hl-${colorOf(a)}" title="Page ${a.page}">${esc(annotationLabel(a, 60))}</span>${withGo ? `<button type="button" class="pop-link" data-go="${esc(id)}">Show comment ↓</button>` : ''}</div>
       ${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>` : ''}
       ${comment ? `<div class="annotation-comment">${comment}</div>` : '<p class="muted pop-empty">No comment.</p>'}`;
     place(peekEl, rect);
@@ -382,6 +387,50 @@ export async function mountPaper(el, opts = {}) {
     showInPdf(id);
   });
 
+  /* ---------- Tags: filter the comments (and dim the other highlights) ---------- */
+
+  const tagsOf = (a) => a.tags ?? [];
+  /** The bar of the tags in use, under the comments' header. */
+  function renderTagbar() {
+    side.querySelector('.paper-tagbar')?.remove();
+    const counts = new Map();
+    for (const a of list) for (const t of tagsOf(a)) counts.set(t, (counts.get(t) ?? 0) + 1);
+    if (filterTag && !counts.has(filterTag)) filterTag = '';
+    if (counts.size) {
+      const bar = document.createElement('div');
+      bar.className = 'paper-tagbar';
+      bar.setAttribute('role', 'toolbar');
+      bar.setAttribute('aria-label', 'Show the comments with a tag');
+      bar.innerHTML = `<button type="button" class="annotation-tag" data-tag="">All</button>${[...counts]
+        .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+        .map(([t, n]) => `<button type="button" class="annotation-tag" data-tag="${esc(t)}">#${esc(t)}<span class="n">${n}</span></button>`).join('')}`;
+      side.querySelector('.paper-comments-head')?.after(bar);
+    }
+    applyFilter();
+  }
+  function applyFilter() {
+    const shown = (a) => !filterTag || tagsOf(a).includes(filterTag);
+    for (const a of list) {
+      const li = commentOf(a.id);
+      if (li) li.hidden = !shown(a);
+    }
+    for (const r of viewer.querySelectorAll('.paper-hl[data-id]')) {
+      const a = byId(r.dataset.id);
+      r.classList.toggle('is-dim', Boolean(a) && !shown(a));
+    }
+    for (const b of side.querySelectorAll('.paper-tagbar [data-tag]')) b.setAttribute('aria-pressed', String(b.dataset.tag === filterTag));
+    const all = side.querySelector('.paper-all');
+    if (all) all.href = all.getAttribute('href').split('#')[0] + (filterTag ? `#tag=${encodeURIComponent(filterTag)}` : '');
+  }
+  side.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-tag]');
+    if (!b) return;
+    // A tag on a card shows the comments with it; again, all of them.
+    filterTag = b.closest('.annotation') && filterTag === b.dataset.tag ? '' : b.dataset.tag;
+    applyFilter();
+    side.querySelector('.paper-tagbar')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+
   // Reference chips: in the notes (the page) or in a comment.
   const scope = editable ? el : document;
   const onRefClick = (e) => {
@@ -422,7 +471,10 @@ export async function mountPaper(el, opts = {}) {
   const onKey = (e) => {
     if (e.key !== 'Escape') return;
     closePeek();
-    if (editable) closeSelbar();
+    if (editable) {
+      closeSelbar();
+      stopMoveKey();
+    }
   };
   const onDown = (e) => {
     if (!peekEl.hidden && !peekEl.contains(e.target)) closePeek();
@@ -457,6 +509,7 @@ export async function mountPaper(el, opts = {}) {
     }
   };
   if (!editable) {
+    renderTagbar();
     window.addEventListener('hashchange', fromHash);
     fromHash();
   }
@@ -464,6 +517,7 @@ export async function mountPaper(el, opts = {}) {
   /* ---------- Editing (the admin) ---------- */
 
   let closeSelbar = () => {};
+  let stopMoveKey = () => {};
   let openEditor = () => {};
   let renderSide = () => {};
 
@@ -493,8 +547,9 @@ export async function mountPaper(el, opts = {}) {
     const selbar = popup('paper-selbar');
     selbar.setAttribute('role', 'toolbar');
     selbar.setAttribute('aria-label', 'Highlight the selection');
-    selbar.innerHTML = `<div class="pop-row">${shapes(style.shape)}<span class="pop-sep"></span>${swatches(style.color, 'color')}<span class="pop-sep"></span>
-      <button type="button" class="pop-btn" data-act="comment">${ICON.comment}<span>Comment</span></button></div>`;
+    selbar.innerHTML = `<div class="pop-row pop-new">${shapes(style.shape)}<span class="pop-sep"></span>${swatches(style.color, 'color')}<span class="pop-sep"></span>
+      <button type="button" class="pop-btn" data-act="comment">${ICON.comment}<span>Comment</span></button></div>
+      <div class="pop-row pop-move"><button type="button" class="pop-btn pop-primary" data-act="move-here">Move the highlight here</button></div>`;
     tint(selbar, style.color);
     let pending = null;
     const pageOf = (node) => (node?.nodeType === 1 ? node : node?.parentElement)?.closest('.paper-page');
@@ -563,6 +618,12 @@ export async function mountPaper(el, opts = {}) {
         return;
       }
       const sel = pending;
+      if (b.dataset.act === 'move-here') {
+        window.getSelection()?.removeAllRanges();
+        closeSelbar();
+        moveTo(sel.page, sel.rects, sel.quote);
+        return;
+      }
       if (b.dataset.color) {
         style.color = b.dataset.color;
         keepStyle(style);
@@ -618,6 +679,10 @@ export async function mountPaper(el, opts = {}) {
       quietUntil = Date.now() + 400;
       if (rect[2] < 0.01 || rect[3] < 0.005) return;
       setArea(false);
+      if (moving) {
+        moveTo(Number(pageEl.dataset.page), [rect], textIn(pageEl, rect));
+        return;
+      }
       const a = fresh(Number(pageEl.dataset.page), [rect], textIn(pageEl, rect), { color: style.color, shape: 'box' });
       add(a);
       setActive(a.id);
@@ -642,23 +707,87 @@ export async function mountPaper(el, opts = {}) {
       return text.length > 300 ? `${text.slice(0, 300)}…` : text;
     }
 
+    /* Moving a highlight that sits in the wrong place (a selection that
+       came out misaligned): select the right text, or draw a box. */
+    let moving = null;
+    const movingBar = document.createElement('div');
+    movingBar.className = 'paper-moving';
+    movingBar.hidden = true;
+    viewer.querySelector('.paper-toolbar').after(movingBar);
+    function startMove(a) {
+      moving = a;
+      movingBar.innerHTML = `<span>Select the right text in the PDF for <b>${esc(annotationLabel(a, 40))}</b>, or draw a box with ${ICON.area}Area.</span>
+        <button type="button" class="pop-btn" data-act="stop-move">Cancel</button>`;
+      movingBar.hidden = false;
+      selbar.classList.add('is-moving');
+      showInPdf(a.id);
+    }
+    function stopMove() {
+      const a = moving;
+      moving = null;
+      movingBar.hidden = true;
+      selbar.classList.remove('is-moving');
+      return a;
+    }
+    function moveTo(page, rects, quote) {
+      const a = stopMove();
+      if (!a) return;
+      Object.assign(a, { page, rects, quote: quote || a.quote });
+      list = sortAnnotations(list);
+      changed();
+      renderSide();
+      drawHighlights();
+      setActive(a.id);
+      openEditor(a);
+    }
+    stopMoveKey = () => {
+      const a = stopMove();
+      if (a) openEditor(a);
+    };
+    movingBar.addEventListener('click', (e) => {
+      if (!e.target.closest('[data-act="stop-move"]')) return;
+      const a = stopMove();
+      if (a) openEditor(a);
+    });
+
     /* The comment editor: a pop-up by the highlight (a sheet on a phone). */
     const editorEl = popup('paper-editor');
     editorEl.setAttribute('role', 'dialog');
     editorEl.setAttribute('aria-label', 'Comment');
     let editing = null; // { a, before, isNew }
+    const listId = `paper-tags-${Math.random().toString(36).slice(2, 8)}`;
+    /** The pop-up's fields into the annotation. */
+    function readFields(a) {
+      const v = (k) => editorEl.querySelector(`[data-field="${k}"]`).value;
+      const title = v('title').trim();
+      if (title) a.title = title.slice(0, 120);
+      else delete a.title;
+      a.quote = v('quote').replace(/\s+/g, ' ').trim();
+      a.comment = v('comment');
+      const tags = cleanTags(v('tags'));
+      if (tags.length) a.tags = tags;
+      else delete a.tags;
+    }
 
     openEditor = (a, { isNew = false, rect } = {}) => {
       if (editing) saveEditor();
       closeSelbar();
       closePeek();
-      editing = { a, isNew, before: { comment: a.comment, color: a.color, shape: a.shape } };
+      editing = { a, isNew, before: { title: a.title, quote: a.quote, comment: a.comment, tags: a.tags, color: a.color, shape: a.shape } };
       const others = list.filter((x) => x.id !== a.id);
-      editorEl.innerHTML = `<div class="pop-head"><span class="pop-page">p. ${a.page}</span>${a.quote ? `<span class="pop-quote">“${esc(a.quote)}”</span>` : ''}</div>
-        <textarea rows="4" placeholder="Write a comment… (Markdown)" aria-label="Comment">${esc(a.comment)}</textarea>
+      const known = [...new Set([...list.flatMap(tagsOf), ...(opts.knownTags?.() ?? [])])].sort();
+      editorEl.innerHTML = `<input class="pop-title" data-field="title" maxlength="120" aria-label="Short name"
+          placeholder="${esc(annotationLabel({ ...a, title: '' }, 60))}" value="${esc(a.title ?? '')}">
+        <label class="pop-quote-edit" title="The text quoted from the PDF (page ${a.page}): correct it if the selection came out wrong">
+          <textarea data-field="quote" rows="2" aria-label="Quote" placeholder="Quote from the PDF">${esc(a.quote)}</textarea></label>
+        <textarea data-field="comment" rows="4" placeholder="Write a comment… (Markdown)" aria-label="Comment">${esc(a.comment)}</textarea>
+        <input class="pop-tags" data-field="tags" list="${listId}" autocapitalize="off" spellcheck="false" aria-label="Tags"
+          placeholder="Tags, e.g. definition, method" value="${esc(tagsOf(a).join(', '))}">
+        <datalist id="${listId}">${known.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
         <div class="pop-row">${shapes(shapeOf(a))}<span class="pop-sep"></span>${swatches(colorOf(a), 'color')}</div>
         <div class="pop-foot">
           ${others.length ? `<select data-act="ref" aria-label="Link to another highlight"><option value="">Link a highlight…</option>${others.map((o) => `<option value="${esc(o.id)}">${esc(annotationLabel(o, 40))}</option>`).join('')}</select>` : ''}
+          <button type="button" class="pop-icon" data-act="move" title="Move the highlight: select the right text in the PDF" aria-label="Move">${ICON.area}</button>
           <button type="button" class="pop-icon" data-act="link" title="Copy a cross-reference to paste in other notes" aria-label="Copy link">${ICON.link}</button>
           <button type="button" class="pop-icon pop-danger" data-act="delete" title="Delete the highlight" aria-label="Delete">${ICON.trash}</button>
           <span class="pop-spacer"></span>
@@ -668,7 +797,7 @@ export async function mountPaper(el, opts = {}) {
       tint(editorEl, colorOf(a));
       const hl = viewer.querySelector(`.paper-hl[data-id="${CSS.escape(a.id)}"]`);
       place(editorEl, rect ?? hl?.getBoundingClientRect() ?? commentOf(a.id)?.getBoundingClientRect() ?? viewer.getBoundingClientRect());
-      const ta = editorEl.querySelector('textarea');
+      const ta = editorEl.querySelector('[data-field="comment"]');
       ta.focus({ preventScroll: true });
       ta.setSelectionRange(ta.value.length, ta.value.length);
     };
@@ -680,7 +809,7 @@ export async function mountPaper(el, opts = {}) {
     function saveEditor() {
       if (!editing) return;
       const { a } = editing;
-      a.comment = editorEl.querySelector('textarea').value;
+      readFields(a);
       closeEditor();
       changed();
       renderSide();
@@ -695,7 +824,7 @@ export async function mountPaper(el, opts = {}) {
         changed();
       }
       Object.assign(a, before);
-      if (!a.shape) delete a.shape;
+      for (const k of ['title', 'tags', 'shape']) if (a[k] === undefined) delete a[k];
       drawHighlights();
       renderSide();
     }
@@ -735,7 +864,13 @@ export async function mountPaper(el, opts = {}) {
       } else if (b.dataset.act === 'save') saveEditor();
       else if (b.dataset.act === 'cancel') cancelEditor();
       else if (b.dataset.act === 'link') copyLink(a, b);
-      else if (b.dataset.act === 'delete') {
+      else if (b.dataset.act === 'move') {
+        readFields(a);
+        closeEditor();
+        changed();
+        renderSide();
+        startMove(a);
+      } else if (b.dataset.act === 'delete') {
         editorEl.hidden = true; // out of the way of the confirmation
         if (await deleteAnnotation(a)) closeEditor();
         else editorEl.hidden = false;
@@ -743,7 +878,7 @@ export async function mountPaper(el, opts = {}) {
     });
     editorEl.addEventListener('change', (e) => {
       if (e.target.dataset.act !== 'ref' || !e.target.value) return;
-      const ta = editorEl.querySelector('textarea');
+      const ta = editorEl.querySelector('[data-field="comment"]');
       const ref = `[[#${e.target.value}]]`;
       const at = ta.selectionStart ?? ta.value.length;
       ta.setRangeText((at && !/\s$/.test(ta.value.slice(0, at)) ? ' ' : '') + ref, at, ta.selectionEnd ?? at, 'end');
@@ -751,7 +886,7 @@ export async function mountPaper(el, opts = {}) {
       ta.focus();
     });
     editorEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || e.target.matches('input'))) {
         e.preventDefault();
         saveEditor();
       } else if (e.key === 'Escape') {
@@ -771,18 +906,19 @@ export async function mountPaper(el, opts = {}) {
       const back = backlinks(list, opts.notes?.() ?? '');
       side.innerHTML = `<div class="paper-comments-head"><span>Comments</span><span class="count">${list.length}</span></div>
         ${list.length ? '' : `<p class="muted paper-hint">Select text in the PDF to highlight it, or draw a box with ${ICON.area}<b>Area</b>.</p>`}
-        <ol class="annotations">${list.map((a) => `<li class="annotation" data-annotation="${esc(a.id)}" data-color="${colorOf(a)}" data-shape="${shapeOf(a)}">
-          <a class="annotation-at" href="#${esc(a.id)}">p.&nbsp;${a.page}</a>
+        <ol class="annotations">${list.map((a) => `<li class="annotation${namedByQuote(a) ? ' is-quote-label' : ''}" data-annotation="${esc(a.id)}" data-color="${colorOf(a)}" data-shape="${shapeOf(a)}">
+          <a class="annotation-at" href="#${esc(a.id)}" title="Page ${a.page}">${esc(annotationLabel(a, 60))}</a>
           <span class="annotation-tools">
             <button type="button" data-act="edit" title="Edit the comment" aria-label="Edit">${ICON.edit}</button>
             <button type="button" data-act="link" title="Copy a cross-reference to paste in other notes" aria-label="Copy link">${ICON.link}</button>
             <button type="button" data-act="delete" title="Delete" aria-label="Delete">${ICON.trash}</button>
           </span>
-          ${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>` : ''}
+          ${tagsHtml(a.tags)}${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>` : ''}
           ${a.comment.trim() ? `<div class="annotation-comment">${commentHtml(a)}</div>` : '<button type="button" class="annotation-add" data-act="edit">Add a comment…</button>'}
           ${backlinksHtml(back.get(a.id) ?? [], list)}
         </li>`).join('')}</ol>`;
       if (activeId) commentOf(activeId)?.classList.add('is-active');
+      renderTagbar();
     };
     side.addEventListener('click', async (e) => {
       const b = e.target.closest('button[data-act]');

@@ -476,6 +476,12 @@ export async function showEditor(view, store, key, newStore) {
     const ref = paperPdf({ pdf: f.pdf.value });
     return ref ? new URL(ref, api.rawUrl(home(), `posts/${slug() || 'untitled'}.md`)).href : '';
   };
+  // Tags used in the published papers, offered when tagging a comment.
+  let siteTags = [];
+  api.read('site', 'index.json').then((r) => {
+    const items = JSON.parse(r.text)?.items ?? [];
+    siteTags = [...new Set(items.flatMap((e) => (Array.isArray(e?.highlights) ? e.highlights : []).flatMap((h) => h.tags ?? [])))];
+  }).catch(() => {});
   /** Show the annotator or the page preview; (re)open the PDF when it changed. */
   function paperUi(reload = false) {
     const paper = f.type.value === 'paper';
@@ -524,6 +530,7 @@ export async function showEditor(view, store, key, newStore) {
       // A cross-reference to paste in other notes: [[this-post#a-…|p. 3: “…”]]
       linkFor: (id, a) => `[[${slug() || 'this-post'}#${id}|p. ${a.page}${a.quote ? `: “${a.quote.slice(0, 40)}${a.quote.length > 40 ? '…' : ''}”` : ''}]]`,
       notes: () => f.body.value,
+      knownTags: () => siteTags,
       confirmDelete: (a) => confirmDialog('Delete this highlight?', `${a.quote ? `“${a.quote.slice(0, 100)}” ` : ''}and its comment are removed from the post.`, 'Delete'),
     }).then((h) => { annotator = h; }, (err) => console.warn('annotator:', err));
   }
