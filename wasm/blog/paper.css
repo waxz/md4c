@@ -44,14 +44,17 @@ main.page:has(.paper) .article-header, main.page:has(.paper) .paper-notes { max-
 .paper-highlights { position: absolute; inset: 0; pointer-events: none; }
 .paper-hl { position: absolute; border-radius: 2px; mix-blend-mode: multiply; }
 .paper-hl.shape-highlight { background: rgb(var(--hl) / .4); }
-.paper-hl.shape-underline { border-bottom: 2px solid rgb(var(--hl)); border-radius: 0; }
-.paper-hl.shape-strike { background: linear-gradient(transparent calc(50% - 1px), rgb(var(--hl)) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)); border-radius: 0; }
-.paper-hl.shape-box { border: 2px solid rgb(var(--hl)); background: rgb(var(--hl) / .08); border-radius: 4px; mix-blend-mode: normal; }
+/* Lines are hairlines (--hl-line), so they mark the text without covering it. */
+.paper-highlights { --hl-line: 1px; }
+.paper-hl.shape-underline { border-bottom: var(--hl-line) solid rgb(var(--hl)); border-radius: 0; }
+.paper-hl.shape-strike { background: linear-gradient(transparent calc(50% - var(--hl-line) / 2), rgb(var(--hl)) calc(50% - var(--hl-line) / 2) calc(50% + var(--hl-line) / 2), transparent calc(50% + var(--hl-line) / 2)); border-radius: 0; }
+.paper-hl.shape-box { border: var(--hl-line) solid rgb(var(--hl)); background: rgb(var(--hl) / .06); border-radius: 2px; mix-blend-mode: normal; }
 /* The highlight shown: a deeper colour, never a frame over the text. */
 .paper-hl.is-active.shape-highlight { background: rgb(var(--hl) / .62); }
-.paper-hl.is-active.shape-underline { border-bottom-width: 3px; background: rgb(var(--hl) / .14); }
-.paper-hl.is-active.shape-strike { background: linear-gradient(transparent calc(50% - 1.5px), rgb(var(--hl)) calc(50% - 1.5px) calc(50% + 1.5px), transparent calc(50% + 1.5px)), rgb(var(--hl) / .14); }
-.paper-hl.is-active.shape-box { background: rgb(var(--hl) / .16); }
+/* (The lines keep their width; a light tint shows which one.) */
+.paper-hl.is-active.shape-underline { background: rgb(var(--hl) / .14); }
+.paper-hl.is-active.shape-strike { background: linear-gradient(transparent calc(50% - var(--hl-line) / 2), rgb(var(--hl)) calc(50% - var(--hl-line) / 2) calc(50% + var(--hl-line) / 2), transparent calc(50% + var(--hl-line) / 2)), rgb(var(--hl) / .14); }
+.paper-hl.is-active.shape-box { background: rgb(var(--hl) / .14); }
 
 /* A highlight's comment, by it on the page (the reader's). */
 .paper-float {
