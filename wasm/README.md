@@ -299,6 +299,16 @@ General notes, in Markdown. The encoder is discussed in
   highlight (or ✎ on its card) to edit it; the cards also copy a
   cross-reference to paste elsewhere, and delete. The last colour and
   shape are remembered. **Page preview** shows the page as published.
+- **Math** works in comments and their names as in posts: `$…$` and
+  `$$…$$` (KaTeX).
+- **On the page,** clicking a highlight (or a comment, or a reference to
+  it) shows its comment in a card right by the highlighted text; the
+  highlight itself only deepens in colour, so the text stays readable.
+- **Graphs:** a paper's comments are in its cross-reference graph, joined
+  to the paper (dotted) and to the highlights and posts that link them
+  (arrows). *All highlights* has the graph of every comment, the full
+  Graph page a *Show comments* switch, and the admin's Comments page the
+  same graph, drafts included.
 - **Tags** on comments filter them: the tags in use are listed above the
   comments of a paper (a tag on a card does the same), and the highlights
   not tagged so fade in the PDF. **All highlights** (`highlights.html`,

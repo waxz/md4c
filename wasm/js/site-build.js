@@ -16,7 +16,7 @@ import { isDraft, parseFrontMatter, postMetadata, SLUG_RE } from './post-format.
 import { atomFeed, graphPage, highlightsPage, homePage, postPage, protectedArticle, robotsTxt, siteRelative, sitemap, themeCss } from './pages.js';
 import { readProtected, wantsPassword } from './protect.js';
 import { normalizeSite } from './site-config.js';
-import { annotationSummary, isPaper, sortAnnotations, splitAnnotations } from './paper.js';
+import { annotationSummary, isPaper, referencedIds, sortAnnotations, splitAnnotations } from './paper.js';
 
 /** Bump when js/pages.js output changes, so the next build redoes every page. */
 export const BUILD_VERSION = 14;
@@ -131,6 +131,7 @@ export async function build(storage, md4c, opts = {}) {
     let links = [];
     let context = {};
     let highlights = [];
+    let refs = [];
     const etag = item.etag;
     let size = item.size;
     let lastModified = item.lastModified;
@@ -140,6 +141,7 @@ export async function build(storage, md4c, opts = {}) {
       links = prior.links;
       context = prior.context ?? {};
       highlights = Array.isArray(prior.highlights) ? prior.highlights : [];
+      refs = Array.isArray(prior.refs) ? prior.refs : [];
     } else {
       const fileItem = await storage.download(item.path);
       const source = new TextDecoder().decode(fileItem.body);
@@ -177,7 +179,10 @@ export async function build(storage, md4c, opts = {}) {
         const around = linkContexts(html, site.url);
         context = Object.fromEntries(links.filter((s) => around[s]).map((s) => [s, around[s]]));
         // A paper's highlights, for the overview of all of them (highlights.html).
-        if (isPaper(parsed.meta)) highlights = sortAnnotations(splitAnnotations(parsed.body).annotations).map(annotationSummary);
+        const split = isPaper(parsed.meta) ? splitAnnotations(parsed.body) : { body: parsed.body, annotations: [] };
+        highlights = sortAnnotations(split.annotations).map(annotationSummary);
+        // The highlights (of any paper) its text links to: [[paper#a-…]], [[#a-…]].
+        refs = referencedIds(split.body);
         await put(page, postPage(site, { slug, page, ...metadata }, html), 'text/html; charset=utf-8', CACHE_PAGES);
       }
       rendered.push(slug);
@@ -195,6 +200,7 @@ export async function build(storage, md4c, opts = {}) {
       // Where each link appears: [text before, link text, text after].
       ...(Object.keys(context).length ? { context } : {}),
       ...(highlights.length ? { highlights } : {}),
+      ...(refs.length ? { refs } : {}),
     });
   }
 

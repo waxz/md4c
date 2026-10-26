@@ -22,7 +22,7 @@ import { Md4cFs } from './lib/md4c-fs.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
 import { flag, isDraft, parseFrontMatter, parseTags, postMetadata, SLUG_RE } from './lib/post-format.js';
 import { decryptText, readProtected, WrongPasswordError } from './lib/protect.js';
-import { esc, finishArticle, formatDate, renderLive } from './render.js';
+import { esc, finishArticle, formatDate, renderLive, renderMath } from './render.js';
 import { applySite, normalizeSite } from './theme.js';
 import { webSearch } from './lib/site-config.js';
 import { isAutoLabel } from './lib/paper.js';
@@ -276,6 +276,7 @@ const LEGEND = `<p class="graph-legend sc" aria-hidden="true">
   <span><i class="mark-post"></i>article</span>
   <span><i class="mark-tag"></i>tag</span>
   <span><i class="mark-missing"></i>not written yet</span>
+  <span><i class="mark-note"></i>comment</span>
   <span><i class="mark-arrow"></i>links to</span>
 </p>`;
 
@@ -300,7 +301,8 @@ async function showConnections(article, slug) {
   const incoming = items
     .filter((e) => slugOfItem(e) !== slug && Array.isArray(e.links) && e.links.includes(slug))
     .sort((a, b) => String(b.metadata.date).localeCompare(String(a.metadata.date)));
-  if (!outgoing.length && !incoming.length) return;
+  // (A paper with comments always has its graph: the comments and their links.)
+  if (!outgoing.length && !incoming.length && !own?.highlights?.length) return;
   const title = (t) => bySlug.get(t)?.metadata.title || t;
   const entry = (t, ctx, mutual) => {
     const known = bySlug.has(t);
@@ -332,7 +334,8 @@ async function showConnections(article, slug) {
   <p class="graph-more sc"><a href="${SITE_ROOT}graph.html">Open the full graph</a></p>`;
   article.after(box);
   const { graphData, neighbourhood, drawGraph } = await import('./graph.js');
-  const local = neighbourhood(graphData(items, { postHref: hrefOfPost }), `p:${slug}`, 1);
+  // A paper's comments are in its graph too, with what they link to.
+  const local = neighbourhood(graphData(items, { postHref: hrefOfPost, highlights: true }), `p:${slug}`, own?.highlights?.length ? 2 : 1);
   drawGraph(box.querySelector('.graph-box'), local, { focus: `p:${slug}`, label: 'always' });
 }
 
@@ -347,6 +350,7 @@ async function showGraph() {
   const { graphData, drawGraph } = await import('./graph.js');
   view.innerHTML = `<div class="graph-controls sc">
     <label><input type="checkbox" id="graph-tags"> Show tags</label>
+    ${items.some((e) => e?.highlights?.length) ? '<label><input type="checkbox" id="graph-notes"> Show comments</label>' : ''}
     <span class="graph-count muted"></span>
   </div>
   <div class="graph-box full-graph"></div>
@@ -358,6 +362,7 @@ async function showGraph() {
     const tags = view.querySelector('#graph-tags').checked;
     const g = graphData(items, {
       postHref: hrefOfPost, tags, tagHref: (t) => `${SITE_ROOT}index.html?tag=${encodeURIComponent(t)}`,
+      highlights: Boolean(view.querySelector('#graph-notes')?.checked),
     });
     drawn?.destroy();
     drawn = drawGraph(box, g);
@@ -367,6 +372,7 @@ async function showGraph() {
       `${posts} article${posts === 1 ? '' : 's'} · ${links} link${links === 1 ? '' : 's'}`;
   };
   view.querySelector('#graph-tags').addEventListener('change', render);
+  view.querySelector('#graph-notes')?.addEventListener('change', render);
   render();
 
   // The same links as text, for keyboards and screen readers.
@@ -486,7 +492,9 @@ async function main() {
     }
     if (page === 'highlights') {
       const { showHighlights } = await import('./highlights.js');
-      showHighlights(document.getElementById('highlights-view'), indexItems(), hrefOfPost);
+      showHighlights(document.getElementById('highlights-view'), indexItems(), hrefOfPost, {
+        typeset: (el) => renderMath(el, site),
+      });
       return;
     }
     const live = /^#\/post\/([^/?#]+)/.exec(location.hash);

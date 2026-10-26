@@ -455,3 +455,5 @@ button.post-card-link:disabled { cursor: default; opacity: .4; }
 .hl-admin .hl-paper-title { font-size: 1.05rem; }
 .hl-admin .hl-paper-title a { color: var(--ink); }
 .hl-admin .annotation { cursor: default; }
+.hl-admin .graph-box { --rule-graph: color-mix(in srgb, var(--muted) 45%, var(--bg)); position: relative; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; touch-action: none; }
+.hl-admin .graph-canvas { display: block; width: 100%; height: 100%; cursor: grab; }

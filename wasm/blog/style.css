@@ -511,6 +511,7 @@ main.page:focus { outline: none; }
 .graph-legend i { display: inline-block; flex: none; }
 .mark-post { width: 9px; height: 9px; border-radius: 50%; background: var(--ink); }
 .mark-tag { width: 8px; height: 8px; background: var(--graph-tag); transform: rotate(45deg); }
+.mark-note { width: 8px; height: 8px; border-radius: 2px; background: rgb(250 204 21); }
 .mark-missing { width: 9px; height: 9px; border-radius: 50%; border: 1.5px dashed var(--muted); box-sizing: border-box; }
 .mark-arrow { width: 18px; height: 1px; background: var(--muted); position: relative; }
 .mark-arrow::after { content: ""; position: absolute; right: -1px; top: -3px; border: 3.5px solid transparent; border-left: 6px solid var(--muted); border-right: 0; }

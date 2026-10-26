@@ -145,9 +145,19 @@ export function plainText(md) {
     .replace(/\[\[[^\]]*\]\]/g, '') // [[target]]
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1') // links, images
     .replace(/<[^>]+>/g, '')
-    .replace(/[*_`~>#$]+/g, '')
+    .replace(/[*_`~>#]+/g, '') // ($…$ stays: labels typeset their math)
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Text as HTML with its $…$ and $$…$$ as <x-equation> elements, which the
+ * blog (and the admin) typeset with KaTeX, as in posts.
+ */
+export function mathText(s) {
+  return esc(s)
+    .replace(/\$\$([^$]+?)\$\$/g, '<x-equation type="display">$1</x-equation>')
+    .replace(/\$([^$\n]+?)\$/g, '<x-equation>$1</x-equation>');
 }
 
 /**
@@ -176,6 +186,8 @@ export function annotationSummary(a) {
     ...(a.comment?.trim() ? { comment: cut(plainText(a.comment), 400) } : {}),
     ...(a.tags?.length ? { tags: a.tags } : {}),
     color: a.color,
+    // The highlights its comment links to (the comments' graph).
+    ...(referencedIds(a.comment).filter((id) => id !== a.id).length ? { refs: referencedIds(a.comment).filter((id) => id !== a.id) } : {}),
   };
 }
 
@@ -197,7 +209,7 @@ export function isAutoLabel(text, id) {
 export function markAnnotationRefs(html, annotations = []) {
   const ownLabel = (id, label) => {
     const own = annotations.find((a) => a.id === id);
-    return own && isAutoLabel(label, id) ? esc(annotationLabel(own)) : label;
+    return own && isAutoLabel(label, id) ? mathText(annotationLabel(own)) : label;
   };
   return String(html)
     // Not yet links (the browser's live rendering turns these into links later)
@@ -219,7 +231,7 @@ export const tagsHtml = (tags) => (tags?.length
 export const backlinksHtml = (from, list) => (from.length
   ? `<div class="annotation-backlinks"><span class="muted">Referenced in</span> ${from.map((f) => (f === 'notes'
     ? '<a href="#paper-notes">the notes</a>'
-    : `<a href="#${esc(f)}" class="annotation-ref" data-ref="${esc(f)}">${esc(annotationLabel(list.find((a) => a.id === f), 24))}</a>`)).join(' ')}</div>`
+    : `<a href="#${esc(f)}" class="annotation-ref" data-ref="${esc(f)}">${mathText(annotationLabel(list.find((a) => a.id === f), 24))}</a>`)).join(' ')}</div>`
   : '');
 
 /**
@@ -234,7 +246,7 @@ export function paperHtml(meta, body, annotations, renderMd) {
   const back = backlinks(list, body);
   const md = (m) => markAnnotationRefs(renderMd(m), list);
   const items = list.map((a) => `<li class="annotation${namedByQuote(a) ? ' is-quote-label' : ''}" id="${esc(a.id)}" data-page="${a.page}" data-color="${esc(a.color)}"${a.shape ? ` data-shape="${esc(a.shape)}"` : ''}${a.tags?.length ? ` data-tags="${esc(a.tags.join(' '))}"` : ''} data-rects="${esc(JSON.stringify(a.rects))}">
-<a class="annotation-at" href="#${esc(a.id)}" title="Page ${a.page}">${esc(annotationLabel(a, 60))}</a>
+<a class="annotation-at" href="#${esc(a.id)}" title="Page ${a.page}">${mathText(annotationLabel(a, 60))}</a>
 ${tagsHtml(a.tags)}${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>\n` : ''}<div class="annotation-comment">
 ${a.comment.trim() ? md(a.comment) : ''}</div>
 ${backlinksHtml(back.get(a.id), list)}</li>`).join('\n');

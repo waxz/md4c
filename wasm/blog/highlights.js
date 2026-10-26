@@ -7,6 +7,8 @@
 //   renderHighlights(view, papers, opts)      the list itself (also the admin's
 //                                             Comments page, with drafts)
 
+import { mathText } from './lib/paper.js';
+
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 const tagFromHash = () => {
@@ -22,7 +24,7 @@ const tagFromHash = () => {
  * Draw the overview in `view`. `items` = index.json's items; `hrefOfPost(slug,
  * item)` = a post's address.
  */
-export function showHighlights(view, items, hrefOfPost) {
+export function showHighlights(view, items, hrefOfPost, { typeset } = {}) {
   const papers = items
     .filter((e) => e && Array.isArray(e.highlights) && e.highlights.length && /^posts\/[^/]+\.md$/.test(e.path ?? ''))
     .map((e) => {
@@ -34,7 +36,7 @@ export function showHighlights(view, items, hrefOfPost) {
     view.innerHTML = '<p class="muted">No highlights yet. <a href="index.html">All articles</a></p>';
     return;
   }
-  renderHighlights(view, papers);
+  renderHighlights(view, papers, { typeset, graph: { items, postHref: hrefOfPost } });
 }
 
 /**
@@ -42,8 +44,11 @@ export function showHighlights(view, items, hrefOfPost) {
  * with a search box and the tags to filter by. opts.hash: keep the tag in
  * the address (#tag=…); opts.linkOf(paper, highlight): a highlight's link;
  * opts.onOpen(paper, highlight, event): a highlight's link was followed.
+ * opts.typeset(element): typeset the math ($…$) of the comments shown.
+ * opts.graph: { items, postHref, onOpen? }: a graph of the comments, the
+ * papers they belong to and what links them (graph.js), above the list.
  */
-export function renderHighlights(view, papers, { hash = true, linkOf = (p, h) => `${p.href}#${h.id}`, onOpen } = {}) {
+export function renderHighlights(view, papers, { hash = true, linkOf = (p, h) => `${p.href}#${h.id}`, onOpen, typeset, graph } = {}) {
   const counts = new Map();
   for (const p of papers) for (const h of p.list) for (const t of h.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
   const tags = [...counts].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
@@ -56,7 +61,19 @@ export function renderHighlights(view, papers, { hash = true, linkOf = (p, h) =>
       <button type="button" class="annotation-tag" data-tag="">All</button>
       ${tags.map(([t, n]) => `<button type="button" class="annotation-tag" data-tag="${esc(t)}">#${esc(t)}<span class="n">${n}</span></button>`).join('')}
     </div>` : ''}
+    ${graph ? `<details class="hl-graph"><summary>Graph of the comments and the articles that link them</summary>
+      <div class="graph-box hl-graph-box"></div></details>` : ''}
     <div class="hl-papers"></div>`;
+  if (graph) {
+    const details = view.querySelector('.hl-graph');
+    let drawn = null;
+    details.addEventListener('toggle', async () => {
+      if (!details.open || drawn) return;
+      const { graphData, drawGraph } = await import('./graph.js');
+      const g = graphData(graph.items, { postHref: graph.postHref, highlights: true, commentsOnly: true });
+      drawn = drawGraph(details.querySelector('.graph-box'), g, graph.onOpen ? { onOpen: graph.onOpen } : {});
+    });
+  }
   const out = view.querySelector('.hl-papers');
   const search = view.querySelector('.hl-search');
   let tag = hash && counts.has(tagFromHash()) ? tagFromHash() : '';
@@ -73,14 +90,15 @@ export function renderHighlights(view, papers, { hash = true, linkOf = (p, h) =>
       return `<section class="hl-paper">
         <h2 class="hl-paper-title"><a href="${esc(p.href)}">${esc(p.title)}</a> <span class="count">${list.length}</span>${p.badge ? ` <span class="hl-badge">${esc(p.badge)}</span>` : ''}</h2>
         <ol class="annotations hl-list">${list.map((h) => `<li class="annotation${!h.comment && h.label.startsWith('“') ? ' is-quote-label' : ''}" data-color="${esc(h.color)}">
-          <a class="annotation-at" href="${esc(linkOf(p, h))}" data-paper="${papers.indexOf(p)}" data-id="${esc(h.id)}" title="Page ${h.page}">${esc(h.label)}</a>
+          <a class="annotation-at" href="${esc(linkOf(p, h))}" data-paper="${papers.indexOf(p)}" data-id="${esc(h.id)}" title="Page ${h.page}">${mathText(h.label)}</a>
           ${h.tags?.length ? `<div class="annotation-tags">${h.tags.map((t) => `<button type="button" class="annotation-tag" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}
           ${h.quote ? `<blockquote class="annotation-quote">${esc(h.quote)}</blockquote>` : ''}
-          ${h.comment && h.comment !== h.label ? `<p class="annotation-comment">${esc(h.comment)}</p>` : ''}
+          ${h.comment && h.comment !== h.label ? `<p class="annotation-comment">${mathText(h.comment)}</p>` : ''}
         </li>`).join('')}</ol>
       </section>`;
     }).join('') || '<p class="muted">No highlight matches.</p>';
     view.querySelector('.hl-count').textContent = `${shown} highlight${shown === 1 ? '' : 's'}`;
+    typeset?.(out);
     for (const b of view.querySelectorAll('.hl-tags [data-tag]')) b.setAttribute('aria-pressed', String(b.dataset.tag === tag));
   };
 

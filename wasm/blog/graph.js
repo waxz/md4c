@@ -9,7 +9,9 @@
 //                            node's links, click to open its post
 //
 // Marks: an article is a filled dot, a tag a diamond in a second colour, a
-// post not written yet a hollow dashed ring. Arrows point the way a link
+// post not written yet a hollow dashed ring, a paper's comment (a
+// highlight) a small square in its highlight's colour, joined to its paper
+// by a dotted line. Arrows point the way a link
 // goes (from the post that links to the post it names); a link both ways
 // has an arrow at each end. A post's neighbourhood takes links both ways:
 // the posts it links to and the posts that link to it (its backlinks).
@@ -19,15 +21,24 @@
 const POST = 'post';
 const TAG = 'tag';
 const MISSING = 'missing';
+const NOTE = 'note';
+// The highlight colours (as blog/paper.css).
+const NOTE_RGB = {
+  yellow: '250 204 21', orange: '251 146 60', red: '239 68 68', pink: '236 72 153',
+  purple: '168 85 247', blue: '59 130 246', green: '34 197 94', gray: '140 140 140',
+};
 
 /**
  * { nodes: [{ id, kind, label, href, slug }],
  *   edges: [{ source, target, both, tag }] } from
  * index.json items. `postHref(slug)` makes a post's link; with `tags`,
  * each tag is a node joined to its posts. Links to posts that do not
- * exist become dim "missing" nodes, as in Obsidian.
+ * exist become dim "missing" nodes, as in Obsidian. With `highlights`,
+ * each paper's comments are nodes too (joined to their paper, and to the
+ * highlights they and the posts link to: items' "refs"); `commentsOnly`
+ * keeps just the comments and the posts joined to them.
  */
-export function graphData(items, { postHref, tags = false, tagHref } = {}) {
+export function graphData(items, { postHref, tags = false, tagHref, highlights = false, commentsOnly = false } = {}) {
   const nodes = new Map();
   const edges = new Map();
   const posts = items.filter((e) => e && typeof e === 'object' && /^posts\/[^/]+\.md$/.test(e.path ?? '') && e.metadata);
@@ -59,6 +70,39 @@ export function graphData(items, { postHref, tags = false, tagHref } = {}) {
         if (!nodes.has(id)) nodes.set(id, { id, kind: TAG, label: `#${t}`, href: tagHref ? tagHref(t) : '' });
         join(from, id, true);
       }
+    }
+  }
+  if (highlights) {
+    for (const e of posts) {
+      const slug = slugOf(e);
+      for (const h of Array.isArray(e.highlights) ? e.highlights : []) {
+        if (!h?.id) continue;
+        const paperHref = postHref(slug, e);
+        nodes.set(`h:${h.id}`, {
+          id: `h:${h.id}`, kind: NOTE, label: String(h.label || h.id).replace(/\$/g, ''), // (no typesetting on a canvas) color: NOTE_RGB[h.color] ? h.color : 'yellow',
+          href: paperHref.includes('#') ? paperHref : `${paperHref}#${h.id}`, paperHref, slug, highlight: h.id,
+        });
+        join(`p:${slug}`, `h:${h.id}`, true); // part of its paper: no direction
+      }
+    }
+    for (const e of posts) {
+      for (const id of Array.isArray(e.refs) ? e.refs : []) if (nodes.has(`h:${id}`)) join(`p:${slugOf(e)}`, `h:${id}`);
+      for (const h of Array.isArray(e.highlights) ? e.highlights : []) {
+        for (const id of Array.isArray(h.refs) ? h.refs : []) if (nodes.has(`h:${id}`)) join(`h:${h.id}`, `h:${id}`);
+      }
+    }
+    if (commentsOnly) {
+      const keep = new Set([...nodes.values()].filter((n) => n.kind === NOTE).map((n) => n.id));
+      for (const { source, target } of edges.values()) {
+        if (keep.has(source) || keep.has(target)) {
+          keep.add(source);
+          keep.add(target);
+        }
+      }
+      return {
+        nodes: [...nodes.values()].filter((n) => keep.has(n.id)),
+        edges: [...edges.values()].filter((x) => keep.has(x.source) && keep.has(x.target)),
+      };
     }
   }
   return { nodes: [...nodes.values()], edges: [...edges.values()] };
@@ -142,7 +186,7 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
       ...node, x: node.id === focus ? 0 : Math.cos(a) * r, y: node.id === focus ? 0 : Math.sin(a) * r,
       vx: 0, vy: 0, degree: adj.get(node.id).size, fixed: false,
     };
-    sim.radius = (node.id === focus ? 6 : 3.5) + Math.sqrt(sim.degree) * 1.6;
+    sim.radius = node.kind === NOTE ? 3.2 + Math.sqrt(sim.degree) : (node.id === focus ? 6 : 3.5) + Math.sqrt(sim.degree) * 1.6;
     byId.set(node.id, sim);
     return sim;
   });
@@ -303,6 +347,18 @@ export function drawGraph(box, g, { focus = '', onOpen, label = 'auto' } = {}) {
         ctx.closePath();
         ctx.fillStyle = strong ? colours.accent : colours.tag;
         ctx.fill();
+      } else if (p.kind === NOTE) {
+        // A small rounded square in the highlight's colour.
+        const r = p.radius;
+        ctx.roundRect?.(p.x - r, p.y - r, r * 2, r * 2, r * 0.35) ?? ctx.rect(p.x - r, p.y - r, r * 2, r * 2);
+        ctx.fillStyle = `rgb(${NOTE_RGB[p.color]})`;
+        ctx.fill();
+        if (strong) {
+          ctx.lineWidth = 2 / view.scale;
+          ctx.strokeStyle = colours.accent;
+          ctx.stroke();
+          ctx.lineWidth = 1 / view.scale;
+        }
       } else if (p.kind === MISSING) {
         // A hollow, dashed ring: linked to, not written yet.
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);

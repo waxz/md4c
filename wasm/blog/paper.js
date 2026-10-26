@@ -16,12 +16,13 @@
 //     opts.linkFor(id, a)  (editable) the cross-reference to copy, e.g. [[slug#a-…]]
 //     opts.notes()         (editable) the notes' Markdown (for "Referenced in")
 //     opts.confirmDelete(a)    (editable) resolves true to delete
+//     opts.typeset(element)    (editable) typeset the math ($…$) of comments
 //
 // pdf.js is self-hosted under vendor/pdfjs/ (the pages' CSP allows only the
 // blog's own scripts), loaded on first use, with eval off.
 
 import {
-  COLORS, SHAPES, annotationLabel, backlinks, backlinksHtml, cleanTags, markAnnotationRefs, namedByQuote, newAnnotationId,
+  COLORS, SHAPES, annotationLabel, backlinks, backlinksHtml, cleanTags, markAnnotationRefs, mathText, namedByQuote, newAnnotationId,
   sortAnnotations, tagsHtml,
 } from './lib/paper.js';
 
@@ -139,6 +140,7 @@ export async function mountPaper(el, opts = {}) {
   let activeId = ''; // the highlight shown
   let quietUntil = 0; // a click that ends drawing a box is not a click on it
   let filterTag = ''; // the comments shown: those with this tag ('' all)
+  let floatEl = null; // the comment shown by its highlight (reader)
 
   let zoom = 1;
   const pages = []; // { n, el, base: viewport at scale 1, rendered: scale, task }
@@ -163,6 +165,7 @@ export async function mountPaper(el, opts = {}) {
       p.el.style.setProperty('--scale-factor', String(s));
     }
     viewer.querySelector('.paper-zoom-label').textContent = `${Math.round(zoom * 100)}%`;
+    if (floatEl) closeFloat(); // placed for the old size
     drawHighlights();
   }
 
@@ -243,6 +246,8 @@ export async function mountPaper(el, opts = {}) {
   }
 
   const flash = (node) => node?.animate?.([{ outline: '3px solid var(--accent, #8b1e2d)' }, { outline: '3px solid transparent' }], { duration: 1400 });
+  // A highlight blinks, without covering the text.
+  const blink = (node) => node?.animate?.([{ opacity: 1 }, { opacity: 0.3 }, { opacity: 1 }, { opacity: 0.3 }, { opacity: 1 }], { duration: 1100 });
   const commentOf = (id) => side.querySelector(`[data-annotation="${CSS.escape(id)}"], li#${CSS.escape(id)}`);
   const narrow = () => window.matchMedia('(max-width: 900px)').matches;
   const byId = (id) => list.find((x) => x.id === id);
@@ -255,10 +260,60 @@ export async function mountPaper(el, opts = {}) {
     const top = p.el.offsetTop + (a.rects[0]?.[1] ?? 0) * p.el.offsetHeight - pagesEl.clientHeight / 3;
     pagesEl.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
     render(p).then(() => {
-      for (const r of p.el.querySelectorAll(`.paper-hl[data-id="${CSS.escape(id)}"]`)) flash(r);
+      for (const r of p.el.querySelectorAll(`.paper-hl[data-id="${CSS.escape(id)}"]`)) blink(r);
+      if (!editable) floatNote(id);
     });
     setActive(id);
   }
+
+  /* The comment of a highlight in a card by it, on the page (it scrolls
+     with the PDF): the reader's view of a highlight. */
+  function closeFloat() {
+    floatEl?.remove();
+    floatEl = null;
+  }
+  function floatNote(id) {
+    closeFloat();
+    const a = byId(id);
+    const p = a && pages[a.page - 1];
+    if (!p || !a.rects.length) return;
+    const first = a.rects[0];
+    const last = a.rects.reduce((m, r) => (r[1] + r[3] > m[1] + m[3] ? r : m));
+    const node = document.createElement('div');
+    node.className = 'paper-float';
+    node.dataset.color = colorOf(a);
+    node.dataset.id = id;
+    node.innerHTML = `<div class="pop-head"><span class="pop-label" title="Page ${a.page}"></span>
+        <button type="button" class="pop-icon" data-act="close-float" aria-label="Close">×</button></div>
+      <button type="button" class="pop-link" data-go="${esc(id)}">Show in the comments</button>`;
+    // Copies of the comment's nodes (typeset math keeps its styles: the
+    // pages' CSP refuses style attributes parsed from HTML).
+    const from = (sel) => a.li?.querySelector(sel);
+    const label = node.querySelector('.pop-label');
+    if (from('.annotation-at')) label.append(...from('.annotation-at').cloneNode(true).childNodes);
+    else label.textContent = annotationLabel(a, 60);
+    const go = node.querySelector('.pop-link');
+    if (from('.annotation-tags')) go.before(from('.annotation-tags').cloneNode(true));
+    if (from('.annotation-comment')?.textContent.trim()) go.before(from('.annotation-comment').cloneNode(true));
+    p.el.append(node);
+    const pw = p.el.clientWidth;
+    const ph = p.el.clientHeight;
+    const w = node.offsetWidth;
+    const h = node.offsetHeight;
+    let x = first[0] * pw;
+    if (x + w > pw - 6) x = Math.max(6, pw - w - 6);
+    let y = (last[1] + last[3]) * ph + 6;
+    if (y + h > ph - 6) y = Math.max(6, first[1] * ph - h - 6); // no room below: above it
+    node.style.left = `${x}px`;
+    node.style.top = `${y}px`;
+    floatEl = node;
+  }
+  pagesEl.addEventListener('click', (e) => {
+    const f = e.target.closest('.paper-float');
+    if (!f) return;
+    if (e.target.closest('[data-act="close-float"]')) closeFloat();
+    else if (e.target.closest('[data-go]')) showComment(f.dataset.id, true);
+  });
 
   /**
    * Bring the comment of `id` into view: within the side panel when it
@@ -328,10 +383,18 @@ export async function mountPaper(el, opts = {}) {
     const a = byId(id);
     if (!a) return;
     peekFor = id;
-    const comment = commentHtml(a);
-    peekEl.innerHTML = `<div class="pop-head"><span class="pop-label hl-${colorOf(a)}" title="Page ${a.page}">${esc(annotationLabel(a, 60))}</span>${withGo ? `<button type="button" class="pop-link" data-go="${esc(id)}">Show comment ↓</button>` : ''}</div>
+    const comment = a.li ? '' : commentHtml(a); // (published: copied as nodes, below)
+    peekEl.innerHTML = `<div class="pop-head"><span class="pop-label hl-${colorOf(a)}" title="Page ${a.page}">${a.li ? '' : mathText(annotationLabel(a, 60))}</span>${withGo ? `<button type="button" class="pop-link" data-go="${esc(id)}">Show comment ↓</button>` : ''}</div>
       ${a.quote ? `<blockquote class="annotation-quote">${esc(a.quote)}</blockquote>` : ''}
-      ${comment ? `<div class="annotation-comment">${comment}</div>` : '<p class="muted pop-empty">No comment.</p>'}`;
+      ${comment ? `<div class="annotation-comment">${comment}</div>` : a.li ? '' : '<p class="muted pop-empty">No comment.</p>'}`;
+    if (a.li) {
+      const at = a.li.querySelector('.annotation-at');
+      if (at) peekEl.querySelector('.pop-label').append(...at.cloneNode(true).childNodes);
+      const c = a.li.querySelector('.annotation-comment');
+      if (c?.textContent.trim()) peekEl.append(c.cloneNode(true));
+      else peekEl.insertAdjacentHTML('beforeend', '<p class="muted pop-empty">No comment.</p>');
+    }
+    if (editable) opts.typeset?.(peekEl);
     place(peekEl, rect);
   }
   function closePeek() {
@@ -362,18 +425,21 @@ export async function mountPaper(el, opts = {}) {
       && a.rects.some(([x, y, w, h]) => fx >= x - 0.003 && fx <= x + w + 0.003 && fy >= y - 0.004 && fy <= y + h + 0.004));
   };
   pagesEl.addEventListener('click', (e) => {
+    if (e.target.closest('.paper-float')) return;
     if (window.getSelection()?.isCollapsed === false || pagesEl.classList.contains('is-area') || Date.now() < quietUntil) return;
     const pageEl = e.target.closest('.paper-page');
     const hit = pageEl && hitAt(pageEl, e.clientX, e.clientY);
-    if (!hit) return;
+    if (!hit) {
+      closeFloat();
+      return;
+    }
     if (editable) {
       openEditor(hit);
       setActive(hit.id);
       return;
     }
-    showComment(hit.id);
-    // Stacked (a phone): the comments are far below; peek at it here.
-    if (narrow()) peek(hit.id, { left: e.clientX - 40, right: e.clientX, top: e.clientY - 10, bottom: e.clientY + 10 }, true);
+    showComment(hit.id); // (in the side panel only: the page stays)
+    floatNote(hit.id);
   });
 
   side.addEventListener('click', (e) => {
@@ -471,6 +537,7 @@ export async function mountPaper(el, opts = {}) {
   const onKey = (e) => {
     if (e.key !== 'Escape') return;
     closePeek();
+    closeFloat();
     if (editable) {
       closeSelbar();
       stopMoveKey();
@@ -907,7 +974,7 @@ export async function mountPaper(el, opts = {}) {
       side.innerHTML = `<div class="paper-comments-head"><span>Comments</span><span class="count">${list.length}</span></div>
         ${list.length ? '' : `<p class="muted paper-hint">Select text in the PDF to highlight it, or draw a box with ${ICON.area}<b>Area</b>.</p>`}
         <ol class="annotations">${list.map((a) => `<li class="annotation${namedByQuote(a) ? ' is-quote-label' : ''}" data-annotation="${esc(a.id)}" data-color="${colorOf(a)}" data-shape="${shapeOf(a)}">
-          <a class="annotation-at" href="#${esc(a.id)}" title="Page ${a.page}">${esc(annotationLabel(a, 60))}</a>
+          <a class="annotation-at" href="#${esc(a.id)}" title="Page ${a.page}">${mathText(annotationLabel(a, 60))}</a>
           <span class="annotation-tools">
             <button type="button" data-act="edit" title="Edit the comment" aria-label="Edit">${ICON.edit}</button>
             <button type="button" data-act="link" title="Copy a cross-reference to paste in other notes" aria-label="Copy link">${ICON.link}</button>
@@ -919,6 +986,7 @@ export async function mountPaper(el, opts = {}) {
         </li>`).join('')}</ol>`;
       if (activeId) commentOf(activeId)?.classList.add('is-active');
       renderTagbar();
+      opts.typeset?.(side);
     };
     side.addEventListener('click', async (e) => {
       const b = e.target.closest('button[data-act]');

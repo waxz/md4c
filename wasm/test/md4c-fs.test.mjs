@@ -544,6 +544,19 @@ describe('links between posts (graph) and section headings', () => {
     assert.deepEqual(items.find((i) => i.path === 'posts/reading.md').highlights,
       [{ id: 'a-rrrr11', page: 2, label: 'Key idea', quote: 'the quote', comment: 'Why it matters', tags: ['method'], color: 'blue' }]);
     assert.equal(items.find((i) => i.path === 'posts/alpha.md').highlights, undefined);
+    const { graphData } = await import('../blog/graph.js');
+    const linked = graphData([
+      { path: 'posts/p.md', metadata: { title: 'P' }, links: [], highlights: [{ id: 'a-1111', label: 'One', color: 'red', refs: ['a-2222'] }, { id: 'a-2222', label: 'Two' }] },
+      { path: 'posts/q.md', metadata: { title: 'Q' }, links: ['p'], refs: ['a-1111'] },
+      { path: 'posts/r.md', metadata: { title: 'R' }, links: [] },
+    ], { postHref: (slug) => `${slug}.html`, highlights: true, commentsOnly: true });
+    assert.deepEqual(linked.nodes.map((n) => n.id).sort(), ['h:a-1111', 'h:a-2222', 'p:p', 'p:q'], 'posts without comments stay out');
+    assert.ok(linked.edges.some((e) => e.source === 'h:a-1111' && e.target === 'h:a-2222' && !e.tag), 'a comment links to another');
+    assert.ok(linked.edges.some((e) => e.source === 'p:q' && e.target === 'h:a-1111'), 'a post links to a comment');
+    const g = graphData(items, { postHref: (slug) => `${slug}.html`, highlights: true, commentsOnly: true });
+    assert.deepEqual(g.nodes.map((n) => `${n.id}:${n.kind}`).sort(), ['h:a-rrrr11:note', 'p:reading:post']);
+    assert.deepEqual(g.nodes.find((n) => n.kind === 'note').href, 'reading.html#a-rrrr11');
+    assert.ok(g.edges.some((e) => e.source === 'p:reading' && e.target === 'h:a-rrrr11' && e.tag), 'a comment hangs from its paper');
     const page = await read('highlights.html');
     assert.match(page, /data-page="highlights"/);
     assert.match(page, /paper\.css/);
@@ -751,6 +764,10 @@ describe('paper notes: a PDF with highlights and comments', () => {
     assert.equal(annotationLabel({ page: 1, title: 'Model-free RL', quote: 'q' }), 'Model-free RL', 'a title names it');
     assert.equal(annotationLabel({ page: 1, quote: 'q', comment: 'Add **definition** of [[#a-x|model]] free\n\nMore.' }), 'Add definition of model free', 'else its comment');
     assert.equal(annotationLabel({ page: 4 }), 'Page 4');
+    const { mathText } = await import('../js/paper.js');
+    assert.equal(mathText('Loss $x<1$ and $$\\sum_i a$$'), 'Loss <x-equation>x&lt;1</x-equation> and <x-equation type="display">\\sum_i a</x-equation>');
+    assert.equal(annotationLabel({ page: 1, comment: 'Bound $O(n^2)$ holds' }), 'Bound $O(n^2)$ holds', 'math stays in labels, to typeset');
+    assert.deepEqual(annotationSummary({ ...base, quote: '', comment: 'see [[#a-eeee55]]', color: 'red' }).refs, ['a-eeee55']);
     const { isAutoLabel } = await import('../js/paper.js');
     assert.ok(isAutoLabel('p. 1: “Attention is…”', 'a-x') && isAutoLabel('p.&nbsp;3', 'a-x') && isAutoLabel('paper#a-x', 'a-x'));
     assert.ok(!isAutoLabel('the encoder', 'a-x'), 'text written by hand stays');

@@ -11,7 +11,7 @@ import { api, ApiError } from './client.js';
 import { flag, parseFrontMatter, SLUG_RE } from './lib/post-format.js';
 import { digest, readProtected } from './lib/protect.js';
 import { slugify } from './lib/blog-render.js';
-import { finishArticle, renderLive, renderLiveHtml } from './render.js';
+import { finishArticle, renderLive, renderLiveHtml, renderMath } from './render.js';
 import { mountPaper } from './paper.js';
 import { SHOW_KEY } from './comments.js';
 import { annotationLabel, isPaper, joinAnnotations, paperHtml, paperPdf, sortAnnotations, splitAnnotations } from './lib/paper.js';
@@ -532,6 +532,7 @@ export async function showEditor(view, store, key, newStore) {
       linkFor: (id, a) => `[[${slug() || 'this-post'}#${id}|${annotationLabel(a, 60).replace(/[[\]|]/g, '')}]]`,
       notes: () => f.body.value,
       knownTags: () => siteTags,
+      typeset: (el) => renderMath(el, { math: state.site?.math !== false }),
       confirmDelete: (a) => confirmDialog('Delete this highlight?', `${a.quote ? `“${a.quote.slice(0, 100)}” ` : ''}and its comment are removed from the post.`, 'Delete'),
     }).then((h) => {
       annotator = h;

@@ -7,8 +7,9 @@
 import { api } from './client.js';
 import { esc, reportError } from './shared.js';
 import { parseFrontMatter } from './lib/post-format.js';
-import { annotationSummary, isPaper, sortAnnotations, splitAnnotations } from './lib/paper.js';
+import { annotationSummary, isPaper, referencedIds, sortAnnotations, splitAnnotations } from './lib/paper.js';
 import { renderHighlights } from './highlights.js';
+import { renderMath } from './render.js';
 
 /** The editor shows this highlight when it opens the post (editor.js). */
 export const SHOW_KEY = 'md4c-admin:show-annotation';
@@ -44,6 +45,9 @@ export async function showComments(view) {
   const drafts = posts.filter((p) => p.status === 'draft');
   const drafted = new Set(drafts.map((p) => p.key));
   const papers = [];
+  // The graph's posts: the published ones, with each draft in place of its
+  // published copy (store = where the editor opens it).
+  const graphItems = new Map((index?.items ?? []).filter((e) => e?.path).map((e) => [e.path, { ...e, store: 'site' }]));
   for (const e of index?.items ?? []) {
     if (!Array.isArray(e?.highlights) || !e.highlights.length || drafted.has(e.path)) continue;
     const slug = e.path.slice('posts/'.length, -'.md'.length);
@@ -55,12 +59,17 @@ export async function showComments(view) {
     try {
       const text = (await api.read(p.store, p.key)).text;
       const { meta, body: md } = parseFrontMatter(text);
-      if (!isPaper(meta)) return;
-      const { annotations } = splitAnnotations(md);
+      const { body: notes, annotations } = isPaper(meta) ? splitAnnotations(md) : { body: md, annotations: [] };
+      const list = sortAnnotations(annotations).map(annotationSummary);
+      graphItems.set(p.key, {
+        ...(graphItems.get(p.key) ?? {}), path: p.key, store: p.store,
+        metadata: { ...(graphItems.get(p.key)?.metadata ?? {}), title: meta.title || p.title || p.key },
+        highlights: list, refs: referencedIds(notes),
+      });
       if (!annotations.length) return;
       papers.push({
         title: meta.title || p.title || p.key, date: String(meta.date ?? p.date ?? ''),
-        href: editHref(p.store, p.key), list: sortAnnotations(annotations).map(annotationSummary),
+        href: editHref(p.store, p.key), list,
         ...(live.has(p.key) ? {} : { badge: 'draft' }), // (a published paper keeps its draft)
       });
     } catch (err) {
@@ -73,15 +82,24 @@ export async function showComments(view) {
     body.innerHTML = '<p class="muted">No highlights yet. Make a post of the kind <b>Paper notes</b> and highlight its PDF.</p>';
     return;
   }
+  const open = (href, id) => {
+    try {
+      if (id) sessionStorage.setItem(SHOW_KEY, id);
+    } catch {}
+    location.hash = href;
+  };
   renderHighlights(body, papers, {
     hash: false,
+    typeset: (el) => renderMath(el, { math: true }),
+    graph: {
+      items: [...graphItems.values()],
+      postHref: (slug, e) => editHref(e.store ?? 'site', e.path),
+      onOpen: (node) => open(node.paperHref ?? node.href, node.highlight),
+    },
     linkOf: (p) => p.href,
     onOpen: (p, h, e) => {
       e.preventDefault();
-      try {
-        sessionStorage.setItem(SHOW_KEY, h.id);
-      } catch {}
-      location.hash = p.href;
+      open(p.href, h.id);
     },
   });
   body.insertAdjacentHTML('afterbegin', `<p class="muted hl-summary">${esc(String(papers.length))} paper${papers.length === 1 ? '' : 's'}</p>`);
