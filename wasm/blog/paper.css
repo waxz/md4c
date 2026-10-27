@@ -13,7 +13,7 @@ main.page:has(.paper) .article-header, main.page:has(.paper) .paper-notes { max-
 
 /* ---------- The PDF ---------- */
 
-.paper-viewer { position: relative; min-width: 0; border: 1px solid var(--rule); border-radius: 6px; background: color-mix(in srgb, var(--muted) 12%, var(--paper)); }
+.paper-viewer { scroll-margin-top: calc(var(--bar-h, 0px) + 8px); position: relative; min-width: 0; border: 1px solid var(--rule); border-radius: 6px; background: color-mix(in srgb, var(--muted) 12%, var(--paper)); }
 .paper-fallback { margin: 1rem; }
 .paper-toolbar { display: flex; align-items: center; gap: .3rem; padding: .35rem .5rem; border-bottom: 1px solid var(--rule); background: var(--surface); border-radius: 6px 6px 0 0; font-size: .85rem; }
 .paper-toolbar button { font: inherit; min-width: 2rem; padding: .2rem .5rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); color: var(--ink); cursor: pointer; }
@@ -95,6 +95,7 @@ main.page:has(.paper) .article-header, main.page:has(.paper) .paper-notes { max-
 .paper-page .textLayer ::selection { background: rgb(0 90 255 / .28); color: transparent; }
 .paper-page .textLayer br::selection { background: transparent; }
 .paper-page .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+.paper-page .textLayer.selecting .endOfContent { top: 0; }
 
 /* ---------- Comments (cards, as in Notion) ---------- */
 
@@ -239,10 +240,46 @@ main.page:has(.paper) .article-header, main.page:has(.paper) .paper-notes { max-
 .pop-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: .55rem; padding-top: .5rem; border-top: 1px solid var(--rule); }
 .pop-foot select { max-width: 11rem; font: inherit; font-size: .8rem; padding: .2rem .3rem; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
 .pop-spacer { flex: 1; }
-@media (max-width: 600px) {
-  /* A sheet at the bottom, over the keyboard's top. */
-  .paper-editor .pop-foot select { max-width: 8.5rem; }
-  .paper-editor { left: 0; right: 0; bottom: 0; top: auto; width: auto; border-radius: 14px 14px 0 0; padding-bottom: max(.7rem, env(safe-area-inset-bottom)); }
+@media (max-width: 600px) { .paper-editor .pop-foot select { max-width: 8.5rem; } }
+/* Docked (paper.js): a sheet at the bottom, above the on-screen keyboard. */
+.paper-pop.is-docked {
+  left: 0; right: 0; bottom: 0; top: auto; width: auto; max-width: none; overflow: auto; overscroll-behavior: contain;
+  border-radius: 14px 14px 0 0; padding-bottom: max(.7rem, env(safe-area-inset-bottom));
+}
+.paper-selbar.is-docked { padding: 8px 10px max(8px, env(safe-area-inset-bottom)); }
+/* Rows: the shapes (and the bar's Comment), then the colours; the editor's
+   Cancel and Save, a row of their own. */
+.is-docked .pop-row .pop-sep { flex-basis: 100%; height: 0; margin: 0; background: none; order: 1; }
+.is-docked .pop-row .swatch { order: 2; }
+.paper-selbar.is-docked .pop-sep:last-of-type { display: none; }
+.paper-selbar.is-docked [data-act="comment"] { margin-left: auto; }
+.paper-editor.is-docked .pop-foot select { flex: 1 1 6rem; max-width: none; }
+.paper-editor.is-docked .pop-spacer { flex-basis: 100%; height: 0; }
+.paper-editor.is-docked .pop-foot .pop-btn { flex: 1; justify-content: center; }
+
+/* Fingers: targets of 40px or so, and the cards' tools always shown, in a
+   row of their own under the card (so the title keeps the card's width). */
+@media (pointer: coarse) {
+  .paper-toolbar button, .paper-toolbar .paper-download { min-height: 2.5rem; min-width: 2.5rem; }
+  .paper-toolbar .paper-download { display: inline-grid; place-items: center; }
+  .swatch { width: 2.1rem; height: 2.1rem; flex: none; }
+  .shape-btn { width: 2.6rem; height: 2.5rem; flex: none; }
+  .pop-row { gap: 6px; }
+  .pop-btn { min-height: 2.5rem; padding: .3rem .8rem; }
+  .pop-icon, .annotation-tools button { width: 2.6rem; height: 2.6rem; }
+  .pop-foot select { min-height: 2.5rem; }
+  .pop-link { padding: .4rem 0; }
+  .paper-editor textarea, .paper-editor .pop-tags { font-size: 16px; } /* (iOS zooms into smaller text fields) */
+  .paper-editor .pop-title { font-size: 1.05rem; padding: .3rem 0; }
+  .annotation-at { margin-right: 0; }
+  .annotation:has(> .annotation-tools) { display: flex; flex-direction: column; }
+  .annotation-tools {
+    position: static; order: 99; opacity: 1; justify-content: flex-end; gap: 4px; margin: .2rem -.4rem -.4rem 0; background: none;
+  }
+  .annotation-tag { padding: .2rem .65rem; font-size: .8rem; }
+  .paper-tagbar, .annotation-tags { gap: 6px; }
+  .annotation-add { padding: .5rem 0; width: 100%; text-align: left; }
+  .annotation-backlinks { line-height: 2.2; }
 }
 
 /* The Area tool */

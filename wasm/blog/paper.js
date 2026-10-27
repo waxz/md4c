@@ -187,6 +187,10 @@ export async function mountPaper(el, opts = {}) {
       const text = p.el.querySelector('.textLayer');
       text.replaceChildren();
       await new pdfjs.TextLayer({ textContentSource: p.page.streamTextContent(), container: text, viewport }).render();
+      const end = document.createElement('div');
+      end.className = 'endOfContent';
+      text.append(end);
+      layerEnds.set(text, end);
       p.rendered = s;
     } catch (err) {
       if (err?.name !== 'RenderingCancelledException') console.warn('pdf page', p.n, err);
@@ -195,6 +199,60 @@ export async function mountPaper(el, opts = {}) {
       if (p.rendered !== scale() && p.visible) render(p); // zoomed meanwhile
     }
   }
+
+  /* Selecting text, as pdf.js's own viewer does: a blank box (the text
+     layer's "end of content") follows the moving end of the selection, so
+     dragging a finger or a selection handle over the gaps between lines
+     extends the selection a little, not to the whole page. */
+  const layerEnds = new Map(); // text layer -> its end-of-content box
+  let prevRange = null;
+  const resetLayer = (layer, end) => {
+    layer.append(end);
+    end.style.width = end.style.height = '';
+    layer.classList.remove('selecting');
+  };
+  const onSelectStart = (e) => {
+    const layer = e.target.closest?.('.textLayer');
+    if (layer && layerEnds.has(layer)) layer.classList.add('selecting');
+  };
+  const onSelectEnd = () => {
+    for (const [layer, end] of layerEnds) if (layer.isConnected) resetLayer(layer, end);
+  };
+  const onSelectMove = () => {
+    for (const layer of layerEnds.keys()) if (!layer.isConnected) layerEnds.delete(layer);
+    const sel = document.getSelection();
+    if (!sel?.rangeCount) {
+      onSelectEnd();
+      prevRange = null;
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    for (const [layer, end] of layerEnds) {
+      if (range.intersectsNode(layer)) layer.classList.add('selecting');
+      else if (layer.classList.contains('selecting')) resetLayer(layer, end);
+    }
+    const startMoved = prevRange && (range.compareBoundaryPoints(Range.END_TO_END, prevRange) === 0
+      || range.compareBoundaryPoints(Range.START_TO_END, prevRange) === 0);
+    prevRange = range.cloneRange();
+    let anchor = startMoved ? range.startContainer : range.endContainer;
+    if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode;
+    const layer = anchor?.closest?.('.textLayer');
+    const end = layer && layerEnds.get(layer);
+    if (!end || anchor === layer) return;
+    if (!startMoved && range.endOffset === 0) { // (the end at the start of a line: the line before)
+      do {
+        while (anchor !== layer && !anchor.previousSibling) anchor = anchor.parentNode;
+        if (anchor === layer) return;
+        anchor = anchor.previousSibling;
+      } while (!anchor.childNodes.length);
+    }
+    end.style.width = layer.style.width;
+    end.style.height = layer.style.height;
+    anchor.parentElement.insertBefore(end, startMoved ? anchor : anchor.nextSibling);
+  };
+  pagesEl.addEventListener('pointerdown', onSelectStart);
+  document.addEventListener('pointerup', onSelectEnd);
+  document.addEventListener('selectionchange', onSelectMove);
 
   const seen = new IntersectionObserver((entries) => {
     for (const e of entries) {
@@ -361,13 +419,31 @@ export async function mountPaper(el, opts = {}) {
     el.append(node); // fixed: out of the grid's flow
     return node;
   };
+  // On a phone the comment editor is a sheet at the bottom; on a touch
+  // screen the selection bar is too, clear of the selection's handles and
+  // the system's own menu, and in reach of a thumb. Both sit above the
+  // on-screen keyboard (the visual viewport).
+  const docks = (node) => (node.classList.contains('paper-editor') && window.matchMedia('(max-width: 600px)').matches)
+    || (node.classList.contains('paper-selbar') && window.matchMedia('(pointer: coarse), (max-width: 600px)').matches);
+  function fitDocked() {
+    const vv = window.visualViewport;
+    for (const node of el.querySelectorAll(':scope > .paper-pop.is-docked:not([hidden])')) {
+      node.style.bottom = vv ? `${Math.max(0, window.innerHeight - vv.offsetTop - vv.height)}px` : '';
+      node.style.maxHeight = vv ? `${Math.max(160, vv.height - 12)}px` : '';
+    }
+  }
+  window.visualViewport?.addEventListener('resize', fitDocked);
+  window.visualViewport?.addEventListener('scroll', fitDocked);
   /** Put a pop-up by `rect` (client coordinates): below it, else above, kept on screen. */
   function place(node, rect) {
     node.hidden = false;
-    if (node.classList.contains('paper-editor') && window.matchMedia('(max-width: 600px)').matches) {
-      node.style.left = node.style.top = ''; // a sheet at the bottom (CSS)
+    node.classList.toggle('is-docked', docks(node));
+    if (node.classList.contains('is-docked')) {
+      node.style.left = node.style.top = '';
+      fitDocked();
       return;
     }
+    node.style.bottom = node.style.maxHeight = '';
     const w = node.offsetWidth;
     const h = node.offsetHeight;
     let top = rect.bottom + 8;
@@ -419,12 +495,18 @@ export async function mountPaper(el, opts = {}) {
 
   // Highlights lie under the text (so it can still be selected): a click
   // that selects nothing finds the highlight under it by position.
+  // (A finger gets more room than a mouse; of overlapping ones, the smallest.)
   const hitAt = (pageEl, clientX, clientY) => {
     const box = pageEl.getBoundingClientRect();
+    const slop = window.matchMedia('(pointer: coarse)').matches ? 10 : 3; // px
     const fx = (clientX - box.left) / box.width;
     const fy = (clientY - box.top) / box.height;
-    return list.find((a) => a.page === Number(pageEl.dataset.page)
-      && a.rects.some(([x, y, w, h]) => fx >= x - 0.003 && fx <= x + w + 0.003 && fy >= y - 0.004 && fy <= y + h + 0.004));
+    const sx = slop / box.width;
+    const sy = slop / box.height;
+    const size = (a) => a.rects.reduce((n, r) => n + r[2] * r[3], 0);
+    return list.filter((a) => a.page === Number(pageEl.dataset.page)
+      && a.rects.some(([x, y, w, h]) => fx >= x - sx && fx <= x + w + sx && fy >= y - sy && fy <= y + h + sy))
+      .sort((a, b) => size(a) - size(b))[0];
   };
   pagesEl.addEventListener('click', (e) => {
     if (e.target.closest('.paper-float')) return;
@@ -452,6 +534,8 @@ export async function mountPaper(el, opts = {}) {
     if (at) e.preventDefault();
     const id = item.dataset.annotation ?? item.id;
     if (at && !editable) history.replaceState(null, '', `#${id}`);
+    // Stacked (a phone): the PDF is above the comments; bring it up.
+    if (narrow() && viewer.getBoundingClientRect().bottom < window.innerHeight * 0.3) viewer.scrollIntoView({ behavior: 'smooth', block: 'start' });
     showInPdf(id);
   });
 
@@ -665,18 +749,24 @@ export async function mountPaper(el, opts = {}) {
     pagesEl.addEventListener('pointerup', () => setTimeout(placeSelbar, 0));
     pagesEl.addEventListener('keyup', placeSelbar);
     let selTimer;
+    let selbarDown = 0;
     // Touch screens adjust a selection with handles, without a pointerup here.
     const onSelection = () => {
       clearTimeout(selTimer);
       selTimer = setTimeout(() => {
         const sel = window.getSelection();
         if (sel?.rangeCount && pagesEl.contains(sel.anchorNode)) placeSelbar();
-        else if (!selbar.hidden && (!sel || sel.isCollapsed)) closeSelbar();
+        // (A tap on the bar may clear the selection first, on a touch screen.)
+        else if (!selbar.hidden && (!sel || sel.isCollapsed) && Date.now() - selbarDown > 800) closeSelbar();
       }, 250);
     };
     document.addEventListener('selectionchange', onSelection);
-    pagesEl.addEventListener('scroll', closeSelbar, { passive: true });
-    selbar.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the selection
+    // (Docked, the bar does not follow the selection: scrolling keeps it.)
+    pagesEl.addEventListener('scroll', () => { if (!selbar.classList.contains('is-docked')) closeSelbar(); }, { passive: true });
+    selbar.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); // keep the selection
+      selbarDown = Date.now();
+    });
     selbar.addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (!b || !pending) return;
@@ -866,9 +956,13 @@ export async function mountPaper(el, opts = {}) {
       tint(editorEl, colorOf(a));
       const hl = viewer.querySelector(`.paper-hl[data-id="${CSS.escape(a.id)}"]`);
       place(editorEl, rect ?? hl?.getBoundingClientRect() ?? commentOf(a.id)?.getBoundingClientRect() ?? viewer.getBoundingClientRect());
-      const ta = editorEl.querySelector('[data-field="comment"]');
-      ta.focus({ preventScroll: true });
-      ta.setSelectionRange(ta.value.length, ta.value.length);
+      // A new comment is written at once; an existing one, on a touch
+      // screen, opens without the keyboard over it (tap the text to write).
+      if (isNew || !window.matchMedia('(pointer: coarse)').matches) {
+        const ta = editorEl.querySelector('[data-field="comment"]');
+        ta.focus({ preventScroll: true });
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+      }
     };
 
     function closeEditor() {
@@ -1043,6 +1137,10 @@ export async function mountPaper(el, opts = {}) {
       document.removeEventListener('pointerout', onOut);
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('pointerup', onSelectEnd);
+      document.removeEventListener('selectionchange', onSelectMove);
+      window.visualViewport?.removeEventListener('resize', fitDocked);
+      window.visualViewport?.removeEventListener('scroll', fitDocked);
       for (const f of cleanups) f();
       for (const n of el.querySelectorAll(':scope > .paper-pop')) n.remove();
     },
