@@ -36,3 +36,19 @@
 .reader-title { display: block; font-size: 1.15rem; font-weight: 600; }
 .reader-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; margin-top: .2rem; font-family: var(--font-sans); font-size: .82rem; color: var(--muted); }
 .reader-tag { color: var(--muted); }
+.reader-filters .n { margin-left: .3em; opacity: .65; font-variant-numeric: tabular-nums; }
+.reader-tagbar { display: contents; }
+.reader-tabs { display: flex; gap: 2px; margin: .8rem 0 .2rem; padding: 3px; width: fit-content; border-radius: 8px; background: color-mix(in srgb, var(--muted) 12%, transparent); font-family: var(--font-sans); }
+.reader-tabs button { font: inherit; font-size: .88rem; padding: .3rem .9rem; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.reader-tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.reader-comments { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.reader-comments .annotation { cursor: default; }
+.reader-comments .annotation-at { margin-right: 0; }
+.reader-comments .annotation-quote { margin: .4rem 0 .2rem; padding: 0 0 0 .6rem; border-left: 2px solid rgb(var(--hl) / .6); font-size: .86rem; }
+.reader-comments p.annotation-comment { margin: .35rem 0 0; }
+.reader-of { display: block; margin-top: .15rem; font-family: var(--font-sans); font-size: .8rem; color: var(--muted); }
+.reader-of a { color: inherit; }
+.reader-graph { height: min(72vh, 720px); min-height: 380px; }
+.reader-graph-help { font-family: var(--font-sans); font-size: .85rem; }
+main.page:has(.reader-graph) { max-width: min(84rem, 100%); }
+main.page:has(.reader-graph) .reader-head { max-width: var(--measure); margin: 0 auto; }

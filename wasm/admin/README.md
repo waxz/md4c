@@ -76,8 +76,16 @@ citations, paper notes with their PDF and comments, links between posts
 the admin, can read them — so the reader is your private blog, with no
 second site, build or copy of the storage:
 
-- **Private** posts are drafts; *Private* / *Public* filter the list, as do
-  the tags and the search box.
+- Three views: **Articles**, **Comments** (the highlights of every paper,
+  drafts included) and **Graph** (articles, comments and tag keywords as
+  nodes: links between articles, a comment's paper, what comments and
+  articles cite, and each article's and comment's tags). One filter bar
+  serves all three: search, *Private* / *Public* (private posts are
+  drafts), and the **tag keywords** of articles and comments together
+  (pick several: any of them). In the graph, a click on a tag filters by
+  it; on an article or a comment, opens it.
+- What a draft links to and its comments are read once and kept in this
+  browser until the draft changes.
 - To make a post public, publish it; to make it private again, unpublish
   it (*Unpublish (keep the draft)* in its ⋯ menu): its draft stays.
 - A post with a draft is read from its draft (what you are writing, saved);

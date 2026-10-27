@@ -41,7 +41,8 @@ const NOTE_RGB = {
  * exist become dim "missing" nodes, as in Obsidian. With `highlights`,
  * each paper's comments are nodes too (joined to their paper, and to the
  * highlights they and the posts link to: items' "refs"); `commentsOnly`
- * keeps just the comments and the posts joined to them.
+ * keeps just the comments and the posts joined to them. With both
+ * `tags` and `highlights`, a comment's tags are joined to it too.
  */
 export function graphData(items, { postHref, tags = false, tagHref, highlights = false, commentsOnly = false } = {}) {
   const nodes = new Map();
@@ -88,6 +89,13 @@ export function graphData(items, { postHref, tags = false, tagHref, highlights =
           href: paperHref.includes('#') ? paperHref : `${paperHref}#${h.id}`, paperHref, slug, highlight: h.id,
         });
         join(`p:${slug}`, `h:${h.id}`, true); // part of its paper: no direction
+        if (tags) { // a comment's tags, as a post's
+          for (const t of Array.isArray(h.tags) ? h.tags : []) {
+            const id = `t:${t}`;
+            if (!nodes.has(id)) nodes.set(id, { id, kind: TAG, label: `#${t}`, href: tagHref ? tagHref(t) : '' });
+            join(`h:${h.id}`, id, true);
+          }
+        }
       }
     }
     for (const e of posts) {
