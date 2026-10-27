@@ -20,7 +20,7 @@ import { PARSER_FLAGS } from './lib/blog-render.js';
 import { attachSourceSync } from './sync.js';
 import { publishPost } from './post-actions.js';
 import { Cancelled } from './tasks.js';
-import { drop, entryKey, keep, newId, read, setOpen, takeRestore } from './unsaved.js';
+import { drop, entryKey, isEmptyPost, keep, newId, read, setOpen, takeRestore } from './unsaved.js';
 import { LOCAL_ID } from './local-store.js';
 import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
 import {
@@ -312,18 +312,20 @@ export async function showEditor(view, store, key, newStore) {
   // (unsaved.js); the banner and the Storage page list them.
   const restoreId = takeRestore();
   ed.newId = isNew && restoreId?.startsWith(entryKey(null, null, '')) ? restoreId.slice(entryKey(null, null, '').length) : newId();
-  const stashKey = () => entryKey(ed.store, ed.key, ed.newId);
+  // (A published post with no draft yet is kept under its published key, so
+  // opening it again finds its unsaved changes.)
+  const stashKey = () => entryKey(ed.store ?? (ed.key ? 'site' : null), ed.key, ed.newId);
   let stashedAt = stashKey();
   function stash(content = text()) {
     const k = stashKey();
     if (stashedAt !== k) drop(stashedAt); // renamed, or a new post now saved
     stashedAt = k;
     if (content === ed.saved) drop(k);
-    else keep(k, { text: content, slug: slug(), title: f.title.value.trim(), store: ed.store, key: ed.key, target: ed.target });
+    else keep(k, { text: content, slug: slug(), title: f.title.value.trim(), store: ed.store ?? (ed.key ? 'site' : null), key: ed.key, target: ed.target });
     setOpen(k);
   }
   function unstash() {
-    drop(stashedAt, stashKey(), entryKey(null, null, ed.newId));
+    drop(stashedAt, stashKey(), entryKey(null, null, ed.newId), ...(ed.key ? [entryKey('site', ed.key)] : []));
     stashedAt = stashKey();
     setOpen(stashedAt);
   }
@@ -759,7 +761,11 @@ export async function showEditor(view, store, key, newStore) {
   }
 
   // Offer to restore text that was typed but never saved (e.g. tab closed).
-  const kept = read(stashedAt);
+  let kept = read(stashedAt);
+  if (kept && isEmptyPost(kept.text)) { // nothing in it: never offered
+    drop(stashedAt);
+    kept = null;
+  }
   const restore = () => {
     const r = parseFrontMatter(kept.text);
     fillFields(r.meta);

@@ -6,9 +6,25 @@
 // keystroke.
 //
 // Entry: { text, slug, title, at, store, key } — store/key: where the draft
-// is kept (null for a new post, with `target`, the store it will go to).
+// is kept ("site" for a published post with no draft yet; null for a new
+// post, with `target`, the store it will go to). An empty post (no title,
+// no text) is never kept.
+
+import { parseFrontMatter } from './lib/post-format.js';
+import { splitAnnotations } from './lib/paper.js';
 
 const PREFIX = 'md4c-admin:';
+
+/**
+ * Whether a post's text holds nothing worth keeping: no title, no text, no
+ * highlights (a new post whose fields were only looked at). Never kept.
+ */
+export function isEmptyPost(text) {
+  if (!String(text ?? '').trim()) return true;
+  const { meta, body } = parseFrontMatter(text);
+  const { body: notes, annotations } = splitAnnotations(body);
+  return !String(meta.title ?? '').trim() && !notes.trim() && !annotations.length;
+}
 const RESTORE = 'md4c-admin-restore';
 let open = ''; // the entry of the post open in the editor (not counted)
 
@@ -20,7 +36,8 @@ const changed = () => window.dispatchEvent(new CustomEvent('unsaved'));
 
 export function keep(k, data) {
   try {
-    localStorage.setItem(k, JSON.stringify({ ...data, at: Date.now() }));
+    if (isEmptyPost(data.text)) localStorage.removeItem(k);
+    else localStorage.setItem(k, JSON.stringify({ ...data, at: Date.now() }));
   } catch {}
   changed();
 }
@@ -45,13 +62,16 @@ export function drop(...keys) {
 /** Every entry, newest first: [{ id, text, slug, title, at, store, key, target }]. */
 export function list() {
   const out = [];
+  const empty = [];
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const id = localStorage.key(i);
       if (!id?.startsWith(PREFIX)) continue;
       const e = read(id);
-      if (e?.text) out.push({ ...e, id });
+      if (e?.text && !isEmptyPost(e.text)) out.push({ ...e, id });
+      else empty.push(id); // (kept by earlier versions: nothing in it)
     }
+    for (const id of empty) localStorage.removeItem(id);
   } catch {}
   return out.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
 }

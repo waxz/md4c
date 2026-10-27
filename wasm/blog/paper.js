@@ -116,10 +116,11 @@ export async function mountPaper(el, opts = {}) {
   const pagesEl = viewer.querySelector('.paper-pages');
 
   let pdfjs;
+  let loading;
   let doc;
   try {
     pdfjs = await loadPdfjs();
-    doc = await pdfjs.getDocument({
+    loading = pdfjs.getDocument({
       url: pdfUrl,
       isEvalSupported: false,
       enableXfa: false,
@@ -128,7 +129,8 @@ export async function mountPaper(el, opts = {}) {
       standardFontDataUrl: new URL('standard_fonts/', PDFJS).href,
       wasmUrl: new URL('wasm/', PDFJS).href,
       iccUrl: new URL('iccs/', PDFJS).href,
-    }).promise;
+    });
+    doc = await loading.promise;
   } catch (err) {
     pagesEl.innerHTML = `<p class="error">The PDF could not be opened: ${esc(err.message ?? err)}. <a href="${esc(pdfUrl)}">Open it directly</a></p>`;
     return null;
@@ -1035,7 +1037,7 @@ export async function mountPaper(el, opts = {}) {
     },
     destroy() {
       seen.disconnect();
-      doc.destroy();
+      loading.destroy(); // (the document's own destroy() is gone in pdf.js 6)
       document.removeEventListener('click', onRefClick);
       document.removeEventListener('pointerover', onOver);
       document.removeEventListener('pointerout', onOut);
