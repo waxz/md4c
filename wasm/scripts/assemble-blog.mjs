@@ -21,7 +21,7 @@ import { siteSettings } from '../js/site-build.js';
 import { versionAssets } from './version-assets.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -153,10 +153,36 @@ await cp(join(out, 'assets.json'), join(adminOut, 'site-assets.json'));
 await cp(join(root, 'admin', 'src', 'paths.js'), join(adminOut, 'paths.js'));
 // The admin's modules get content-hashed URLs too, and its page links them.
 const adminVersion = await versionAssets(adminOut, await jsFiles(adminOut));
-const adminHtml = join(adminOut, 'index.html');
-let html = await readFile(adminHtml, 'utf8');
-for (const file of ['admin.js', 'admin.css']) html = html.replace(`="${file}"`, `="${file}?v=${await adminVersion(file)}"`);
-await writeFile(adminHtml, html);
+// Its pages link their files with versions too, and name every module the
+// entry imports up front (modulepreload): the browser then fetches them all
+// at once, not one level of imports after another.
+/** The versioned modules `entry` imports statically, all levels down. */
+async function staticImports(entry) {
+  const seen = new Set();
+  const visit = async (rel) => {
+    const text = await readFile(join(adminOut, rel), 'utf8');
+    for (const m of text.matchAll(/(?:\bfrom\s*|\bimport\s+)(['"])(\.{1,2}\/[^'"?#]+)\?v=([^'"#]+)\1/g)) {
+      const dep = relative(adminOut, resolve(dirname(join(adminOut, rel)), m[2])).split(sep).join('/');
+      const url = `${dep}?v=${m[3]}`;
+      if (seen.has(url)) continue;
+      seen.add(url);
+      await visit(dep);
+    }
+  };
+  await visit(entry);
+  return [...seen].sort();
+}
+for (const [page, entry, links] of [
+  ['index.html', 'admin.js', ['admin.css']],
+  ['read.html', 'read.js', ['style.css', 'paper.css', 'reader.css', 'vendor/source-serif-4/opsz.css', 'vendor/source-serif-4/opsz-italic.css']],
+]) {
+  const file = join(adminOut, page);
+  let html = await readFile(file, 'utf8');
+  for (const f of [entry, ...links]) html = html.replace(`="${f}"`, `="${f}?v=${await adminVersion(f)}"`);
+  const preload = (await staticImports(entry)).map((u) => `<link rel="modulepreload" href="${u}">`).join('\n');
+  html = html.replace(/(<script type="module" src="[^"]+"><\/script>)/, `${preload}\n$1`);
+  await writeFile(file, html);
+}
 
 // What the service worker (sw.js) caches so the admin opens even when
 // Cloudflare Access has signed it out: the app's files at the addresses the

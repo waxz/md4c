@@ -56,7 +56,14 @@ export default {
       return withHeaders(await handleApi(request, env, user),
         { 'content-security-policy': API_CSP, 'cache-control': 'no-store' });
     }
-    return withHeaders(await env.ASSETS.fetch(request),
-      { 'content-security-policy': pageCsp(env), 'cache-control': 'no-cache' });
+    // A file asked for with its content hash (?v=…, see version-assets.mjs)
+    // never changes at that address: the browser keeps it, so a page loads
+    // its modules without a round trip each. Pages and plain addresses are
+    // checked every time.
+    const res = await env.ASSETS.fetch(request);
+    return withHeaders(res, {
+      'content-security-policy': pageCsp(env),
+      'cache-control': res.status === 200 && url.searchParams.has('v') ? 'private, max-age=31536000, immutable' : 'no-cache',
+    });
   },
 };

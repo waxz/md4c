@@ -39,8 +39,8 @@ function applyLook(site, meta = {}) {
 }
 
 /** The posts, one entry per post: its draft if it has one (with `published` noted), else the public copy. */
-async function library() {
-  const { posts } = await api.posts();
+async function library(listing) {
+  const { posts } = await listing;
   const live = new Map(posts.filter((p) => p.status === 'published').map((p) => [p.key, p]));
   const drafts = posts.filter(isDraft);
   const drafted = new Set(drafts.map((p) => p.key));
@@ -62,7 +62,7 @@ const CACHE = 'md4c-reader-1:'; // (versioned: what is kept changed)
  * (index.json): from index.json for a published post without a draft;
  * read and worked out here for a draft, kept in this browser per version.
  */
-async function postFacts(p, index, md4c) {
+async function postFacts(p, index) {
   if (!isDraft(p)) {
     const e = index.get(p.key);
     if (e) return { links: e.links ?? [], refs: e.refs ?? [], highlights: e.highlights ?? [] };
@@ -72,7 +72,7 @@ async function postFacts(p, index, md4c) {
     const hit = JSON.parse(localStorage.getItem(id) ?? 'null');
     if (hit?.etag === p.etag) return hit.facts;
   } catch {}
-  const { text } = await api.read(p.store, p.key);
+  const [{ text }, md4c] = await Promise.all([api.read(p.store, p.key), getMd4c()]);
   const { meta, body } = parseFrontMatter(text);
   const split = isPaper(meta) ? splitAnnotations(body) : { body, annotations: [] };
   const html = readProtected(text) ? '' : articleHtml(meta, body, (m) => md4c.toHtml(m, { parserFlags: PARSER_FLAGS }));
@@ -90,25 +90,23 @@ async function postFacts(p, index, md4c) {
 }
 
 async function allFacts(posts) {
-  const [md4c, index] = await Promise.all([
-    getMd4c(),
-    api.read('site', 'index.json').then((r) => new Map((JSON.parse(r.text).items ?? []).map((e) => [e.path, e])), () => new Map()),
-  ]);
+  // (index.json as init() read it; md4c only for a draft not kept here.)
+  const index = new Map((state.siteIndex?.items ?? []).filter((e) => e?.path).map((e) => [e.path, e]));
   let next = 0;
   await Promise.all(Array.from({ length: 6 }, async () => {
     while (next < posts.length) {
       const p = posts[next++];
-      p.facts = await postFacts(p, index, md4c).catch(() => ({ links: [], refs: [], highlights: [] }));
+      p.facts = await postFacts(p, index).catch(() => ({ links: [], refs: [], highlights: [] }));
       if (p.facts.title) p.title = p.facts.title;
       if (p.facts.tags && !p.tags) p.tags = p.facts.tags;
     }
   }));
 }
 
-async function showLibrary() {
+async function showLibrary(listing) {
   document.title = `Reader · ${state.site.title}`;
   document.querySelector('.reader-where').textContent = '';
-  const posts = await library();
+  const posts = await library(listing);
   app.innerHTML = `<header class="reader-head">
       <h1>${esc(state.site.title)}</h1>
       <p class="muted">Every post, as the blog shows it. <b>Private</b> ones are drafts: only you read them here.
@@ -255,20 +253,28 @@ async function showLibrary() {
     render();
   });
   render();
-  // Load the comments in the background: their tags join the tag keywords.
-  facts = allFacts(posts);
-  facts.then(() => { if (tab === 'articles') renderTagbar(); });
+  // Load the comments in the background once the list is up: their tags
+  // join the tag keywords. (Kept per version in this browser, so a later
+  // visit reads only the drafts changed since.)
+  setTimeout(() => {
+    facts ??= allFacts(posts);
+    facts.then(() => { if (tab === 'articles') renderTagbar(); });
+  }, 300);
 }
 
-async function showPost(key, storeParam) {
-  // The draft when there is one (what you are writing), else the public copy.
+async function showPost(key, storeParam, listing, reading) {
+  // The post in the store the link names (as the library links), else its
+  // draft when there is one (what you are writing), else the public copy.
+  // Published or not, as the site's index has it: no list of every post.
   let store = storeParam;
-  let published = null;
-  const posts = (await api.posts()).posts.filter((p) => p.key === key);
-  published = posts.find((p) => p.status === 'published') ?? null;
-  store ??= (posts.find(isDraft) ?? published)?.store;
-  if (!store) throw new Error(`There is no post ${key}.`);
-  const [{ text }, md4c] = await Promise.all([api.read(store, key), getMd4c()]);
+  let published = store === 'site' || (state.siteIndex?.items ?? []).some((e) => e?.path === key);
+  if (!store) {
+    const posts = (await listing).posts.filter((p) => p.key === key);
+    published = posts.some((p) => p.status === 'published');
+    store = (posts.find(isDraft) ?? posts.find((p) => p.status === 'published'))?.store;
+    if (!store) throw new Error(`There is no post ${key}.`);
+  }
+  const [{ text }, md4c] = await Promise.all([reading ?? api.read(store, key), getMd4c()]);
   const locked = readProtected(text);
   const { meta, body } = parseFrontMatter(text);
   const draft = store !== 'site';
@@ -333,12 +339,23 @@ async function showPost(key, storeParam) {
 }
 
 async function main() {
+  // The site's own stylesheet comes from the API: linked from here, not the
+  // page, so the page's scripts need not wait for it.
+  const theme = Object.assign(document.createElement('link'), { rel: 'stylesheet', href: 'api/file?bucket=site&key=theme.css' });
+  document.querySelector('link[data-paper-css]').before(theme);
   try {
+    const key = params.get('key');
+    const store = params.get('store') || undefined;
+    // The list of posts loads beside the session and settings (when needed).
+    // The post (or the list of posts) loads beside the session and settings.
+    const listing = key && store ? null : api.posts();
+    const reading = key && store ? api.read(store, key) : null;
+    for (const p of [listing, reading]) p?.catch(() => {});
+    if (key) getMd4c(); // (the Markdown engine, meanwhile)
     await init();
     applyLook(state.site);
-    const key = params.get('key');
-    if (key) await showPost(key, params.get('store') || undefined);
-    else await showLibrary();
+    if (key) await showPost(key, store, listing, reading);
+    else await showLibrary(listing);
   } catch (err) {
     console.error(err);
     app.innerHTML = `<p class="error">${esc(err.message ?? err)}</p><p><a href="read">All posts</a> · <a href="./#/posts">Admin</a></p>`;

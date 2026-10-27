@@ -32,6 +32,7 @@ export const state = {
   md4c: null,
   site: null, // normalized site settings
   rawSite: null,
+  siteIndex: null, // the site's index.json, as init() read it
 };
 
 // The last session and site settings, for when the server cannot be reached
@@ -73,6 +74,7 @@ export async function init() {
 }
 
 function applySiteIndex(index) {
+  state.siteIndex = index ?? null;
   state.rawSite = index?.site ?? null;
   state.site = normalizeSite(state.rawSite, state.session.publicUrl || location.href);
   if (!state.session.offline) remember({ rawSite: state.rawSite });
