@@ -7,15 +7,11 @@
 // shows what is running, and the list refreshes when it is done.
 
 import { api } from './client.js';
-import {
-  askDelete, askMoveTarget, askPublishTarget, deletePost, moveDraft, pageUrl, publishPost, transferPost, unpublishPost,
-} from './post-actions.js';
-import { draftStores, esc, formatTime, reportError, state, storeLabel } from './shared.js';
+import { askDelete, askMoveTarget, deletePost, moveDraft, publishPost, unpublishPost } from './post-actions.js';
+import { draftStores, esc, formatTime, publicUrl, reportError, state, storeLabel } from './shared.js';
 import { Cancelled, running } from './tasks.js';
 
 const editHref = (store, key) => `#/edit/${store}/${key}`;
-/** On a blog: the public one (status "published", store "site") or the private one ("private"). */
-const isLive = (p) => p.status === 'published' || p.status === 'private';
 
 // The posts on screen, by card index: { draft, published, title }.
 let cards = [];
@@ -24,11 +20,11 @@ function card(p, draft) {
   const index = cards.length;
   cards.push({
     draft: p.status === 'draft' ? { store: p.store, key: p.key, etag: p.etag } : draft ? { store: draft.store, key: draft.key, etag: draft.etag } : null,
-    published: isLive(p) ? { key: p.key, etag: p.etag, blog: p.store } : null,
+    published: p.status === 'published' ? { key: p.key, etag: p.etag } : null,
     title: (draft ?? p).title,
   });
   const busy = running().find((t) => t.key === p.key);
-  const live = isLive(p) ? pageUrl(p.key, p.store) : '';
+  const live = p.status === 'published' ? publicUrl(p.key.replace(/\.md$/, '.html')) : '';
   const tags = p.tags.split(',').map((t) => t.trim()).filter(Boolean);
   const open = draft ?? p;
   // Publishing copies the draft, so a draft saved later has changes not yet live.
@@ -38,7 +34,6 @@ function card(p, draft) {
       <span class="post-title">${esc((draft ?? p).title)}</span>
       <span class="post-meta">
         ${busy ? `<span class="chip chip-busy"><span class="spinner" aria-hidden="true"></span>${esc(busy.title.split(' “')[0])}…</span>` : ''}
-        ${p.status === 'private' ? '<span class="chip chip-private">private</span>' : ''}
         ${pending ? '<span class="chip chip-warn">changes not live</span>' : ''}
         ${open.status === 'draft' && draftStores().length > 1 ? `<span class="chip">${esc(storeLabel(open.store))}</span>` : ''}
         <span>${esc(p.date || formatTime(p.uploaded))}</span>
@@ -101,8 +96,7 @@ function renderPosts(view, { posts, problems = [] }, stale) {
   const typing = oldSearch && document.activeElement === oldSearch;
   const order = (a, b) => (b.date || b.uploaded).localeCompare(a.date || a.uploaded);
   const published = posts.filter((p) => p.status === 'published').sort(order);
-  const privatePosts = posts.filter((p) => p.status === 'private').sort(order);
-  const live = new Set([...published, ...privatePosts].map((p) => p.key));
+  const live = new Set(published.map((p) => p.key));
   const draftOf = new Map(posts.filter((p) => p.status === 'draft' && live.has(p.key)).map((p) => [p.key, p]));
   const drafts = posts.filter((p) => p.status === 'draft' && !live.has(p.key)).sort(order);
 
@@ -127,10 +121,7 @@ function renderPosts(view, { posts, problems = [] }, stale) {
       (state.session.stores.some((s) => s.role === 'drafts')
         ? section('Drafts', drafts.filter(match), 'No drafts. Start one with “New post”.')
         : '') +
-      section('Published', published.filter(match), 'Nothing published yet.', draftOf) +
-      (state.session.privateBlog
-        ? section('Private blog', privatePosts.filter(match), 'Nothing on the private blog yet: publish a draft there, or make a published post private.', draftOf)
-        : '');
+      section('Published', published.filter(match), 'Nothing published yet.', draftOf);
   };
   const search = view.querySelector('.search');
   search.value = query;
@@ -144,17 +135,14 @@ function renderPosts(view, { posts, problems = [] }, stale) {
 
 function actionsFor(post) {
   const { draft, published } = post;
-  const editStore = draft?.store ?? published.blog ?? 'site';
+  const editStore = draft?.store ?? 'site';
   const editKey = (draft ?? published).key;
-  const priv = published?.blog === 'private';
-  const hasPrivate = Boolean(state.session.privateBlog);
   return [
     { act: 'edit', label: 'Edit', href: editHref(editStore, editKey) },
-    draft ? { act: 'publish', label: published ? (priv ? 'Update the private blog' : 'Update site') : hasPrivate ? 'Publish…' : 'Publish', primary: true } : null,
-    published && hasPrivate ? { act: 'transfer', label: priv ? 'Make public (move to the public blog)' : 'Make private (move to the private blog)' } : null,
+    draft ? { act: 'publish', label: published ? 'Update site' : 'Publish', primary: true } : null,
     published ? { act: 'unpublish', label: draft ? 'Unpublish (keep the draft)' : 'Unpublish (keep as a draft)', hidden: !draftStores().length } : null,
     draft && draftStores().length > 1 ? { act: 'move', label: 'Move draft to…' } : null,
-    published ? { act: 'view', label: priv ? 'View on the private blog' : 'View on the blog', href: pageUrl(published.key, published.blog), external: true } : null,
+    published ? { act: 'view', label: 'View on the blog', href: publicUrl(published.key.replace(/\.md$/, '.html')), external: true } : null,
     { act: 'delete', label: 'Delete…', danger: true },
   ].filter((a) => a && !a.hidden);
 }
@@ -189,11 +177,7 @@ function wireMenus(view, rerender) {
       if (!act) return;
       closeMenu();
       try {
-        if (act === 'publish') {
-          // A new post: which blog; a published one is updated where it is.
-          const to = post.published ? post.published.blog : await askPublishTarget(post);
-          if (to) await publishPost(post, { to });
-        } else if (act === 'transfer') await transferPost(post);
+        if (act === 'publish') await publishPost(post);
         else if (act === 'unpublish') await unpublishPost(post);
         else if (act === 'move') {
           const to = await askMoveTarget(post);

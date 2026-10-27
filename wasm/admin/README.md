@@ -67,35 +67,6 @@ public bucket. In the Explorer, *Published site* shows each post's
 Markdown with a **🔒 private source** label: it is listed there because it
 belongs to the published post, but it lives in the private bucket.
 
-### The private blog
-
-Besides the public site, the admin has a **private blog**: the same blog
-(theme, settings, search, graph, paper notes, citations), read only in the
-admin at **`/blog/`** (the *Private blog* link at the top), behind the same
-Cloudflare Access sign-in. Guests never see it and search engines are told
-not to index it (`X-Robots-Tag: noindex`).
-
-- **Publishing:** with a private blog, *Publish…* asks where to: **the
-  public blog** or **the private blog**. The post and the files it uses go
-  there; a post is on one blog at a time.
-- **Moving:** a published post's ⋯ menu in *Posts* has **Make private**
-  and **Make public**: the post moves with its files, and both blogs are
-  updated. Made private, its files can also be deleted from the public
-  bucket (those no other public post uses; ticked by default). Publishing
-  a draft to the other blog moves it too.
-- *Posts* lists the private posts in their own section (marked
-  *private*); *Comments* includes the private papers.
-- **Storage:** the private blog lives in the drafts bucket (`DRAFTS`)
-  under `.private/`, or in its own bucket if a `PRIVATE` R2 binding is
-  added to the admin Worker. Without either, there is no private blog.
-  Its pages are built in the admin like the public site's, with the public
-  site's settings minus its address, analytics and search engines; files
-  it does not have (the banner, shared images) come from the public site.
-- The Worker API: `POST /api/publish` takes `to: "private"` (and `leave`,
-  the blog to take it off), `POST /api/transfer` `{ key, to, removeFiles }`
-  moves a published post between the blogs, `GET /api/posts` marks
-  private posts `status: "private"`.
-
 ## Draft stores
 
 ### This browser

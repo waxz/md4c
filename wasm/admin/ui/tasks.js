@@ -80,21 +80,17 @@ export const running = () => tasks.filter((t) => t.status === 'running');
 /* ---------- The site build: one at a time, requests merged ---------- */
 
 let building = false;
-// Waiting builds, one per blog ("site", "private"): requests for the same
-// blog join the one waiting; builds run one at a time.
-const pending = new Map(); // target -> { opts, runner, promise, resolve, reject }
+let pending = null; // { opts, runner, promise, resolve, reject }
 
 export function requestBuild(opts, runner) {
-  const target = opts.target ?? 'site';
-  const waiting = pending.get(target);
-  if (waiting) {
-    waiting.opts = {
-      ...waiting.opts, ...opts,
-      full: Boolean(waiting.opts.full || opts.full),
+  if (pending) {
+    pending.opts = {
+      ...pending.opts, ...opts,
+      full: Boolean(pending.opts.full || opts.full),
       ...(opts.site !== undefined ? { site: opts.site } : {}),
     };
-    waiting.runner = runner;
-    return waiting.promise;
+    pending.runner = runner;
+    return pending.promise;
   }
   let resolve;
   let reject;
@@ -103,21 +99,18 @@ export function requestBuild(opts, runner) {
     reject = rej;
   });
   promise.catch(() => {}); // reported in the panel; callers may not wait
-  pending.set(target, { opts: { ...opts, target }, runner, promise, resolve, reject });
+  pending = { opts: { ...opts }, runner, promise, resolve, reject };
   startBuild();
   return promise;
 }
 
 async function startBuild() {
-  if (building || !pending.size) return;
-  const [target, job] = pending.entries().next().value;
-  pending.delete(target);
+  if (building || !pending) return;
+  const job = pending;
+  pending = null;
   building = true;
-  const title = target === 'private'
-    ? (job.opts.full ? 'Rebuild every private page' : 'Update the private blog')
-    : (job.opts.full ? 'Rebuild every page' : 'Update the site');
   try {
-    job.resolve(await runTask(title, (ctx) => job.runner(job.opts, ctx)));
+    job.resolve(await runTask(job.opts.full ? 'Rebuild every page' : 'Update the site', (ctx) => job.runner(job.opts, ctx)));
   } catch (err) {
     job.reject(err);
   } finally {

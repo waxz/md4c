@@ -176,8 +176,4 @@ await writeFile(join(adminOut, 'offline.json'), offlineJson);
 const swPath = join(adminOut, 'sw.js');
 const sw = await readFile(swPath, 'utf8');
 await writeFile(swPath, sw.replace("'__BUILD__'", `'${createHash('sha256').update(offlineJson + sw).digest('hex').slice(0, 12)}'`));
-// The private blog's code (/blog/ on the admin, admin/src/api.js
-// servePrivateBlog): the public site's, as built above (its own versions;
-// not versioned again, not in the admin's offline list).
-await cp(out, join(adminOut, 'blog'), { recursive: true });
 console.log(`Admin app assembled in ${adminOut}`);

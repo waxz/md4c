@@ -18,13 +18,13 @@ import { citeStyle, parseBibtex, referenceText } from './lib/cite.js';
 import { annotationLabel, isPaper, joinAnnotations, paperHtml, paperPdf, sortAnnotations, splitAnnotations } from './lib/paper.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
 import { attachSourceSync } from './sync.js';
-import { askPublishTarget, pageUrl, publishPost } from './post-actions.js';
+import { publishPost } from './post-actions.js';
 import { Cancelled } from './tasks.js';
 import { drop, entryKey, isEmptyPost, keep, newId, read, setOpen, takeRestore } from './unsaved.js';
 import { LOCAL_ID } from './local-store.js';
 import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
 import {
-  confirmDialog, dialog, draftStores, esc, formatTime, getMd4c, rebuildSite, reportError, state,
+  confirmDialog, dialog, draftStores, esc, formatTime, getMd4c, publicUrl, rebuildSite, reportError, state,
   storeLabel, toast,
 } from './shared.js';
 
@@ -96,17 +96,13 @@ async function findDraft(stores, key) {
   return null;
 }
 
-/** { key, etag, text, blog } of the published copy of `key` (public site, else the private blog), or null. */
+/** { key, etag, text } of the published copy of `key`, or null. */
 async function readPublished(key) {
-  for (const blog of state.session?.privateBlog ? ['site', 'private'] : ['site']) {
-    const items = await api.listAll(blog, key);
-    if (!items.some((i) => i.key === key)) continue;
-    const { text, etag } = await api.read(blog, key);
-    return { key, etag, text, blog };
-  }
-  return null;
+  const items = await api.listAll('site', key);
+  if (!items.some((i) => i.key === key)) return null;
+  const { text, etag } = await api.read('site', key);
+  return { key, etag, text };
 }
-const isBlog = (store) => store === 'site' || store === 'private';
 
 /**
  * Open the editor. `store`/`key` = an existing post (posts/<slug>.md in the
@@ -123,7 +119,7 @@ export async function showEditor(view, store, key, newStore) {
   let source = `---\ntitle: \ndate: ${today()}\ntags: \n---\n\n`;
   if (!isNew) {
     try {
-      if (isBlog(store) && !direct) {
+      if (store === 'site' && !direct) {
         const draft = await findDraft(stores, key);
         if (draft) {
           history.replaceState(null, '', editHref(draft, key));
@@ -133,12 +129,12 @@ export async function showEditor(view, store, key, newStore) {
       ({ text: source, etag } = await api.read(store, key));
       if (!direct) {
         // Signed out: whether it is published is unknown; the draft still opens.
-        published = isBlog(store) ? { key, etag, text: source, blog: store }
+        published = store === 'site' ? { key, etag, text: source }
           : await readPublished(key).catch((err) => (err.code === 'offline' ? null : Promise.reject(err)));
       }
       // A protected post's public copy is encrypted; it records a digest of
       // the draft it was made from, so "changes not live" still works.
-      const locked = published && !isBlog(store) ? readProtected(published.text) : null;
+      const locked = published && store !== 'site' ? readProtected(published.text) : null;
       if (locked) published.text = locked.meta.source === await digest(source) ? source : '';
     } catch (err) {
       view.innerHTML = `<p class="error">${esc(err.message)}</p><p><a href="#/posts">Back to posts</a></p>`;
@@ -148,7 +144,7 @@ export async function showEditor(view, store, key, newStore) {
   await engine;
   const { meta, body } = parseFrontMatter(source);
   const extra = Object.fromEntries(Object.entries(meta).filter(([k]) => !KNOWN.includes(k)));
-  const noDraftYet = isNew || (isBlog(store) && !direct);
+  const noDraftYet = isNew || (store === 'site' && !direct);
   const ed = {
     // The draft (or, without draft stores, the site copy); null until saved.
     store: noDraftYet ? null : store,
@@ -168,8 +164,7 @@ export async function showEditor(view, store, key, newStore) {
   const home = () => ed.store ?? ed.target;
   const status = () => {
     if (direct) return ed.store ? 'Published' : 'New';
-    const word = ed.published?.blog === 'private' ? 'Private' : 'Published';
-    if (ed.published) return ed.store && (ed.dirty || ed.saved !== ed.published.text) ? `${word} · changes not live` : word;
+    if (ed.published) return ed.store && (ed.dirty || ed.saved !== ed.published.text) ? 'Published · changes not live' : 'Published';
     return ed.store ? 'Draft' : 'New';
   };
 
@@ -319,14 +314,14 @@ export async function showEditor(view, store, key, newStore) {
   ed.newId = isNew && restoreId?.startsWith(entryKey(null, null, '')) ? restoreId.slice(entryKey(null, null, '').length) : newId();
   // (A published post with no draft yet is kept under its published key, so
   // opening it again finds its unsaved changes.)
-  const stashKey = () => entryKey(ed.store ?? (ed.key ? ed.published?.blog ?? 'site' : null), ed.key, ed.newId);
+  const stashKey = () => entryKey(ed.store ?? (ed.key ? 'site' : null), ed.key, ed.newId);
   let stashedAt = stashKey();
   function stash(content = text()) {
     const k = stashKey();
     if (stashedAt !== k) drop(stashedAt); // renamed, or a new post now saved
     stashedAt = k;
     if (content === ed.saved) drop(k);
-    else keep(k, { text: content, slug: slug(), title: f.title.value.trim(), store: ed.store ?? (ed.key ? ed.published?.blog ?? 'site' : null), key: ed.key, target: ed.target });
+    else keep(k, { text: content, slug: slug(), title: f.title.value.trim(), store: ed.store ?? (ed.key ? 'site' : null), key: ed.key, target: ed.target });
     setOpen(k);
   }
   function unstash() {
@@ -351,11 +346,10 @@ export async function showEditor(view, store, key, newStore) {
   function renderActions() {
     renderStatus();
     const liveKey = direct ? (ed.store ? ed.key : null) : ed.published?.key;
-    const priv = ed.published?.blog === 'private';
-    const live = liveKey ? pageUrl(liveKey, priv ? 'private' : 'site') : '';
+    const live = liveKey ? publicUrl(`posts/${liveKey.slice(6, -3)}.html`) : '';
     const isLive = Boolean(liveKey);
     actions.innerHTML = [
-      `<button type="button" class="btn btn-primary" data-act="publish">${isLive ? (priv ? 'Update private blog' : 'Update site') : state.session.privateBlog ? 'Publish…' : 'Publish'}</button>`,
+      `<button type="button" class="btn btn-primary" data-act="publish">${isLive ? 'Update site' : 'Publish'}</button>`,
       direct ? '' : '<button type="button" class="btn" data-act="draft">Save draft</button>',
       live ? `<a class="btn" href="${esc(live)}" target="_blank" rel="noopener">View</a>` : '',
       ed.store || ed.published ? '<a class="more-actions muted" href="#/posts">Unpublish or delete: ⋯ in Posts</a>' : '',
@@ -922,20 +916,13 @@ export async function showEditor(view, store, key, newStore) {
           // 2. Copy it, with its files, to the site: in the background
           // (Activity panel), so writing can go on meanwhile.
           const renamedFrom = ed.published && ed.published.key !== ed.key ? ed.published : null;
-          const post = {
+          const job = publishPost({
             draft: { store: ed.store, key: ed.key, etag: ed.etag },
-            published: ed.published ? { key: ed.published.key, etag: ed.published.etag, blog: ed.published.blog ?? 'site' } : null,
+            published: ed.published ? { key: ed.published.key, etag: ed.published.etag } : null,
             title: f.title.value.trim(),
-          };
-          // A new post: which blog (public, or the private one); else where it is.
-          const to = post.published ? post.published.blog : await askPublishTarget(post);
-          if (!to) {
-            toast('Saved as a draft; not published.', 'info');
-            return;
-          }
-          const job = publishPost(post, { alsoRemove: renamedFrom, to });
+          }, { alsoRemove: renamedFrom });
           job.then((r) => {
-            ed.published = { key: ed.key, etag: r.post.etag, text: content, blog: to };
+            ed.published = { key: ed.key, etag: r.post.etag, text: content };
             if (current === ed) renderActions();
           }, (err) => {
             if (err instanceof Cancelled) toast('Saved as a draft; not published.', 'info');
@@ -962,7 +949,7 @@ export async function showEditor(view, store, key, newStore) {
           }
           return;
         }
-        if (err instanceof ApiError && ['exists', 'draft-exists', 'published-exists', 'private-exists'].includes(err.code)) {
+        if (err instanceof ApiError && ['exists', 'draft-exists', 'published-exists'].includes(err.code)) {
           form.querySelector('.meta-fields').open = true;
           f.slug.focus();
         }

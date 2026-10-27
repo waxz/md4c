@@ -119,7 +119,6 @@ export function keyProblem(key) {
  */
 export function classify(role, key) {
   if (keyProblem(key)) return 'locked';
-  if (role === 'private') role = 'site'; // the private blog is laid out as the site
   const parts = key.split('/');
   const ext = extension(key);
   if (role !== 'site') {

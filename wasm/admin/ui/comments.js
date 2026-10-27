@@ -5,7 +5,7 @@
 // paper replaces it here). A highlight opens in the editor, at its place.
 
 import { api } from './client.js';
-import { esc, reportError, state } from './shared.js';
+import { esc, reportError } from './shared.js';
 import { parseFrontMatter } from './lib/post-format.js';
 import { annotationSummary, isPaper, referencedIds, sortAnnotations, splitAnnotations } from './lib/paper.js';
 import { renderHighlights } from './highlights.js';
@@ -38,28 +38,20 @@ export async function showComments(view) {
     <div class="hl-body"><p class="muted">Loading…</p></div>
   </div>`;
   const body = view.querySelector('.hl-body');
-  const readIndex = (blog) => api.read(blog, 'index.json').then((r) => JSON.parse(r.text)).catch(() => null);
-  const [{ posts }, publicIndex, privateIndex] = await Promise.all([
-    api.posts(), readIndex('site'), state.session.privateBlog ? readIndex('private') : null,
+  const [{ posts }, index] = await Promise.all([
+    api.posts(),
+    api.read('site', 'index.json').then((r) => JSON.parse(r.text)).catch(() => null),
   ]);
-  // Both blogs' papers (a post is on one of them), each item knowing its blog.
-  const index = { items: [
-    ...(publicIndex?.items ?? []).map((e) => ({ ...e, blog: 'site' })),
-    ...(privateIndex?.items ?? []).map((e) => ({ ...e, blog: 'private' })),
-  ] };
   const drafts = posts.filter((p) => p.status === 'draft');
   const drafted = new Set(drafts.map((p) => p.key));
   const papers = [];
   // The graph's posts: the published ones, with each draft in place of its
   // published copy (store = where the editor opens it).
-  const graphItems = new Map((index?.items ?? []).filter((e) => e?.path).map((e) => [e.path, { ...e, store: e.blog }]));
+  const graphItems = new Map((index?.items ?? []).filter((e) => e?.path).map((e) => [e.path, { ...e, store: 'site' }]));
   for (const e of index?.items ?? []) {
     if (!Array.isArray(e?.highlights) || !e.highlights.length || drafted.has(e.path)) continue;
     const slug = e.path.slice('posts/'.length, -'.md'.length);
-    papers.push({
-      title: e.metadata?.title || slug, date: e.metadata?.date ?? '', href: editHref(e.blog, e.path), list: e.highlights,
-      ...(e.blog === 'private' ? { badge: 'private' } : {}),
-    });
+    papers.push({ title: e.metadata?.title || slug, date: e.metadata?.date ?? '', href: editHref('site', e.path), list: e.highlights });
   }
   const live = new Set((index?.items ?? []).map((e) => e?.path));
   const failed = [];

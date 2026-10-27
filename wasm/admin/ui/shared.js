@@ -90,21 +90,6 @@ export function publicUrl(key) {
   return state.session.publicUrl ? new URL(key, state.session.publicUrl).href : '';
 }
 
-/** A page of the private blog (served by the admin at /blog/). */
-export const privateUrl = (key = '') => new URL(`blog/${key}`, location.href.split('#')[0]).href;
-
-/** The blog a post's page is on: "site" (public) or "private". */
-export const blogLabel = (blog) => (blog === 'private' ? 'the private blog' : 'the public blog');
-
-/**
- * The private blog's settings: the public site's, without what is only for
- * the public (its address, analytics, search engines), and marked private.
- */
-export function privateSiteSettings(raw = state.rawSite ?? {}) {
-  const { url, googleTag, verification, indexNowKey, ...rest } = raw ?? {};
-  return { ...rest, title: `${rest.title || 'Blog'} · private`, search: 'none' };
-}
-
 /* ---------- Formatting ---------- */
 
 export function esc(s) {
@@ -218,7 +203,6 @@ export function reportError(err, what = 'That did not work') {
  * Resolves with the build result. Options as for lib/site-build.js build().
  */
 export function rebuildSite(opts = {}) {
-  if (opts.target === 'private') return rebuildPrivate(opts);
   return requestBuild(opts, async (merged, { log, step }) => {
     step('Loading the site build…');
     const [{ build }, { adminStorage }, md4c] = await Promise.all([
@@ -244,33 +228,6 @@ export function rebuildSite(opts = {}) {
     });
     await refreshSite();
     log(`${result.rendered.length} page(s) rendered${result.removed.length ? `, ${result.removed.length} removed` : ''}.`);
-    window.dispatchEvent(new CustomEvent('site-updated'));
-    return result;
-  });
-}
-
-/**
- * Update the private blog (/blog/ on the admin): the same build, from the
- * private store, with the public site's settings (privateSiteSettings).
- */
-export function rebuildPrivate(opts = {}) {
-  if (!state.session?.privateBlog) return Promise.resolve(null);
-  return requestBuild({ ...opts, target: 'private' }, async (merged, { log, step }) => {
-    step('Loading the site build…');
-    const [{ build }, { adminStorage }, md4c] = await Promise.all([
-      import('./lib/site-build.js'), import('./admin-storage.js'), getMd4c(),
-    ]);
-    const assets = await fetch(new URL('./site-assets.json', import.meta.url))
-      .then((r) => (r.ok ? r.json() : undefined), () => undefined);
-    step(merged.full ? 'Rendering every private page…' : 'Rendering changed private pages…');
-    const result = await build(adminStorage('private'), md4c, {
-      ...merged, site: privateSiteSettings(merged.site ?? state.rawSite), ...(assets ? { assets } : {}),
-      log: (line) => {
-        log(line);
-        if (/^(upload|delete) /.test(line)) step(line);
-      },
-    });
-    log(`${result.rendered.length} private page(s) rendered${result.removed.length ? `, ${result.removed.length} removed` : ''}.`);
     window.dispatchEvent(new CustomEvent('site-updated'));
     return result;
   });
