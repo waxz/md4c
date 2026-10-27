@@ -106,7 +106,7 @@ describe('Cloudflare Access', () => {
     const r = await call('GET', '/api/session');
     assert.equal(r.status, 200);
     assert.equal(r.data.email, 'owner@example.com');
-    assert.deepEqual(r.data.stores.map((s) => `${s.id}:${s.role}:${s.type}`), ['site:site:r2', 'drafts:drafts:r2', 'nas:drafts:webdav']);
+    assert.deepEqual(r.data.stores.map((s) => `${s.id}:${s.role}:${s.type}`), ['site:site:r2', 'private:private:r2', 'drafts:drafts:r2', 'nas:drafts:webdav']);
   });
 
   test('missing, forged, foreign, expired or unauthorised tokens are refused', async () => {
@@ -764,5 +764,59 @@ describe('large uploads', () => {
     assert.equal(tooBig.status, 413);
     assert.match(tooBig.data.error ?? JSON.stringify(tooBig.data), /12 MB/);
     await put('site', 'index.json', typeof index === 'string' ? index : JSON.stringify(index ?? { version: 1, items: [] }));
+  });
+});
+
+describe('the private blog', () => {
+  const md = (title, extra = '') => `---\ntitle: ${title}\ndate: 2026-10-27\n---\n\n${extra}Body.\n`;
+  test('a draft is published to the private blog, not the public one', async () => {
+    await create('drafts', 'posts/secret-diary.md', md('Diary', '![](diary.png)\n\n'));
+    await create('drafts', 'posts/diary.png', 'PNG');
+    const r = await publish('drafts', 'posts/secret-diary.md', { to: 'private' });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.blog, 'private');
+    assert.equal(await read('private', 'posts/secret-diary.md'), md('Diary', '![](diary.png)\n\n'));
+    assert.equal(await read('private', 'posts/diary.png'), 'PNG');
+    assert.equal(await read('site', 'posts/secret-diary.md'), null, 'not public');
+    assert.equal(await read('site', 'posts/diary.png'), null, 'its files neither');
+    const posts = (await call('GET', '/api/posts')).data.posts;
+    assert.equal(posts.find((p) => p.key === 'posts/secret-diary.md' && p.store === 'private')?.status, 'private');
+    assert.equal((await call('GET', '/api/session')).data.privateBlog, true);
+  });
+
+  test('a published post moves between the blogs, with its files', async () => {
+    const dry = await postJson('/api/transfer', { key: 'posts/secret-diary.md', to: 'site', dryRun: true });
+    assert.deepEqual(dry.data.files.map((f) => `${f.action} ${f.key}`), ['copy posts/diary.png']);
+    const out = await postJson('/api/transfer', { key: 'posts/secret-diary.md', to: 'site' });
+    assert.equal(out.status, 200, JSON.stringify(out.data));
+    assert.ok(await read('site', 'posts/secret-diary.md'));
+    assert.equal(await read('site', 'posts/diary.png'), 'PNG');
+    assert.equal(await read('private', 'posts/secret-diary.md'), null);
+    const back = await postJson('/api/transfer', { key: 'posts/secret-diary.md', to: 'private', removeFiles: true });
+    assert.deepEqual(back.data.removed, ['posts/diary.png'], 'made private: its files leave the public bucket');
+    assert.equal(await read('site', 'posts/diary.png'), null);
+    assert.equal(await read('private', 'posts/diary.png'), 'PNG');
+  });
+
+  test('publishing to the other blog takes the post down from the one it was on', async () => {
+    const r = await publish('drafts', 'posts/secret-diary.md', { to: 'site', leave: 'private' });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.ok(await read('site', 'posts/secret-diary.md'));
+    assert.equal(await read('private', 'posts/secret-diary.md'), null);
+    const clash = await publish('drafts', 'posts/secret-diary.md', { to: 'private' });
+    assert.equal(clash.data.code, 'published-exists', 'without leave, the public copy is a conflict');
+  });
+
+  test('/blog/ serves the private blog, behind Access, never indexed', async () => {
+    await put('private', 'index.html', '<!doctype html><title>Private</title>');
+    const res = await worker.fetch(new Request('https://admin.test/blog/', { headers: { 'cf-access-jwt-assertion': await token() } }), env);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type'), /text\/html/);
+    assert.equal(res.headers.get('x-robots-tag'), 'noindex, nofollow');
+    assert.match(await res.text(), /Private/);
+    const anon = await worker.fetch(new Request('https://admin.test/blog/'), env);
+    assert.notEqual(anon.status, 200, 'not without signing in');
+    const code = await worker.fetch(new Request('https://admin.test/blog/app.js', { headers: { 'cf-access-jwt-assertion': await token() } }), env);
+    assert.equal(code.status, 200, 'the blog code comes from the admin assets');
   });
 });

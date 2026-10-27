@@ -20,7 +20,7 @@ let editorModule = null;
 const editor = async () => (editorModule ??= await import('./editor.js'));
 const explorer = () => import('./explorer.js');
 import { DEFAULT_SITE, googleTagId, normalizeSite } from './lib/site-config.js';
-import { esc, init, publicUrl, rebuildSite, reportError, state, toast } from './shared.js';
+import { esc, init, publicUrl, rebuildPrivate, rebuildSite, reportError, state, toast } from './shared.js';
 
 const view = document.getElementById('view');
 
@@ -186,9 +186,11 @@ async function showSettings() {
         if (obj) {
           toast('Saving the settings and rebuilding every page in the background.', 'info');
           rebuildSite({ site: obj, full: true }).then(() => toast('Settings saved; every page rebuilt.', 'success'), () => {});
+          rebuildPrivate({ site: obj, full: true }).catch(() => {}); // the private blog follows the settings
         }
       } else if (act === 'rebuild') {
         rebuildSite({ full: true }).then(() => toast('Every page rebuilt.', 'success'), () => {});
+        rebuildPrivate({ full: true }).catch(() => {});
       } else if (act === 'indexnow') {
         const items = await api.listAll('site', 'posts/');
         const urls = [publicUrl('index.html'), ...items.filter((i) => i.key.endsWith('.html')).map((i) => publicUrl(i.key))];
@@ -267,6 +269,8 @@ async function main() {
   const site = document.querySelector('.view-site');
   if (state.session.publicUrl) site.href = publicUrl('index.html');
   else site.hidden = true;
+  // The private blog (/blog/ here, behind the same sign-in).
+  document.querySelector('.view-private').hidden = !state.session.privateBlog;
   document.querySelector('.app-title').textContent = `${state.site.title} · Admin`;
   document.title = `Admin · ${state.site.title}`;
   if (!location.hash) history.replaceState(null, '', '#/posts');

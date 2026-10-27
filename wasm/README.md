@@ -389,6 +389,12 @@ same site build in the browser, while a small Worker checks every write: the
 Access identity, allowed paths, create-or-update preconditions, and file,
 folder and slug conflicts. See [admin/README.md](admin/README.md).
 
+### A private blog
+
+The admin also has a private blog, only for you: publish a post to it
+instead of the public blog, or move posts between the two (*Make
+private* / *Make public*). See [admin/README.md](admin/README.md#the-private-blog).
+
 ### Hosting on Cloudflare R2
 
 See [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md). In short, the site and the

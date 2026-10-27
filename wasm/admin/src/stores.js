@@ -608,7 +608,7 @@ function folderPath(id, v) {
 export function normalizeStore(input, previous) {
   if (!input || typeof input !== 'object') throw new StoreConfigError('each store must be an object');
   const id = str(input.id, 31);
-  if (!ID_RE.test(id) || id === 'site' || id === 'local') {
+  if (!ID_RE.test(id) || id === 'site' || id === 'local' || id === 'private') {
     throw new StoreConfigError(`store id "${id}" must start with a letter and use lowercase letters, digits and dashes, and not be "site" or "local" (this browser's own store)`);
   }
   const type = str(input.type, 20);
@@ -834,10 +834,20 @@ async function serverStores(env) {
       ? withPrivateSources(r2Store(env.SITE), prefixedStore(r2Store(sourcesBucket), env.SOURCES?.put ? '' : '.published/'))
       : withoutPublicSources(r2Store(env.SITE));
     const stores = new Map([['site', { id: 'site', label: 'Published site', role: 'site', type: 'r2', location: 'deploy', store: siteStore }]]);
+    // The private blog: a second site, built like the public one, read only
+    // through the admin (/blog/, behind Access). Its own bucket (PRIVATE),
+    // else the drafts bucket under .private/.
+    const privateBucket = env.PRIVATE?.put ? env.PRIVATE : env.DRAFTS?.put ? env.DRAFTS : null;
+    if (privateBucket) {
+      stores.set('private', {
+        id: 'private', label: 'Private blog', role: 'private', type: 'r2', location: 'deploy',
+        store: prefixedStore(r2Store(privateBucket), env.PRIVATE?.put ? '' : '.private/'),
+      });
+    }
     const problems = [];
     for (const cfg of deployedConfigs(env)) {
-      if (!ID_RE.test(cfg?.id ?? '') || cfg.id === 'site' || cfg.id === 'local') {
-        throw new StoreConfigError(`draft store id "${cfg?.id}" must be lowercase letters, digits and dashes, and not "site" or "local"`);
+      if (!ID_RE.test(cfg?.id ?? '') || cfg.id === 'site' || cfg.id === 'local' || cfg.id === 'private') {
+        throw new StoreConfigError(`draft store id "${cfg?.id}" must be lowercase letters, digits and dashes, and not "site", "local" or "private"`);
       }
       if (stores.has(cfg.id)) throw new StoreConfigError(`duplicate draft store id "${cfg.id}"`);
       const label = String(cfg.label ?? cfg.id).slice(0, 60);

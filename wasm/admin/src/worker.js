@@ -3,7 +3,7 @@
 // public R2 bucket directly.
 
 import { AuthError, verifyAccess } from './access.js';
-import { handleApi } from './api.js';
+import { handleApi, servePrivateBlog } from './api.js';
 
 /** The admin pages' CSP; images may also come from the public blog (previews). */
 function pageCsp(env) {
@@ -55,6 +55,13 @@ export default {
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
       return withHeaders(await handleApi(request, env, user),
         { 'content-security-policy': API_CSP, 'cache-control': 'no-store' });
+    }
+    if (url.pathname === '/blog') return Response.redirect(new URL('/blog/', url).href, 301);
+    if (url.pathname.startsWith('/blog/')) {
+      // The private blog: never indexed, never cached by a shared cache.
+      return withHeaders(await servePrivateBlog(request, env), {
+        'content-security-policy': pageCsp(env), 'cache-control': 'private, no-cache', 'x-robots-tag': 'noindex, nofollow',
+      });
     }
     return withHeaders(await env.ASSETS.fetch(request),
       { 'content-security-policy': pageCsp(env), 'cache-control': 'no-cache' });

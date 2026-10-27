@@ -188,6 +188,14 @@ export const api = {
   deleteFolder: (store, prefix) => (isLocal(store) ? localStore.deleteFolder(prefix) : request('DELETE', `folder?${q({ store, prefix })}`)),
 
   /** Copy a draft store's attachment to the site at the same path. */
+  /** Move a published post to the other blog ("site" or "private"), with its files. */
+  transfer(key, to, { ifMatch, overwrite = [], dryRun = false, removeFiles = false } = {}) {
+    return request('POST', 'transfer', {
+      body: JSON.stringify({ key, to, overwrite, dryRun, removeFiles, ...(ifMatch ? { ifMatch } : {}) }),
+      headers: { 'content-type': 'application/json' },
+    });
+  },
+
   async copyToSite(store, key, { overwrite = false, ifMatch } = {}) {
     if (!isLocal(store)) {
       return request('POST', 'copy', {
@@ -264,10 +272,12 @@ export const api = {
 
   /** Copy a draft to the site with the files it uses (the draft stays).
    *  `overwrite` lists public files to replace; `siteEtag` = the public copy last seen. */
-  publish(from, etag, overwrite = [], siteEtag, { skip = [], dryRun = false, postBody } = {}) {
+  /** Publish a draft to the public site (to: "site") or the private blog ("private"); `leave`: the other blog, taken down. */
+  publish(from, etag, overwrite = [], siteEtag, { skip = [], dryRun = false, postBody, to = 'site', leave } = {}) {
     return request('POST', 'publish', {
       body: JSON.stringify({
         from, ...(etag ? { ifMatch: etag } : {}), ...(siteEtag ? { siteIfMatch: siteEtag } : {}), overwrite, skip, dryRun,
+        to, ...(leave ? { leave } : {}),
         ...(postBody !== undefined ? { postBody } : {}),
       }),
       headers: { 'content-type': 'application/json' },

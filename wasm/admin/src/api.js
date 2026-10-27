@@ -206,15 +206,24 @@ async function checkNewKey(stores, entry, key, ignore) {
   await checkPathShape(entry, key);
   const slug = postSlug(key);
   if (!slug) return;
+  const ignored = [ignore].flat().filter(Boolean); // { store, key }s that may keep it
   for (const other of stores.values()) {
-    if (other === entry || (ignore && ignore.store === other.id && ignore.key === key)) continue;
+    if (other === entry || ignored.some((i) => i.store === other.id && i.key === key)) continue;
     if (await other.store.head(key)) {
-      throw new ApiError(409, other.role === 'site'
-        ? `A published post already uses the slug "${slug}"`
-        : `A draft in "${other.label}" already uses the slug "${slug}"; publish or delete it instead`,
-      { code: other.role === 'site' ? 'published-exists' : 'draft-exists', store: other.id });
+      throw new ApiError(409, other.role === 'site' ? `A published post already uses the slug "${slug}"`
+        : other.role === 'private' ? `A post on the private blog already uses the slug "${slug}"`
+          : `A draft in "${other.label}" already uses the slug "${slug}"; publish or delete it instead`,
+      { code: other.role === 'site' ? 'published-exists' : other.role === 'private' ? 'private-exists' : 'draft-exists', store: other.id });
     }
   }
+}
+
+/** The blog a post is published to: "site" (public) or "private". */
+function blogOf(stores, id = 'site') {
+  if (id !== 'site' && id !== 'private') throw new ApiError(400, 'The blog is "site" or "private"', { code: 'bad-path' });
+  const entry = stores.get(id);
+  if (!entry) throw new ApiError(400, 'There is no private blog: bind a private R2 bucket (DRAFTS or PRIVATE) to the admin Worker', { code: 'no-private-blog' });
+  return entry;
 }
 
 // The largest upload: "maxUploadMb" in the site settings (the admin's
@@ -392,7 +401,7 @@ async function moveFile(request, stores) {
   if ((postSlug(from.key) !== null) !== (postSlug(to.key) !== null)) {
     throw new ApiError(400, 'A post (posts/<slug>.md) can only move to another post path', { code: 'bad-path' });
   }
-  if (postSlug(to.key) && dst.role === 'site' && src.role !== 'site') {
+  if (postSlug(to.key) && (dst.role === 'site' || dst.role === 'private') && src.role === 'drafts') {
     throw new ApiError(400, 'Publish drafts with /api/publish, which also copies their files', { code: 'use-publish' });
   }
   if (src === dst && from.key === to.key) throw new ApiError(400, 'Source and destination are the same');
@@ -432,7 +441,11 @@ async function publish(request, stores) {
   const { from } = endpoints(body);
   if (!from) throw new ApiError(400, 'Body must be { from: {store, key}, ifMatch?, overwrite? }');
   const src = storeOf(stores, from.store);
-  const site = stores.get('site');
+  // To the public site (the default) or the private blog; `leave`: the
+  // other blog, where the post was, taken down once this one has it.
+  const site = blogOf(stores, body.to ?? 'site');
+  const leave = body.leave ? blogOf(stores, body.leave) : null;
+  if (leave === site) throw new ApiError(400, 'leave is the other blog');
   if (src.role !== 'drafts') throw new ApiError(400, 'Only drafts can be published', { code: 'bad-path' });
   if (!['undefined', 'string'].includes(typeof body.siteIfMatch)) throw new ApiError(400, 'siteIfMatch must be a string');
   if (!postSlug(from.key)) throw new ApiError(400, 'Only posts (posts/<slug>.md) can be published', { code: 'bad-path' });
@@ -462,7 +475,7 @@ async function publish(request, stores) {
   }
   const live = await site.store.head(from.key);
   if (!live) {
-    await checkNewKey(stores, site, from.key, from);
+    await checkNewKey(stores, site, from.key, [from, leave && { store: leave.id, key: from.key }]);
   } else if (body.siteIfMatch && stripQuotes(body.siteIfMatch) !== live.etag) {
     throw new ApiError(412, `The published ${from.key} was changed elsewhere since you opened it`,
       { code: 'changed', current: info(site, live), published: true });
@@ -522,12 +535,122 @@ async function publish(request, stores) {
   const published = await site.store.put(from.key, publicBody, putOpts(from.key, live && body.siteIfMatch ? live.etag : undefined));
   if (!published) throw new ApiError(412, `The published ${from.key} changed during publishing; try again`, { code: 'changed', published: true });
   rememberSummary(site, published, publicBody);
+  if (leave) await leave.store.delete(from.key); // (its files stay: other posts may use them)
   return json({
+    blog: site.id,
+    ...(leave ? { left: leave.id } : {}),
     post: info(site, published),
     draft: info(src, post.meta),
     updated: Boolean(live),
     files: Object.fromEntries(['copy', 'identical', 'overwrite', 'skip'].map((a) => [a, plan.filter((p) => p.action === a).map((p) => p.key)])),
   });
+}
+
+/**
+ * Move a published post between the public site and the private blog:
+ * { key, to: "site" | "private", ifMatch?, overwrite?, dryRun?, removeFiles? }.
+ * The files it uses go along (copied; identical ones kept, different ones a
+ * conflict unless in `overwrite`); with `removeFiles`, those no other post
+ * of the blog it leaves uses are deleted there (a post made private takes
+ * its images out of the public bucket). The draft, if any, is untouched.
+ */
+async function transfer(request, stores) {
+  const body = await request.json().catch(() => ({}));
+  const to = blogOf(stores, body.to);
+  const from = blogOf(stores, to.id === 'site' ? 'private' : 'site');
+  const key = requireKey(String(body.key ?? ''));
+  if (!postSlug(key)) throw new ApiError(400, 'Only posts (posts/<slug>.md) move between blogs', { code: 'bad-path' });
+  const post = await from.store.get(key);
+  if (!post) throw new ApiError(404, `${key} is not on ${from.label}`, { code: 'not-found' });
+  if (body.ifMatch && stripQuotes(body.ifMatch) !== post.meta.etag) {
+    throw new ApiError(412, `${key} was changed elsewhere since you opened it`, { code: 'changed', current: info(from, post.meta) });
+  }
+  if (await to.store.head(key)) throw new ApiError(409, `${to.label} already has ${key}`, { code: 'exists' });
+  const overwrite = new Set(Array.isArray(body.overwrite) ? body.overwrite : []);
+  const text = new TextDecoder().decode(post.body);
+  const plan = [];
+  const conflicts = [];
+  for (const k of referencedKeys(text, key)) {
+    if (classify('site', k) !== 'asset') continue;
+    const m = await from.store.head(k);
+    if (!m) continue;
+    const there = await to.store.head(k);
+    if (!there) plan.push({ key: k, action: 'copy', size: m.size, write: true });
+    else if (await sameFile(from, to, k, m, there)) plan.push({ key: k, action: 'identical', size: m.size });
+    else if (overwrite.has(k)) plan.push({ key: k, action: 'overwrite', size: m.size, write: true, ifMatch: there.etag });
+    else conflicts.push({ key: k, size: m.size, reason: `a different file with this name is on ${to.label}` });
+  }
+  if (body.dryRun) return json({ dryRun: true, files: [...plan, ...conflicts.map((c) => ({ ...c, action: 'conflict' }))].map(({ write, ifMatch, ...f }) => f) });
+  if (conflicts.length) {
+    throw new ApiError(409, `${to.label} has ${conflicts.length} different file(s) with the same name`, { code: 'asset-conflict', assets: conflicts });
+  }
+  for (const step of plan) {
+    if (!step.write) continue;
+    const written = await copyFile(from, to, step.key, step.size, putOpts(step.key, step.ifMatch));
+    if (!written) throw new ApiError(412, `${step.key} changed during the move; try again`, { code: 'changed' });
+  }
+  const written = await to.store.put(key, post.body, putOpts(key));
+  rememberSummary(to, written, post.body);
+  await from.store.delete(key);
+  // The files left behind: removed where no other post of that blog uses them.
+  const removed = [];
+  if (body.removeFiles && plan.length) {
+    const used = new Set();
+    for (const m of (await listFolder(from, 'posts/')).items) {
+      if (!postSlug(m.key) || m.key === key) continue;
+      const other = await from.store.get(m.key);
+      if (other) for (const k of referencedKeys(new TextDecoder().decode(other.body), m.key)) used.add(k);
+    }
+    for (const step of plan) {
+      if (used.has(step.key)) continue;
+      await from.store.delete(step.key);
+      removed.push(step.key);
+    }
+  }
+  return json({
+    post: info(to, written), from: from.id, to: to.id, removed,
+    files: Object.fromEntries(['copy', 'identical', 'overwrite'].map((a) => [a, plan.filter((p) => p.action === a).map((p) => p.key)])),
+  });
+}
+
+/**
+ * The private blog, at /blog/ on the admin's address (so behind Access):
+ * its pages, index and files from the private store, the blog's code from
+ * the admin's own assets (dist/admin/blog/, a copy of the public site's).
+ */
+export async function servePrivateBlog(request, env) {
+  const url = new URL(request.url);
+  if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method not allowed', { status: 405 });
+  const stores = await openStores(env, request);
+  const blog = stores.get('private');
+  if (!blog) {
+    return new Response('There is no private blog: bind a private R2 bucket (DRAFTS or PRIVATE) to the admin Worker.',
+      { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+  }
+  let key;
+  try {
+    key = decodeURIComponent(url.pathname.slice('/blog/'.length));
+  } catch {
+    return new Response('Bad path', { status: 400 });
+  }
+  if (key === '' || key.endsWith('/')) key += 'index.html';
+  if (!keyProblem(key)) {
+    const read = (store) => (store.stream ? store.stream(key) : store.get(key));
+    // Its own files first; else the public site's (the banner and background
+    // the shared settings name, images both blogs use): public anyway.
+    const obj = (await read(blog.store))
+      ?? (classify('site', key) === 'asset' ? await read(stores.get('site').store) : null);
+    if (obj) {
+      return new Response(request.method === 'HEAD' ? null : obj.body, {
+        headers: { 'content-type': contentTypeFor(key), etag: `"${obj.meta.etag}"` },
+      });
+    }
+  }
+  // The blog's code (app.js, style.css, vendor/…), deployed with the admin.
+  // (Asked for as Cloudflare serves pages: /blog/ for index.html, /x for x.html, else it redirects.)
+  const asset = key.replace(/(^|\/)index\.html$/, '$1').replace(/\.html$/, '');
+  const res = await env.ASSETS.fetch(new Request(new URL(`/blog/${asset}`, url), request));
+  return res.status === 404 ? new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } }) : res;
 }
 
 /**
@@ -584,6 +707,7 @@ async function readFile(stores, storeId, key, fallbackToSite) {
   let obj = await read(entry.store);
   if (!obj && fallbackToSite && entry.role === 'drafts' && classify('drafts', key) === 'asset') {
     obj = await read(stores.get('site').store);
+    if (!obj && stores.has('private')) obj = await read(stores.get('private').store);
   }
   if (!obj) throw new ApiError(404, `${key} not found`, { code: 'not-found' });
   return bodyResponse(key, obj);
@@ -669,7 +793,7 @@ async function listPosts(stores) {
       items = (await listFolder(entry, 'posts/')).items.filter((i) => postSlug(i.key));
     } catch (err) {
       // One unreachable draft store must not hide every other post.
-      if (!(err instanceof StoreAccessError) || entry.role === 'site') throw err;
+      if (!(err instanceof StoreAccessError) || entry.role !== 'drafts') throw err;
       problems.push({ store: entry.id, error: err.message });
       return;
     }
@@ -679,12 +803,12 @@ async function listPosts(stores) {
       const { summary, ...rest } = item;
       out.push({
         ...rest,
-        status: entry.role === 'site' ? 'published' : 'draft',
+        status: entry.role === 'site' ? 'published' : entry.role === 'private' ? 'private' : 'draft',
         title: String(meta.title || postSlug(item.key)).slice(0, 200),
         date: /^\d{4}-\d{2}-\d{2}/.test(meta.date ?? '') ? meta.date.slice(0, 10) : '',
         tags: String(meta.tags ?? ''),
         // Where to read it; the list itself reads nothing.
-        url: entry.role === 'site' ? '' : `/api/raw/${entry.id}/${item.key}`,
+        url: entry.role === 'drafts' ? `/api/raw/${entry.id}/${item.key}` : '',
       });
     }
   }));
@@ -838,6 +962,7 @@ export async function handleApi(request, env, user) {
           privateSources: Boolean(stores.get('site').store.privateSources),
           problems: stores.problems,
           maxUploadMb: await uploadLimitMb(env, stores),
+          privateBlog: stores.has('private'),
         });
       case 'GET /api/posts':
         return await listPosts(stores);
@@ -864,6 +989,8 @@ export async function handleApi(request, env, user) {
         return await publish(request, stores);
       case 'POST /api/copy':
         return await copyToSite(request, stores);
+      case 'POST /api/transfer':
+        return await transfer(request, stores);
       case 'POST /api/folder':
         return await createFolder(request, stores);
       case 'DELETE /api/folder':

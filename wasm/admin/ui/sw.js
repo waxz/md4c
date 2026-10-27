@@ -54,6 +54,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (path === 'api' || path.startsWith('api/') || path === 'sw.js') return; // always the network
+  if (path === 'blog' || path.startsWith('blog/')) return; // the private blog: always the network
   event.respondWith(appFile(req, url));
 });
 
