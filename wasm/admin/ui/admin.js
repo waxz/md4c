@@ -247,10 +247,12 @@ function showSignedOut() {
 }
 window.addEventListener('admin-offline', showSignedOut);
 
-if ('serviceWorker' in navigator) {
+const signingIn = new URLSearchParams(location.search).has('signin');
+// (Signing in again, the service worker stands aside for this visit: sw.js.)
+if ('serviceWorker' in navigator && !signingIn) {
   navigator.serviceWorker.register('sw.js', { scope: './' }).catch((err) => console.warn('service worker:', err));
 }
-if (new URLSearchParams(location.search).has('signin')) {
+if (signingIn) {
   // Back from the Access login: a clean address again.
   history.replaceState(null, '', `${location.pathname}${location.hash}`);
 }

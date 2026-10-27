@@ -10,8 +10,12 @@
 //    offline.json, written by scripts/assemble-blog.mjs), and served from
 //    the cache when the network answers with Access's login redirect. Drafts
 //    in "This browser" can then still be opened, written and saved. The API
-//    is never cached. "?signin" in the address skips the cache once, to go
-//    through the Access login again.
+//    is never cached. "?signin" in the address goes through the Access login
+//    again with the service worker out of the way: it unregisters and stops
+//    answering, so the page, its files and the API all reach the network as
+//    if there were no service worker (Safari may not give a service worker
+//    started before signing in the new sign-in cookie). The admin registers
+//    it again on the next normal load.
 
 const BUILD = '__BUILD__'; // replaced at assemble time, so each deploy installs anew
 const CACHE = `md4c-admin-${BUILD}`;
@@ -44,9 +48,17 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
+let standingAside = false; // after "?signin": everything goes to the network
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
+  if (req.mode === 'navigate' && url.searchParams.has('signin')) {
+    standingAside = true;
+    event.waitUntil(self.registration.unregister());
+    return; // the browser navigates itself: to the Access login if need be
+  }
+  if (standingAside) return;
   if (url.origin !== scope.origin || req.method !== 'GET' || !url.pathname.startsWith(scope.pathname)) return;
   const path = url.pathname.slice(scope.pathname.length);
   if (path.startsWith('local-files/')) {
@@ -126,7 +138,6 @@ function clean(res) {
 
 async function appFile(req, url) {
   const navigate = req.mode === 'navigate';
-  if (url.searchParams.has('signin')) return fetch(req); // through the Access login
   // Pages are kept under their path; files under their full (versioned) URL.
   const key = navigate ? new URL(url.pathname, url).href : url.href;
   const cache = await caches.open(CACHE);

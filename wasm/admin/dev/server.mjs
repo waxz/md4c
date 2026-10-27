@@ -126,7 +126,7 @@ createServer(async (req, res) => {
     res.end(signedOut ? 'signed out' : 'signed in');
     return;
   }
-  if (signedOut && !new URL(req.url, 'http://x').searchParams.has('signin')) {
+  if (signedOut) { // ("?signin" too, as Access does: signing in happens on its page)
     // Another origin, as Access's login page is (fetch cannot follow it there).
     res.writeHead(302, { location: `http://localhost:${BLOG_PORT}/cdn-cgi/access/login` });
     res.end();
