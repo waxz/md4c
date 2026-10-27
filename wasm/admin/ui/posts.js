@@ -142,6 +142,7 @@ function actionsFor(post) {
     draft ? { act: 'publish', label: published ? 'Update site' : 'Publish', primary: true } : null,
     published ? { act: 'unpublish', label: draft ? 'Unpublish (keep the draft)' : 'Unpublish (keep as a draft)', hidden: !draftStores().length } : null,
     draft && draftStores().length > 1 ? { act: 'move', label: 'Move draft to…' } : null,
+    { act: 'read', label: draft && !published ? 'Read (private)' : 'Read', href: `read?${new URLSearchParams({ store: editStore, key: editKey })}`, external: true },
     published ? { act: 'view', label: 'View on the blog', href: publicUrl(published.key.replace(/\.md$/, '.html')), external: true } : null,
     { act: 'delete', label: 'Delete…', danger: true },
   ].filter((a) => a && !a.hidden);

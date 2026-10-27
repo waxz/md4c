@@ -352,6 +352,7 @@ export async function showEditor(view, store, key, newStore) {
       `<button type="button" class="btn btn-primary" data-act="publish">${isLive ? 'Update site' : 'Publish'}</button>`,
       direct ? '' : '<button type="button" class="btn" data-act="draft">Save draft</button>',
       live ? `<a class="btn" href="${esc(live)}" target="_blank" rel="noopener">View</a>` : '',
+      ed.store ? `<a class="btn" href="read?${esc(new URLSearchParams({ store: ed.store, key: ed.key }).toString())}" target="_blank" rel="noopener" title="Read the saved draft as the blog shows it">Read</a>` : '',
       ed.store || ed.published ? '<a class="more-actions muted" href="#/posts">Unpublish or delete: ⋯ in Posts</a>' : '',
     ].join('');
     form.querySelector('.slug-note').textContent = isLive

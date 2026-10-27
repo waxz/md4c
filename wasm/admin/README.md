@@ -67,6 +67,23 @@ public bucket. In the Explorer, *Published site* shows each post's
 Markdown with a **🔒 private source** label: it is listed there because it
 belongs to the published post, but it lives in the private bucket.
 
+### The reader: your private posts, as the blog shows them
+
+**Reader** (at the top of the admin, `/read`) lists every post, drafts
+included, and shows any of them as the blog would: theme, contents, math,
+citations, paper notes with their PDF and comments, links between posts
+(which open in the reader). Drafts are private — only you, signed in to
+the admin, can read them — so the reader is your private blog, with no
+second site, build or copy of the storage:
+
+- **Private** posts are drafts; *Private* / *Public* filter the list, as do
+  the tags and the search box.
+- To make a post public, publish it; to make it private again, unpublish
+  it (*Unpublish (keep the draft)* in its ⋯ menu): its draft stays.
+- A post with a draft is read from its draft (what you are writing, saved);
+  a published post without one from the site. *Read* in a post's ⋯ menu
+  and in the editor opens it; *Edit* in the reader goes back.
+
 ## Draft stores
 
 ### This browser
