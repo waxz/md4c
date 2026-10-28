@@ -15,28 +15,17 @@ import { getMd4c, init, publicUrl, state } from './shared.js';
 import { parseFrontMatter, parseTags } from './lib/post-format.js';
 import { readProtected } from './lib/protect.js';
 import {
-  annotationSummary, isPaper, mathText, paperHtml, paperPdf, referencedIds, sortAnnotations, splitAnnotations,
+  annotationSummary, isPaper, mathText, referencedIds, sortAnnotations, splitAnnotations,
 } from './lib/paper.js';
 import { articleHtml, PARSER_FLAGS, postLinks } from './lib/blog-render.js';
-import { bibliographyUrls, esc, finishArticle, formatDate, renderLive, renderLiveHtml, renderMath } from './render.js';
+import { esc, formatDate, renderMath } from './render.js';
+import { applyLook, renderPostInto } from './post-view.js';
 
 const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
 const readHref = (key, store) => `read?${new URLSearchParams({ ...(store ? { store } : {}), key })}`;
 const editHref = (store, key) => `./#/edit/${store}/${key}`;
 const isDraft = (p) => p.status === 'draft';
-
-/** The site's look on this page (as the blog's theme.js, for the parts the reader has). */
-function applyLook(site, meta = {}) {
-  const root = document.documentElement;
-  root.lang = site.language;
-  root.dataset.theme = site.theme;
-  root.dataset.scheme = site.colorScheme;
-  root.dataset.font = site.font || (site.theme === 'modern' ? 'sans' : 'serif');
-  root.dataset.numbered = meta.numbered === 'true' || meta.numbered === true ? 'true'
-    : meta.numbered === 'false' || meta.numbered === false ? 'false' : String(site.numberedHeadings);
-  if (site.accent) root.style.setProperty('--accent-base', site.accent);
-}
 
 /** The posts, one entry per post: its draft if it has one (with `published` noted), else the public copy. */
 function library({ posts }) {
@@ -307,7 +296,7 @@ async function renderPost(key, store, published, text) {
   const locked = readProtected(text);
   const { meta, body } = parseFrontMatter(text);
   const draft = store !== 'site';
-  applyLook(state.site, meta);
+  applyLook(document, state.site, meta);
   const title = meta.title || key.slice(6, -3);
   document.title = `${title} · Reader`;
   document.querySelector('.reader-where').innerHTML = draft && !published
@@ -318,52 +307,16 @@ async function renderPost(key, store, published, text) {
   document.querySelector('.reader-actions').innerHTML = `<a href="${esc(editHref(store, key))}">Edit</a>${
     pageUrl ? ` · <a href="${esc(pageUrl)}" target="_blank" rel="noopener">On the blog ↗</a>` : ''}`;
 
-  const author = meta.author || state.site.author;
-  const tags = parseTags(meta.tags);
-  app.innerHTML = `<article>
-    <header class="article-header">
-      <h1 class="article-title">${esc(title)}</h1>
-      <p class="byline sc">${author ? `<span class="author">${esc(author)}</span> · ` : ''}${meta.date ? `<time>${esc(formatDate(String(meta.date).slice(0, 10)))}</time>` : ''}</p>
-      ${tags.length ? `<p class="keywords sc">${tags.map((t) => `<span>${esc(t)}</span>`).join('')}</p>` : ''}
-    </header>
-    <div class="prose"></div>
-  </article>`;
+  app.innerHTML = '<article><div class="prose"></div></article>';
   const article = app.querySelector('article');
-  const prose = article.querySelector('.prose');
   if (locked) {
-    prose.innerHTML = `<p class="muted">This published copy is encrypted (the post has a password).
+    article.insertAdjacentHTML('afterbegin', `<header class="article-header"><h1 class="article-title">${esc(title)}</h1></header>`);
+    article.querySelector('.prose').innerHTML = `<p class="muted">This published copy is encrypted (the post has a password).
       <a href="${esc(editHref(store, key))}">Open it in the editor</a> to read it.</p>`;
     return;
   }
-  // Links and images resolve through the Worker, next to the post: its
-  // store first, then the site; [[other post]] opens in the reader.
-  const postUrl = api.rawUrl(store, key);
-  const where = { postUrl, storageBase: api.rawUrl(store, ''), postHref: (s) => readHref(`posts/${s}.md`) };
-  const banner = meta.banner || meta.cover;
-  if (banner) {
-    const fig = document.createElement('figure');
-    fig.className = 'post-banner';
-    fig.innerHTML = `<img src="${esc(new URL(banner, postUrl).href)}" alt="">`;
-    article.prepend(fig);
-  }
-  if (isPaper(meta)) {
-    const { body: notes, annotations } = splitAnnotations(body);
-    prose.append(renderLiveHtml(paperHtml(meta, notes, annotations, (m) => md4c.toHtml(m, { parserFlags: PARSER_FLAGS })), where));
-    const paper = prose.querySelector('.paper');
-    const pdf = paperPdf(meta);
-    if (paper && pdf) paper.dataset.pdf = new URL(pdf, postUrl).href; // the viewer reads it from here
-  } else {
-    prose.append(renderLive({ render: (m, o) => md4c.toHtml(m, o) }, body, where));
-  }
-  const siteBib = String(state.rawSite?.bibliography ?? '');
-  await finishArticle(article, { ...state.site, citation: false }, {
-    title, date: meta.date, slug: key.slice(6, -3), url: '', toc: meta.toc,
-    bibliography: [
-      ...bibliographyUrls(meta.bibliography, postUrl),
-      ...(/\.bib$/i.test(siteBib) && !/^[a-z]+:|^\/\//i.test(siteBib) ? [api.rawUrl('site', siteBib.replace(/^\/+/, ''))] : []),
-    ],
-    citeStyle: meta.citestyle || meta['cite-style'], nocite: meta.nocite,
-  });
+  // As the editor's preview shows it (post-view.js); [[other post]] opens in the reader.
+  await renderPostInto(article, { store, key, meta, body, md4c, postHref: (s) => readHref(`posts/${s}.md`) });
   if (location.hash.length > 1) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
 }
 
@@ -382,7 +335,7 @@ async function main() {
     for (const p of [listing, reading]) p?.catch(() => {});
     if (key) getMd4c(); // (the Markdown engine, meanwhile)
     await init();
-    applyLook(state.site);
+    applyLook(document, state.site);
     if (key) await showPost(key, store, listing, reading);
     else await showLibrary(listing);
   } catch (err) {

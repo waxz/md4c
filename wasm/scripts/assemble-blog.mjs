@@ -175,12 +175,15 @@ async function staticImports(entry) {
 for (const [page, entry, links] of [
   ['index.html', 'admin.js', ['admin.css']],
   ['read.html', 'read.js', ['style.css', 'paper.css', 'reader.css', 'vendor/source-serif-4/opsz.css', 'vendor/source-serif-4/opsz-italic.css']],
+  ['preview.html', null, ['style.css', 'paper.css', 'vendor/katex/katex.min.css', 'vendor/source-serif-4/opsz.css', 'vendor/source-serif-4/opsz-italic.css']],
 ]) {
   const file = join(adminOut, page);
   let html = await readFile(file, 'utf8');
-  for (const f of [entry, ...links]) html = html.replace(`="${f}"`, `="${f}?v=${await adminVersion(f)}"`);
-  const preload = (await staticImports(entry)).map((u) => `<link rel="modulepreload" href="${u}">`).join('\n');
-  html = html.replace(/(<script type="module" src="[^"]+"><\/script>)/, `${preload}\n$1`);
+  for (const f of entry ? [entry, ...links] : links) html = html.replace(`="${f}"`, `="${f}?v=${await adminVersion(f)}"`);
+  if (entry) {
+    const preload = (await staticImports(entry)).map((u) => `<link rel="modulepreload" href="${u}">`).join('\n');
+    html = html.replace(/(<script type="module" src="[^"]+"><\/script>)/, `${preload}\n$1`);
+  }
   await writeFile(file, html);
 }
 

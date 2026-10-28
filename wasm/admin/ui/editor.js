@@ -11,12 +11,12 @@ import { api, ApiError } from './client.js';
 import { flag, parseFrontMatter, SLUG_RE } from './lib/post-format.js';
 import { digest, readProtected } from './lib/protect.js';
 import { slugify } from './lib/blog-render.js';
-import { finishArticle, renderLive, renderLiveHtml, renderMath } from './render.js';
+import { renderLive, renderMath } from './render.js';
+import { bibliographyFor, renderPostInto } from './post-view.js';
 import { mountPaper } from './paper.js';
 import { SHOW_KEY } from './comments.js';
 import { citeStyle, parseBibtex, referenceText } from './lib/cite.js';
-import { annotationLabel, isPaper, joinAnnotations, paperHtml, paperPdf, sortAnnotations, splitAnnotations } from './lib/paper.js';
-import { PARSER_FLAGS } from './lib/blog-render.js';
+import { annotationLabel, isPaper, joinAnnotations, paperPdf, sortAnnotations, splitAnnotations } from './lib/paper.js';
 import { attachSourceSync } from './sync.js';
 import { publishPost } from './post-actions.js';
 import { Cancelled } from './tasks.js';
@@ -382,71 +382,23 @@ export async function showEditor(view, store, key, newStore) {
   async function updatePreview() {
     const doc = iframe.contentDocument;
     if (!doc?.querySelector('.prose')) return;
-    const root = doc.documentElement;
-    root.dataset.theme = state.site.theme;
-    root.dataset.scheme = state.site.colorScheme;
-    root.dataset.font = state.site.font || (state.site.theme === 'modern' ? 'sans' : 'serif');
-    root.dataset.numbered = f.numbered.value || String(state.site.numberedHeadings);
-    if (state.site.accent) root.style.setProperty('--accent-base', state.site.accent);
-    doc.querySelector('.article-title').textContent = f.title.value || 'Untitled';
-    doc.querySelector('.byline').textContent = [f.author.value.trim() || state.site.author, f.date.value].filter(Boolean).join(' · ');
-    const article = doc.querySelector('article');
-    // Banner and background as the published page shows them; relative
-    // names resolve next to the post, through the Worker.
-    const imageUrl = (ref) => {
-      const v = ref.trim();
-      if (!v) return '';
-      if (/^https?:\/\//.test(v)) return v;
-      return api.rawUrl(home(), v.startsWith('/') ? v.slice(1) : `posts/${v.replace(/^\.\//, '')}`);
+    const key = `posts/${slug() || 'untitled'}.md`;
+    // The post as the reader shows it (post-view.js), from what is in the
+    // fields now; a paper's PDF is in the annotator, not here.
+    const meta = {
+      ...extra, title: f.title.value || 'Untitled', author: f.author.value, date: f.date.value, tags: f.tags.value,
+      banner: f.banner.value, background: f.background.value, numbered: f.numbered.value, toc: f.toc.value,
+      bibliography: f.bibliography.value, citestyle: f.citestyle.value, type: f.type.value, pdf: f.pdf.value,
     };
-    article.querySelector('.post-banner')?.remove();
-    const bannerUrl = imageUrl(f.banner.value);
-    if (bannerUrl) {
-      const fig = doc.createElement('figure');
-      fig.className = 'post-banner';
-      const img = doc.createElement('img');
-      img.src = bannerUrl;
-      img.alt = '';
-      fig.append(img);
-      article.prepend(fig);
-    }
-    const bgUrl = imageUrl(f.background.value);
-    if (bgUrl) {
-      root.style.setProperty('--bg-image', `url(${JSON.stringify(bgUrl)})`);
-      root.dataset.bg = 'page';
-    } else {
-      root.style.removeProperty('--bg-image');
-      delete root.dataset.bg;
-    }
-    article.querySelector('.toc')?.remove();
-    const prose = doc.querySelector('.prose');
-    const s = slug() || 'untitled';
-    // Images resolve through the Worker: the draft store first, then the site.
-    const where = { postUrl: api.rawUrl(home(), `posts/${s}.md`), storageBase: api.rawUrl(home(), ''), postHref: () => '#' };
-    const fs = { render: (md, o) => state.md4c.toHtml(md, o) };
-    prose.replaceChildren(f.type.value === 'paper'
-      // A paper post as published, its comments listed (the PDF is in the annotator).
-      ? renderLiveHtml(paperHtml({ type: 'paper', pdf: f.pdf.value }, f.body.value, ed.annotations,
-        (md) => state.md4c.toHtml(md, { parserFlags: PARSER_FLAGS })), where)
-      : renderLive(fs, f.body.value, { ...where, sourcePositions: true }));
-    prose.className = 'prose';
-    await finishArticle(article, { ...state.site, citation: false },
-      {
-        title: f.title.value, date: f.date.value, slug: s, url: '', toc: f.toc.value, paperViewer: false,
-        bibliography: bibUrls(), citeStyle: f.citestyle.value || state.site.citeStyle,
-        nocite: extra.nocite,
-      })
-      .catch((err) => console.warn('preview:', err));
+    await renderPostInto(doc.querySelector('article'), {
+      store: home(), key, meta, body: f.body.value, md4c: state.md4c,
+      annotations: f.type.value === 'paper' ? ed.annotations : undefined,
+      sourcePositions: true, paperViewer: false,
+    }).catch((err) => console.warn('preview:', err));
     sync.refresh();
   }
   /* ---- Citations: the .bib files (the post's, then the site's), through the Worker ---- */
-  function bibUrls() {
-    const keys = String(f.bibliography.value).split(/[,\s]+/).filter((p) => /\.bib$/i.test(p) && !/^[a-z]+:|^\/\//i.test(p))
-      .map((p) => decodeURIComponent(new URL(p, `https://x/posts/${slug() || 'untitled'}.md`).pathname.slice(1)));
-    const site = String(state.rawSite?.bibliography ?? '');
-    if (/\.bib$/i.test(site) && !/^[a-z]+:|^\/\//i.test(site)) keys.push(site.replace(/^\/+/, ''));
-    return keys.map((k) => (k.startsWith('posts/') ? api.rawUrl(home(), k) : api.rawUrl('site', k)));
-  }
+  const bibUrls = () => bibliographyFor(home(), `posts/${slug() || 'untitled'}.md`, f.bibliography.value);
   /** "Cite…": the entries of the post's bibliographies and its ```bibtex blocks. */
   const citeSelect = form.querySelector('.md-cite');
   const xrefSelect = form.querySelector('.md-xref');
