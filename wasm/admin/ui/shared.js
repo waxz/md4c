@@ -33,6 +33,7 @@ export const state = {
   site: null, // normalized site settings
   rawSite: null,
   siteIndex: null, // the site's index.json, as init() read it
+  refreshed: Promise.resolve(false), // init()'s check with the server: true if something changed
 };
 
 // The last session and site settings, for when the server cannot be reached
@@ -52,7 +53,36 @@ function remembered() {
   }
 }
 
+/**
+ * The session and the site settings. When this browser has them from last
+ * time (cache.js), the app starts with those at once and asks the server
+ * in the background (state.refreshed); if anything changed, state is
+ * updated and "admin-refreshed" sent. Otherwise it waits for the server.
+ */
 export async function init() {
+  const [session, index] = await Promise.all([
+    api.lastSession(),
+    api.lastRead('site', 'index.json').then((r) => (r ? JSON.parse(r.text) : null)).catch(() => null),
+  ]);
+  if (!session || !index || typeof index !== 'object') {
+    await load();
+    state.refreshed = Promise.resolve(false);
+    return;
+  }
+  state.session = session;
+  applySiteIndex(Array.isArray(index) ? { items: index } : index, false);
+  const before = JSON.stringify([state.session, state.rawSite]);
+  state.refreshed = load().then(() => {
+    const changed = JSON.stringify([state.session, state.rawSite]) !== before;
+    if (changed) window.dispatchEvent(new CustomEvent('admin-refreshed'));
+    return changed;
+  }, (err) => {
+    window.dispatchEvent(new CustomEvent('admin-refresh-failed', { detail: err }));
+    return false;
+  });
+}
+
+async function load() {
   // Session and site settings load side by side.
   const index = readSiteIndex().catch((err) => {
     if (err.code !== 'offline') throw err;
@@ -73,11 +103,11 @@ export async function init() {
   applySiteIndex(await index);
 }
 
-function applySiteIndex(index) {
+function applySiteIndex(index, keep = true) {
   state.siteIndex = index ?? null;
   state.rawSite = index?.site ?? null;
   state.site = normalizeSite(state.rawSite, state.session.publicUrl || location.href);
-  if (!state.session.offline) remember({ rawSite: state.rawSite });
+  if (keep && !state.session.offline) remember({ rawSite: state.rawSite });
 }
 
 export async function refreshSite() {

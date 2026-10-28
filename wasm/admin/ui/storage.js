@@ -9,6 +9,7 @@
 import { api, ApiError, browserStores } from './client.js';
 import { confirmDialog, esc, formatSize, formatTime, reportError, state, storeLabel, toast } from './shared.js';
 import { localStore } from './local-store.js';
+import { cache } from './cache.js';
 import { drop as unsavedDrop, list as unsavedList, reopen as unsavedReopen } from './unsaved.js';
 
 // S3-compatible services: endpoint pattern and default region.
@@ -100,6 +101,15 @@ export async function showStorage(view) {
           <a class="btn btn-small" href="#/files/local/">Files</a></li>
       </ul>
     </section>
+    <section class="post-section"><h2>Kept in this browser</h2>
+      <ul class="post-cards">
+        <li class="post-card store-card"><div class="post-card-main"><span class="post-title">Cache</span>
+          <span class="post-meta cache-usage">…</span>
+          <span class="post-meta">A copy of the posts list and of the posts and settings last read, so the admin and the
+            reader open at once. The server is always asked again; a file not changed is not downloaded again.</span></div>
+          <button type="button" class="btn btn-small" data-act="clear-cache">Clear</button></li>
+      </ul>
+    </section>
     <div class="store-form-slot"></div>
   </div>`;
   renderUnsaved(view);
@@ -112,9 +122,19 @@ export async function showStorage(view) {
     const el = view.querySelector('.local-usage');
     if (el) el.textContent = `${u.posts} post(s), ${u.files} file(s), ${formatSize(u.bytes)}`;
   }, () => {});
-  view.querySelector('.storage-view').addEventListener('click', (e) => {
+  const showCache = () => cache.size().then(({ entries, bytes }) => {
+    const el = view.querySelector('.cache-usage');
+    if (el) el.textContent = `${entries} item(s), about ${formatSize(bytes)}`;
+  });
+  showCache();
+  view.querySelector('.storage-view').addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-act]');
     if (!btn || btn.closest('.store-form')) return;
+    if (btn.dataset.act === 'clear-cache') {
+      await cache.clear();
+      showCache();
+      toast('The cache in this browser is cleared.', 'success');
+    }
     if (btn.dataset.act === 'add') openForm(view, null);
     if (btn.dataset.act === 'edit') {
       openForm(view, all.find((s) => s.id === btn.dataset.id && s.location === btn.dataset.location));

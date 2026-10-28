@@ -6,6 +6,7 @@
 // errors, so the views treat it like any other store. Moves and copies
 // between it and the Worker's stores are done here, file by file.
 
+import { cache, cachedFile, forgetFile, keepFile } from './cache.js';
 import { LOCAL_ID, LOCAL_STORE, localStore } from './local-store.js';
 import { postSlug } from './paths.js';
 
@@ -39,7 +40,7 @@ async function request(method, path, { body, headers = {}, raw = false } = {}) {
     // Access session expired: reload to go through the Access login again.
     throw new ApiError(res.status, { error: 'Your Cloudflare Access session has expired. Reload the page to sign in again.', code: 'auth' });
   }
-  if (!res.ok) {
+  if (!res.ok && !(raw && res.status === 304)) {
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
     throw new ApiError(res.status, data);
   }
@@ -137,7 +138,13 @@ export const api = {
   /** Who is signed in, and the stores: the Worker's, then "This browser". */
   async session() {
     const s = await request('GET', 'session');
+    cache.set('session', s);
     return { ...s, stores: [...s.stores.filter((x) => x.id !== LOCAL_ID), LOCAL_STORE] };
+  },
+  /** The last session(), kept in this browser (cache.js), or null. */
+  async lastSession() {
+    const s = await cache.get('session');
+    return s?.stores ? { ...s, stores: [...s.stores.filter((x) => x.id !== LOCAL_ID), LOCAL_STORE] } : null;
   },
 
   /**
@@ -156,7 +163,13 @@ export const api = {
       if (server.err.code !== 'offline') throw server.err;
       return { posts: local, problems: [{ store: 'server', error: server.err.message }], offline: true };
     }
+    cache.set('posts', server.d);
     return { ...server.d, posts: [...server.d.posts, ...local] };
+  },
+  /** The last posts() (the server's part kept in this browser, this browser's as it is now), or null. */
+  async lastPosts() {
+    const [d, local] = await Promise.all([cache.get('posts'), localPosts().catch(() => [])]);
+    return d?.posts ? { ...d, posts: [...d.posts, ...local] } : null;
   },
 
   /** Every object under `prefix`; `.folders` = kept (possibly empty) folders. */
@@ -208,12 +221,19 @@ export const api = {
   /** { text|bytes, etag } of an object. */
   async read(store, key, as = 'text') {
     if (isLocal(store)) return localStore.read(key, as);
-    const res = await request('GET', `file?${q({ store, key })}`, { raw: true });
+    // Text is kept in this browser: asked for with its etag, an unchanged
+    // file comes back as "304 Not Modified", without its contents.
+    const kept = as === 'text' ? await cachedFile(store, key) : null;
+    const res = await request('GET', `file?${q({ store, key })}`, { raw: true, headers: kept ? { 'if-none-match': `"${kept.etag}"` } : {} });
     const etag = res.headers.get('x-object-etag') ?? '';
-    return as === 'bytes'
-      ? { bytes: new Uint8Array(await res.arrayBuffer()), etag }
-      : { text: await res.text(), etag };
+    if (res.status === 304 && kept) return { text: kept.text, etag: kept.etag };
+    if (as === 'bytes') return { bytes: new Uint8Array(await res.arrayBuffer()), etag };
+    const text = await res.text();
+    keepFile(store, key, text, etag);
+    return { text, etag };
   },
+  /** { text, etag } of a file as last read here (maybe changed since), or null. */
+  lastRead: (store, key) => (isLocal(store) ? Promise.resolve(null) : cachedFile(store, key)),
 
   // This browser's files are served by sw.js at local-files/<key>.
   fileUrl: (store, key) => (isLocal(store) ? api.rawUrl(store, key) : `api/file?${q({ store, key })}`),
@@ -227,15 +247,21 @@ export const api = {
   async write(store, key, body, etag, { ofPublished = false, ignore } = {}) {
     if (etag === null) await checkNewPost(store, key, ofPublished, ignore);
     if (isLocal(store)) return localStore.write(key, body, etag);
-    return request('PUT', `file?${q({ store, key, ...(ofPublished ? { ofPublished: '1' } : {}) })}`, {
+    const written = await request('PUT', `file?${q({ store, key, ...(ofPublished ? { ofPublished: '1' } : {}) })}`, {
       body,
       headers: etag === undefined ? {} : etag === null ? { 'if-none-match': '*' } : { 'if-match': `"${etag}"` },
     });
+    // (What was written is what a read would get.)
+    if (typeof body === 'string' && written?.etag) keepFile(store, key, body, written.etag);
+    else forgetFile(store, key);
+    return written;
   },
 
-  remove(store, key, etag) {
+  async remove(store, key, etag) {
     if (isLocal(store)) return localStore.remove(key, etag);
-    return request('DELETE', `file?${q({ store, key })}`, { headers: etag ? { 'if-match': `"${etag}"` } : {} });
+    const done = await request('DELETE', `file?${q({ store, key })}`, { headers: etag ? { 'if-match': `"${etag}"` } : {} });
+    forgetFile(store, key);
+    return done;
   },
 
   async move(from, to, etag) {

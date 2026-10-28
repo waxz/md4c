@@ -41,8 +41,11 @@ async function route() {
     else if (r.name === 'edit') await (await editor()).showEditor(view, r.store, r.path);
     else if (r.name === 'view') await (await explorer()).showFile(view, r.store, r.path);
     else if (r.name === 'text') await (await editor()).showTextEditor(view, r.store, r.path);
-    else if (r.name === 'settings') await showSettings();
-    else if (r.name === 'storage') await (await import('./storage.js')).showStorage(view);
+    else if (r.name === 'settings') await state.refreshed.then(showSettings); // (edited: as the server has them)
+    else if (r.name === 'storage') {
+      await state.refreshed;
+      await (await import('./storage.js')).showStorage(view);
+    }
     else if (r.name === 'comments') await (await import('./comments.js')).showComments(view);
     else if (r.name === 'files') await (await explorer()).showFiles(view, r.store, r.path);
     else await showPosts(view);
@@ -257,6 +260,16 @@ if (signingIn) {
   history.replaceState(null, '', `${location.pathname}${location.hash}`);
 }
 
+function showHeader() {
+  document.querySelector('.user').textContent = state.session.offline ? 'signed out' : state.session.email;
+  if (state.session.offline) showSignedOut();
+  const site = document.querySelector('.view-site');
+  if (state.session.publicUrl) site.href = publicUrl('index.html');
+  site.hidden = !state.session.publicUrl;
+  document.querySelector('.app-title').textContent = `${state.site.title} · Admin`;
+  document.title = `Admin · ${state.site.title}`;
+}
+
 async function main() {
   try {
     await init();
@@ -264,13 +277,10 @@ async function main() {
     view.innerHTML = `<p class="error">${esc(err.message ?? err)}</p>`;
     return;
   }
-  document.querySelector('.user').textContent = state.session.offline ? 'signed out' : state.session.email;
-  if (state.session.offline) showSignedOut();
-  const site = document.querySelector('.view-site');
-  if (state.session.publicUrl) site.href = publicUrl('index.html');
-  else site.hidden = true;
-  document.querySelector('.app-title').textContent = `${state.site.title} · Admin`;
-  document.title = `Admin · ${state.site.title}`;
+  showHeader();
+  // Started from what this browser kept: the server's answer may differ.
+  window.addEventListener('admin-refreshed', showHeader);
+  window.addEventListener('admin-refresh-failed', (e) => reportError(e.detail));
   if (!location.hash) history.replaceState(null, '', '#/posts');
   route();
   renderUnsavedBanner();

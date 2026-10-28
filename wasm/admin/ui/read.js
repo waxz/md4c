@@ -39,8 +39,7 @@ function applyLook(site, meta = {}) {
 }
 
 /** The posts, one entry per post: its draft if it has one (with `published` noted), else the public copy. */
-async function library(listing) {
-  const { posts } = await listing;
+function library({ posts }) {
   const live = new Map(posts.filter((p) => p.status === 'published').map((p) => [p.key, p]));
   const drafts = posts.filter(isDraft);
   const drafted = new Set(drafts.map((p) => p.key));
@@ -106,7 +105,10 @@ async function allFacts(posts) {
 async function showLibrary(listing) {
   document.title = `Reader · ${state.site.title}`;
   document.querySelector('.reader-where').textContent = '';
-  const posts = await library(listing);
+  // The list as this browser kept it, at once; the server's when it comes.
+  const kept = await api.lastPosts().catch(() => null);
+  let shownList = kept ?? await listing;
+  let posts = library(shownList);
   app.innerHTML = `<header class="reader-head">
       <h1>${esc(state.site.title)}</h1>
       <p class="muted">Every post, as the blog shows it. <b>Private</b> ones are drafts: only you read them here.
@@ -256,10 +258,24 @@ async function showLibrary(listing) {
   // Load the comments in the background once the list is up: their tags
   // join the tag keywords. (Kept per version in this browser, so a later
   // visit reads only the drafts changed since.)
-  setTimeout(() => {
+  const loadFacts = () => {
     facts ??= allFacts(posts);
     facts.then(() => { if (tab === 'articles') renderTagbar(); });
-  }, 300);
+  };
+  let factsTimer = setTimeout(loadFacts, 300);
+  if (kept) {
+    // Started from the kept list: the server's, if it differs.
+    const fresh = await listing.catch(() => null);
+    if (fresh && JSON.stringify(fresh.posts) !== JSON.stringify(shownList.posts)) {
+      shownList = fresh;
+      await facts?.catch(() => {});
+      posts = library(fresh);
+      facts = null;
+      clearTimeout(factsTimer);
+      await render();
+      factsTimer = setTimeout(loadFacts, 300);
+    }
+  }
 }
 
 async function showPost(key, storeParam, listing, reading) {
@@ -274,7 +290,20 @@ async function showPost(key, storeParam, listing, reading) {
     store = (posts.find(isDraft) ?? posts.find((p) => p.status === 'published'))?.store;
     if (!store) throw new Error(`There is no post ${key}.`);
   }
-  const [{ text }, md4c] = await Promise.all([reading ?? api.read(store, key), getMd4c()]);
+  reading ??= api.read(store, key);
+  const kept = await api.lastRead(store, key).catch(() => null);
+  if (kept) {
+    // As this browser kept it, at once; drawn again if the server's differs.
+    await renderPost(key, store, published, kept.text);
+    const fresh = await reading.catch(() => null);
+    if (fresh && fresh.etag !== kept.etag) await renderPost(key, store, published, fresh.text);
+    return;
+  }
+  await renderPost(key, store, published, (await reading).text);
+}
+
+async function renderPost(key, store, published, text) {
+  const md4c = await getMd4c();
   const locked = readProtected(text);
   const { meta, body } = parseFrontMatter(text);
   const draft = store !== 'site';

@@ -120,6 +120,19 @@ setup and no permission:
 
 The id `local` is reserved for it.
 
+### Cache
+
+Separately, the admin and the reader keep a **copy of what they last read**
+from the server in another browser database (`admin/ui/cache.js`): the
+session, the posts list, index.json and the posts opened. A page opens from
+that copy at once, asks the server again in the background, and redraws only
+if something changed. A file read again is asked for with its etag, so an
+unchanged one comes back as `304 Not Modified`, without its contents. Writes
+always go to the server and are checked as before. The copy includes draft
+text, so it is private to this device's browser; **Storage → Kept in this
+browser → Clear** empties it. The app's own files carry their content hash
+(`?v=…`) and are cached by the browser for good.
+
 ### Other storage
 
 The `DRAFTS` R2 bucket is always a draft store. Add more from the admin's

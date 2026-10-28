@@ -576,7 +576,7 @@ function bodyResponse(key, obj) {
   });
 }
 
-async function readFile(stores, storeId, key, fallbackToSite) {
+async function readFile(stores, storeId, key, fallbackToSite, ifNoneMatch = null) {
   requireKey(key);
   const entry = storeOf(stores, storeId);
   // R2 hands a file over as a stream: a large PDF never sits in memory.
@@ -586,6 +586,12 @@ async function readFile(stores, storeId, key, fallbackToSite) {
     obj = await read(stores.get('site').store);
   }
   if (!obj) throw new ApiError(404, `${key} not found`, { code: 'not-found' });
+  // The admin keeps what it read (cache.js) and sends its etag: unchanged,
+  // nothing is sent again.
+  if (ifNoneMatch && stripQuotes(ifNoneMatch) === obj.meta.etag) {
+    await obj.body?.cancel?.();
+    return new Response(null, { status: 304, headers: { etag: `"${obj.meta.etag}"`, 'x-object-etag': obj.meta.etag } });
+  }
   return bodyResponse(key, obj);
 }
 
@@ -853,7 +859,7 @@ export async function handleApi(request, env, user) {
         });
       }
       case 'GET /api/file':
-        return await readFile(stores, storeParam, q('key'), false);
+        return await readFile(stores, storeParam, q('key'), false, request.headers.get('if-none-match'));
       case 'PUT /api/file':
         return await writeFile(request, env, stores, storeOf(stores, storeParam), q('key'), q('ofPublished') === '1');
       case 'DELETE /api/file':

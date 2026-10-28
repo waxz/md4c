@@ -52,39 +52,29 @@ function section(title, posts, empty, drafts = new Map()) {
   </section>`;
 }
 
-// The last posts list, shown at once while a fresh one loads; kept for the
-// browser session so a reload is instant too.
-const CACHE_KEY = 'md4c-admin-posts';
+// The last posts list, shown at once while a fresh one loads: in memory,
+// else as this browser kept it (cache.js), so opening the admin is instant too.
 let lastPosts = null;
-function cachedPosts() {
-  if (lastPosts) return lastPosts;
-  try {
-    return JSON.parse(sessionStorage.getItem(CACHE_KEY) ?? 'null');
-  } catch {
-    return null;
-  }
-}
-function rememberPosts(data) {
-  lastPosts = data;
-  try {
-    sessionStorage.setItem(CACHE_KEY, JSON.stringify(data));
-  } catch {}
+async function cachedPosts() {
+  return lastPosts ?? api.lastPosts().catch(() => null);
 }
 
 export async function showPosts(view) {
   const route = location.hash;
-  const cached = cachedPosts();
+  const asking = api.posts(); // (meanwhile)
+  asking.catch(() => {});
+  const cached = await cachedPosts();
   if (cached) renderPosts(view, cached, true);
   else view.innerHTML = '<p class="muted">Loading posts…</p>';
   let fresh;
   try {
-    fresh = await api.posts();
+    fresh = await asking;
   } catch (err) {
     if (!cached) throw err;
     view.querySelector('.refreshing')?.replaceChildren('Could not refresh: showing the last list.');
     return;
   }
-  rememberPosts(fresh);
+  lastPosts = fresh;
   if (location.hash !== route && !(route === '' && location.hash === '#/posts')) return;
   if (!cached || JSON.stringify(cached) !== JSON.stringify(fresh)) renderPosts(view, fresh, false);
   else view.querySelector('.refreshing')?.remove();
@@ -225,7 +215,7 @@ function refreshSoon(view) {
     if (!view.querySelector('.posts-view')) return;
     try {
       const fresh = await api.posts();
-      rememberPosts(fresh);
+      lastPosts = fresh;
       if (view.querySelector('.posts-view')) renderPosts(view, fresh, false);
     } catch (err) {
       console.warn('posts refresh:', err);
