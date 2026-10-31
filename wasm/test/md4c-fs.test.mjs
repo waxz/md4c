@@ -1,0 +1,871 @@
+// Tests for the wasm renderer, Md4cFs, the read-only URL adapter, and the
+// publish script. Publishing goes to a temp folder with storagesdk's fs
+// adapter, which is then served as a plain static site, the way a public
+// R2 bucket serves it.
+
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { createReadStream } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { Storage } from '@storagesdk/core';
+import { fs as fsAdapter } from '@storagesdk/adapters/fs';
+import { Md4cFs } from '../js/md4c-fs.js';
+import { Dialect, Flags, loadMd4c } from '../js/md4c.js';
+import { urlAdapter } from '../js/url-adapter.js';
+
+const WASM_URL = new URL('../dist/md4c.wasm', import.meta.url);
+const PUBLISH = fileURLToPath(new URL('../scripts/publish.mjs', import.meta.url));
+const run = promisify(execFile);
+
+test('toHtml renders CommonMark and extensions', async () => {
+  const md4c = await loadMd4c(WASM_URL);
+  assert.equal(md4c.toHtml('# Hi *there*'), '<h1>Hi <em>there</em></h1>\n');
+  assert.equal(md4c.toHtml('~~x~~', { parserFlags: Flags.STRIKETHROUGH }), '<p><del>x</del></p>\n');
+  assert.match(md4c.toHtml('| a |\n|---|\n| 1 |', { parserFlags: Dialect.GITHUB }), /<table>/);
+  assert.equal(md4c.toHtml('héllo – ünïcode'), '<p>héllo – ünïcode</p>\n');
+  assert.equal(md4c.toHtml(''), '');
+});
+
+test('SOURCE_POS marks where each block starts in the source (the editor preview)', async () => {
+  const md4c = await loadMd4c(WASM_URL);
+  const { HtmlFlags } = await import('../js/md4c.js');
+  const src = '# Tïtle\n\nPara\n\n- a\n- b\n\n```\ncode\n```\n\n| x |\n|---|\n| 1 |\n\n<div><p>raw</p></div>\n';
+  const flags = { parserFlags: Dialect.GITHUB };
+  const html = md4c.toHtml(src, { ...flags, rendererFlags: HtmlFlags.SKIP_UTF8_BOM | HtmlFlags.SOURCE_POS });
+  const bytes = new TextEncoder().encode(src);
+  const at = (tag) => [...html.matchAll(new RegExp(`<${tag}(?=[\\s>])[^>]* data-src="(\\d+)"`, 'g'))]
+    .map((m) => new TextDecoder().decode(bytes.slice(Number(m[1]))).split('\n')[0]);
+  assert.deepEqual(at('h1'), ['Tïtle']);
+  assert.deepEqual(at('p'), ['Para'], 'raw HTML gets no positions');
+  assert.deepEqual(at('li'), ['a', 'b']);
+  assert.deepEqual(at('pre'), ['code']);
+  assert.deepEqual(at('td'), ['1 |']);
+  assert.equal(md4c.toHtml(src, flags).includes('data-src'), false, 'published pages carry none');
+  assert.equal(md4c.toHtml(src, flags), html.replace(/ data-src="\d+"/g, ''), 'otherwise the same HTML');
+});
+
+test('toHtml handles large input and repeated calls', async () => {
+  const md4c = await loadMd4c(WASM_URL);
+  const big = '* item **bold** [link](http://x.y)\n'.repeat(50000);
+  for (let i = 0; i < 3; i++) assert.equal(md4c.toHtml(big).match(/<li>/g).length, 50000);
+  assert.equal(md4c.toHtml('ok'), '<p>ok</p>\n');
+});
+
+test('Md4cFs converts files like md2html (writable fs adapter)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'md4cfs-'));
+  try {
+    const storage = new Storage({ adapter: fsAdapter({ root: dir, folder: 'files' }) });
+    const fs = await Md4cFs.open({ storage, wasmUrl: WASM_URL });
+    await fs.writeFile('docs/readme.md', '# Title\n\n- [x] done\n');
+    const out = await fs.convertFile('docs/readme.md', { fullHtml: true, title: 'T<' });
+    assert.equal(out, 'docs/readme.html');
+    const html = await fs.readFile(out);
+    assert.match(html, /^<!DOCTYPE html>/);
+    assert.match(html, /<title>T&lt;<\/title>/);
+    assert.match(html, /<h1>Title<\/h1>/);
+    assert.equal(await fs.exists('nope.md'), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+describe('publish + read-only URL access', () => {
+  let dir;
+  let server;
+  let baseUrl;
+  const env = () => ({ ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' });
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], { env: env() });
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-publish-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'posts', 'hello.md'), '---\ntitle: Hello\ndate: 2026-01-02\ntags: a, b\n---\n\nFirst **post**.\n');
+    await writeFile(join(dir, 'posts', 'secret.md'), '---\ntitle: Secret\ndraft: true\n---\n\nNot yet.\n');
+    await writeFile(join(dir, 'posts', 'Bad Name.md'), 'ignored');
+
+    // A dumb static file server: GET only, like a public bucket URL.
+    const root = join(dir, 'public');
+    server = createServer(async (req, res) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return res.writeHead(405).end();
+      const file = join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname));
+      if (!file.startsWith(root)) return res.writeHead(403).end();
+      try {
+        await stat(file);
+        res.writeHead(200);
+        createReadStream(file).pipe(res);
+      } catch {
+        res.writeHead(404).end();
+      }
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    baseUrl = `http://127.0.0.1:${server.address().port}/`;
+  });
+
+  after(async () => {
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test('publish uploads posts, skips drafts and bad names, writes index.json', async () => {
+    const { stdout, stderr } = await publish('--posts', join(dir, 'posts'));
+    assert.match(stdout, /Done: 1 published post/);
+    assert.match(stderr, /skip Bad Name\.md/);
+    const index = JSON.parse(await readFile(join(dir, 'public', 'index.json'), 'utf8'));
+    assert.deepEqual(index.items.map((i) => i.path), ['posts/hello.md']);
+    assert.deepEqual(index.items[0].metadata, {
+      title: 'Hello', date: '2026-01-02', tags: 'a, b', excerpt: 'First post.',
+    });
+    await assert.rejects(stat(join(dir, 'public', 'posts', 'secret.md')));
+  });
+
+  test('guests read through the URL adapter and cannot write', async () => {
+    const storage = new Storage({ adapter: urlAdapter({ baseUrl }) });
+    const list = await storage.list({ prefix: 'posts/' });
+    assert.deepEqual(list.items.map((i) => i.path), ['posts/hello.md']);
+    assert.equal(list.items[0].metadata.title, 'Hello');
+    assert.match(await storage.download('posts/hello.md', { as: 'text' }), /First \*\*post\*\*/);
+    await assert.rejects(storage.download('posts/secret.md'), { code: 'NotFound' });
+    await assert.rejects(storage.download('posts/../index.json'), { code: 'InvalidArgument' });
+    for (const write of [
+      () => storage.upload('posts/x.md', 'x'),
+      () => storage.delete('posts/hello.md'),
+      () => storage.move('posts/hello.md', 'posts/y.md'),
+      () => storage.copy('posts/hello.md', 'posts/y.md'),
+    ]) await assert.rejects(write(), { code: 'NotSupported' });
+  });
+
+  test('Md4cFs renders published posts read-only', async () => {
+    const fs = await Md4cFs.open({ baseUrl, wasmUrl: WASM_URL });
+    assert.match(await fs.renderFile('posts/hello.md'), /<strong>post<\/strong>/);
+    await assert.rejects(fs.writeFile('posts/x.md', 'x'), { code: 'NotSupported' });
+  });
+
+  test('un-drafting publishes, re-drafting unpublishes, --prune removes', async () => {
+    const secret = join(dir, 'posts', 'secret.md');
+    await writeFile(secret, '---\ntitle: Secret\n---\n\nNow public.\n');
+    await publish('--posts', join(dir, 'posts'));
+    await stat(join(dir, 'public', 'posts', 'secret.md'));
+
+    await writeFile(secret, '---\ntitle: Secret\ndraft: true\n---\n\nBack to draft.\n');
+    await publish('--posts', join(dir, 'posts'));
+    await assert.rejects(stat(join(dir, 'public', 'posts', 'secret.md')));
+
+    await rm(join(dir, 'posts', 'hello.md'));
+    await publish('--posts', join(dir, 'posts'), '--prune');
+    const index = JSON.parse(await readFile(join(dir, 'public', 'index.json'), 'utf8'));
+    assert.deepEqual(index.items, []);
+  });
+
+  test('a hand-written index of plain paths works, and posts load without it', async () => {
+    const pub = join(dir, 'public');
+    await mkdir(join(pub, 'posts'), { recursive: true });
+    await writeFile(join(pub, 'posts', 'by-hand.md'), '---\ntitle: By hand\n---\n\nUploaded directly.\n');
+    const saved = await readFile(join(pub, 'index.json'), 'utf8');
+    try {
+      // Not in index.json yet: listing skips it, reading it by path works.
+      let storage = new Storage({ adapter: urlAdapter({ baseUrl }) });
+      assert.match(await storage.download('posts/by-hand.md', { as: 'text' }), /Uploaded directly/);
+
+      await writeFile(join(pub, 'index.json'), '["posts/by-hand.md", "/posts/not-uploaded.md"]');
+      storage = new Storage({ adapter: urlAdapter({ baseUrl }) });
+      const list = await storage.list({ prefix: 'posts/' });
+      assert.deepEqual(list.items.map((i) => i.path), ['posts/by-hand.md', 'posts/not-uploaded.md']);
+      assert.equal(list.items[0].metadata, undefined);
+
+      await rm(join(pub, 'index.json'));
+      storage = new Storage({ adapter: urlAdapter({ baseUrl }) });
+      assert.deepEqual((await storage.list()).items, [], 'missing index lists nothing');
+    } finally {
+      await writeFile(join(pub, 'index.json'), saved);
+      await rm(join(pub, 'posts', 'by-hand.md'));
+    }
+  });
+
+  test('index.json "site" settings survive reindexing; --config replaces them', async () => {
+    const indexFile = join(dir, 'public', 'index.json');
+    let index = JSON.parse(await readFile(indexFile, 'utf8'));
+    assert.equal(typeof index.site?.title, 'string', 'seeded from blog/site.json');
+
+    // The owner edits the theme directly in the bucket ...
+    index.site = { title: 'My Journal', theme: 'modern', accent: '#123456' };
+    await writeFile(indexFile, JSON.stringify(index));
+    await publish('--no-posts');
+    index = JSON.parse(await readFile(indexFile, 'utf8'));
+    assert.deepEqual(index.site, { title: 'My Journal', theme: 'modern', accent: '#123456' });
+
+    // ... or sets it from a local file.
+    const cfg = join(dir, 'site.json');
+    await writeFile(cfg, JSON.stringify({ title: 'From file', slogan: 'Hello' }));
+    await publish('--no-posts', '--config', cfg);
+    index = JSON.parse(await readFile(indexFile, 'utf8'));
+    assert.deepEqual(index.site, { title: 'From file', slogan: 'Hello' });
+
+    // The URL adapter exposes it to the page.
+    const adapter = urlAdapter({ baseUrl });
+    assert.equal((await adapter.raw.document()).site.title, 'From file');
+  });
+
+  test('files written directly to storage appear after --no-posts reindex', async () => {
+    const owner = new Storage({ adapter: fsAdapter({ root: dir, folder: 'public' }) });
+    await owner.upload('posts/direct.md', '---\ntitle: Direct\n---\n\nWritten straight to the bucket.\n');
+    await publish('--no-posts');
+    const index = JSON.parse(await readFile(join(dir, 'public', 'index.json'), 'utf8'));
+    assert.deepEqual(index.items.map((i) => i.metadata.title), ['Direct']);
+  });
+});
+
+describe('static pages for search engines', () => {
+  let dir;
+  const pub = () => join(dir, 'public');
+  const read = (p) => readFile(join(pub(), p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-seo-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({
+      title: 'Test Journal', url: 'https://blog.example.com', author: 'A. Author', language: 'en-GB',
+      verification: { google: 'g-token_1' }, accent: '#123456', backgroundImage: 'assets/bg.png',
+    }));
+    await writeFile(join(dir, 'posts', 'hello.md'),
+      '---\ntitle: Hello <World>\ndate: 2026-01-02\ntags: a, b\ndescription: A short summary.\nimage: cover.png\n---\n\n' +
+      'First **post**. See [the other one](other.md) and [[Other]].\n');
+    await writeFile(join(dir, 'posts', 'other.md'),
+      '---\ntitle: Other\ndate: 2025-06-01\ntags: b\nimage: javascript:alert(1)\n---\n\nSecond.\n');
+    await writeFile(join(dir, 'posts', 'secret.md'), '---\ntitle: Secret\ndraft: true\n---\n\nNo.\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('each post gets a real page with full metadata', async () => {
+    const html = await read('posts/hello.html');
+    assert.match(html, /<html lang="en-GB" data-theme="academic"/);
+    assert.match(html, /<title>Hello &lt;World&gt; · Test Journal<\/title>/);
+    assert.match(html, /<meta name="description" content="A short summary.">/);
+    assert.match(html, /<link rel="canonical" href="https:\/\/blog.example.com\/posts\/hello.html">/);
+    assert.match(html, /<meta property="og:image" content="https:\/\/blog.example.com\/posts\/cover.png">/);
+    assert.match(html, /<meta name="citation_publication_date" content="2026\/01\/02">/);
+    assert.match(html, /<meta name="google-site-verification" content="g-token_1">/);
+    assert.match(html, /First <strong>post<\/strong>/, 'content is in the HTML, no JS needed');
+    assert.match(html, /href="other.html">the other one/, '.md links point at pages');
+    assert.match(html, /<a href="other.html">Other<\/a>/, 'wiki links point at pages');
+    const ld = JSON.parse(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(html)[1]);
+    assert.equal(ld['@type'], 'ScholarlyArticle');
+    assert.equal(ld.headline, 'Hello <World>');
+    assert.equal(ld.datePublished, '2026-01-02');
+    assert.equal(ld.author.name, 'A. Author');
+    assert.equal(ld.url, 'https://blog.example.com/posts/hello.html');
+
+    const other = await read('posts/other.html');
+    assert.doesNotMatch(other, /javascript:/, 'unsafe image URL dropped');
+    await assert.rejects(read('posts/secret.html'), 'drafts get no page');
+  });
+
+  test('home page lists articles as plain links, grouped by year', async () => {
+    const html = await read('index.html');
+    assert.match(html, /<link rel="canonical" href="https:\/\/blog.example.com\/index.html">/);
+    assert.match(html, /<h2 class="year-heading sc">2026<\/h2>[\s\S]*href="posts\/hello.html"[\s\S]*<h2 class="year-heading sc">2025<\/h2>[\s\S]*href="posts\/other.html"/);
+    assert.doesNotMatch(html, /secret/i);
+    const index = JSON.parse(await read('index.json'));
+    assert.deepEqual(index.items.map((i) => i.page).sort(), ['posts/hello.html', 'posts/other.html']);
+    assert.equal(index.items.find((i) => i.page === 'posts/hello.html').metadata.description, 'A short summary.');
+  });
+
+  test('sitemap, feed, robots and theme.css', async () => {
+    const map = await read('sitemap.xml');
+    assert.match(map, /<loc>https:\/\/blog.example.com\/posts\/hello.html<\/loc><lastmod>2026-01-02<\/lastmod>/);
+    assert.doesNotMatch(map, /secret/);
+    const feed = await read('feed.xml');
+    assert.match(feed, /<title>Hello &lt;World&gt;<\/title>/);
+    assert.match(feed, /<link rel="self" href="https:\/\/blog.example.com\/feed.xml"\/>/);
+    assert.match(await read('robots.txt'), /Sitemap: https:\/\/blog.example.com\/sitemap.xml/);
+    const css = await read('theme.css');
+    assert.match(css, /--accent-base: #123456;/);
+    assert.match(css, /--bg-image: url\("assets\/bg.png"\);/);
+  });
+
+  test('pages of removed or re-drafted posts are deleted', async () => {
+    await writeFile(join(dir, 'posts', 'other.md'), '---\ntitle: Other\ndraft: true\n---\n\nBack to draft.\n');
+    await publish('--posts', join(dir, 'posts'));
+    await assert.rejects(read('posts/other.html'));
+    assert.doesNotMatch(await read('sitemap.xml'), /other.html/);
+    assert.equal(JSON.parse(await read('index.json')).site.title, 'Test Journal', 'site settings kept');
+  });
+
+  test('--site-url fills in a missing url and never replaces one', async () => {
+    const indexFile = join(dir, 'public', 'index.json');
+    const original = await readFile(indexFile, 'utf8');
+    const doc = JSON.parse(original);
+    delete doc.site.url;
+    await writeFile(indexFile, JSON.stringify(doc));
+    await publish('--no-posts', '--site-url', 'https://pub-abc.r2.dev');
+    assert.equal(JSON.parse(await readFile(indexFile, 'utf8')).site.url, 'https://pub-abc.r2.dev/');
+    await publish('--no-posts', '--site-url', 'https://other.example');
+    assert.equal(JSON.parse(await readFile(indexFile, 'utf8')).site.url, 'https://pub-abc.r2.dev/');
+    assert.equal(JSON.parse(await readFile(indexFile, 'utf8')).site.title, 'Test Journal', 'other settings kept');
+    await writeFile(indexFile, original);
+  });
+
+  test('builds are incremental: only changed posts are re-rendered', async () => {
+    let { stdout } = await publish('--no-posts');
+    assert.match(stdout, /Incremental build: 0 page\(s\) rendered/);
+    await writeFile(join(pub(), 'posts', 'hello.md'),
+      '---\ntitle: Hello again\ndate: 2026-01-02\ntags: a\n---\n\nEdited.\n');
+    ({ stdout } = await publish('--no-posts'));
+    assert.match(stdout, /Incremental build: 1 page\(s\) rendered/);
+    assert.match(await read('posts/hello.html'), /<title>Hello again/);
+    assert.match(await read('index.html'), /Hello again/);
+    ({ stdout } = await publish('--no-posts', '--full'));
+    assert.match(stdout, /Full build: 1 page\(s\) rendered/);
+  });
+
+  test('hand-written index entries can carry title, date and tags', async () => {
+    const { urlAdapter: make } = await import('../js/url-adapter.js');
+    const server = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify([{ path: 'posts/x.md', title: 'X', date: '2026-02-03', tags: ['p', 'q'] }]));
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const s = new Storage({ adapter: make({ baseUrl: `http://127.0.0.1:${server.address().port}/` }) });
+      const [item] = (await s.list()).items;
+      assert.deepEqual(item.metadata, { title: 'X', date: '2026-02-03', tags: 'p, q' });
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe('password-protected posts', () => {
+  let dir;
+  const pub = () => join(dir, 'public');
+  const read = (p) => readFile(join(pub(), p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+  const SECRET = 'The launch code is 4242';
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-protected-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({ title: 'Locked Journal', url: 'https://blog.example.com' }));
+    await writeFile(join(dir, 'posts', 'vault.md'),
+      `---\ntitle: The Vault\ndate: 2026-03-04\ntags: private\ndescription: ${SECRET} (summary)\npassword: open sesame\n---\n\n${SECRET}, see **notes**.\n`);
+    await writeFile(join(dir, 'posts', 'open.md'), '---\ntitle: Open\ndate: 2026-03-01\n---\n\nPublic text.\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('encryption round-trips, and a wrong password fails', async () => {
+    const { decryptText, encryptText, WrongPasswordError } = await import('../js/protect.js');
+    const env = await encryptText('héllo <b>world</b>', 'pässword');
+    assert.equal(env.iter, 600000);
+    assert.equal(await decryptText(env, 'pässword'), 'héllo <b>world</b>');
+    await assert.rejects(decryptText(env, 'wrong'), WrongPasswordError);
+    const again = await encryptText('héllo <b>world</b>', 'pässword');
+    assert.notEqual(again.ct, env.ct, 'fresh salt and IV each time');
+  });
+
+  test('nothing secret reaches the public bucket', async () => {
+    for (const f of ['posts/vault.md', 'posts/vault.html', 'index.json', 'index.html', 'feed.xml', 'sitemap.xml']) {
+      const text = await read(f);
+      assert.ok(!text.includes('4242'), `${f} leaks the text`);
+      assert.ok(!text.includes('open sesame'), `${f} leaks the password`);
+    }
+    const md = await read('posts/vault.md');
+    assert.match(md, /title: The Vault/);
+    assert.match(md, /protected: true/);
+    assert.doesNotMatch(md, /description:/, 'the description could tell too much');
+    const entry = JSON.parse(await read('index.json')).items.find((e) => e.path === 'posts/vault.md');
+    assert.equal(entry.metadata.protected, 'true');
+    assert.equal(entry.metadata.excerpt, '');
+    assert.doesNotMatch(await read('sitemap.xml'), /vault/);
+    assert.match(await read('index.html'), /Password-protected/);
+  });
+
+  test('the page carries the encrypted article and unlocks with the password', async () => {
+    const { decryptText } = await import('../js/protect.js');
+    const html = await read('posts/vault.html');
+    assert.match(html, /<meta name="robots" content="noindex">/);
+    assert.match(html, /class="unlock"/);
+    const attr = /data-envelope="([^"]+)"/.exec(html)[1]
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const article = await decryptText(JSON.parse(attr), 'open sesame');
+    assert.match(article, /The launch code is 4242, see <strong>notes<\/strong>/);
+  });
+
+  test('pages and indexes are revalidated on every visit, so changes are live at once', async () => {
+    const { build, CACHE_PAGES } = await import('../js/site-build.js');
+    assert.equal(CACHE_PAGES, 'public, no-cache');
+    const storage = new Storage({ adapter: fsAdapter({ root: dir, folder: 'public' }) });
+    const seen = new Map();
+    const spy = new Proxy(storage, {
+      get(target, prop) {
+        if (prop === 'upload') return (path, body, opts) => { seen.set(path, opts?.cacheControl); return target.upload(path, body, opts); };
+        const v = target[prop];
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    await build(spy, await loadMd4c(WASM_URL), { full: true });
+    for (const f of ['posts/vault.html', 'posts/open.html', 'index.json', 'index.html', 'feed.xml', 'sitemap.xml']) {
+      assert.equal(seen.get(f), 'public, no-cache', f);
+    }
+    const { cacheControlFor } = await import('../admin/src/paths.js');
+    assert.equal(cacheControlFor('posts/vault.md'), 'public, no-cache');
+    assert.equal(cacheControlFor('posts/vault.html'), 'public, no-cache');
+    assert.equal(cacheControlFor('posts/photo.jpg'), 'public, max-age=300');
+  });
+
+  test('a post with a password found in plain text is never rendered', async () => {
+    await writeFile(join(pub(), 'posts', 'leak.md'), '---\ntitle: Leak\ndate: 2026-03-05\npassword: x\n---\n\nOops 4242.\n');
+    const { stderr } = await publish('--no-posts');
+    assert.match(stderr, /leak\.md has a password but is NOT encrypted/);
+    await assert.rejects(read('posts/leak.html'));
+    assert.ok(!(await read('index.json')).includes('Oops'));
+  });
+});
+
+test('full-text search of the blog on a web search engine', async () => {
+  const { normalizeSite, webSearch } = await import('../js/site-config.js');
+  const site = normalizeSite({ url: 'https://blog.example.com' }, 'https://blog.example.com/');
+  assert.equal(site.search, 'google', 'on by default');
+  assert.deepEqual(webSearch(site, ' c++ templates ', 'blog.example.com'), {
+    label: 'Google',
+    href: 'https://www.google.com/search?q=c%2B%2B%20templates%20site%3Ablog.example.com',
+  });
+  assert.equal(webSearch(site, '   ', 'blog.example.com'), null);
+  assert.match(webSearch(normalizeSite({ search: 'bing' }, 'https://x/'), 'q', 'x.org').href, /^https:\/\/www\.bing\.com\/search\?q=q%20site%3Ax\.org$/);
+  assert.equal(webSearch(normalizeSite({ search: 'none' }, 'https://x/'), 'q', 'x.org'), null);
+  assert.equal(normalizeSite({ search: 'evil.example' }, 'https://x/').search, 'google', 'unknown engines are ignored');
+});
+
+describe('front matter (YAML), titles, banners and backgrounds', () => {
+  let dir;
+  const read = (p) => readFile(join(dir, 'public', p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-yaml-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({ title: 'Y', url: 'https://y.example', banner: 'assets/home.jpg' }));
+    await writeFile(join(dir, 'posts', 'yaml.md'), [
+      '---', '# a comment', 'title: "C++ tips: a + b"', 'date: 2026-10-16', 'tags: [c++, "g++", compilers]',
+      'author: \'O\'\'Brien\'', 'banner: banner.jpg', 'background: /assets/paper.jpg', 'backgroundMode: page',
+      'summary: |', '  two', '  lines', '---', '', 'Body text.', '',
+    ].join('\n'));
+    await writeFile(join(dir, 'posts', 'heading.md'), '# C# & C++ notes\n\nFirst paragraph.\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('YAML values: quotes, lists, block text, comments', async () => {
+    const { parseFrontMatter } = await import('../js/post-format.js');
+    const { meta } = parseFrontMatter(await readFile(join(dir, 'posts', 'yaml.md'), 'utf8'));
+    assert.equal(meta.title, 'C++ tips: a + b');
+    assert.equal(meta.tags, 'c++, g++, compilers');
+    assert.equal(meta.author, "O'Brien");
+    assert.equal(meta.summary, 'two\nlines');
+    assert.equal(parseFrontMatter('---\ntags:\n  - a\n  - "b c"\n---\n').meta.tags, 'a, b c');
+    assert.equal(parseFrontMatter('---\ntitle: Issue #42\n---\n').meta.title, 'Issue #42', '"#" inside a value is kept');
+  });
+
+  test('the title keeps every character, and a leading "# Heading" is the title', async () => {
+    const yaml = await read('posts/yaml.html');
+    assert.match(yaml, /<h1 class="article-title">C\+\+ tips: a \+ b<\/h1>/);
+    assert.match(yaml, /rel="tag">c\+\+</);
+    assert.match(yaml, /class="author">O&#39;Brien</);
+    const heading = await read('posts/heading.html');
+    assert.match(heading, /<h1 class="article-title">C# &amp; C\+\+ notes<\/h1>/);
+    assert.equal((heading.match(/C# &amp; C\+\+ notes<\/h1>/g) ?? []).length, 1, 'the heading is not repeated in the body');
+    assert.equal(JSON.parse(await read('index.json')).items.find((i) => i.path === 'posts/heading.md').metadata.title, 'C# & C++ notes');
+  });
+
+  test('post banner and background, and the home page banner', async () => {
+    const yaml = await read('posts/yaml.html');
+    assert.match(yaml, /<figure class="post-banner"><img src="\.\.\/posts\/banner\.jpg"/);
+    assert.match(yaml, /data-background="\.\.\/assets\/paper\.jpg" data-background-mode="page"/);
+    assert.match(yaml, /og:image" content="https:\/\/y\.example\/posts\/banner\.jpg"/, 'the banner is the social image');
+    assert.match(await read('index.html'), /<figure class="home-banner"><img src="assets\/home\.jpg"/);
+    const { referencedKeys } = await import('../admin/src/paths.js');
+    assert.deepEqual(referencedKeys(await readFile(join(dir, 'posts', 'yaml.md'), 'utf8'), 'posts/yaml.md').sort(),
+      ['assets/paper.jpg', 'posts/banner.jpg'], 'publishing copies the banner and background');
+  });
+});
+
+describe('links between posts (graph) and section headings', () => {
+  let dir;
+  const read = (p) => readFile(join(dir, 'public', p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-graph-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({ title: 'G', url: 'https://g.example/blog/' }));
+    const post = (slug, body) => writeFile(join(dir, 'posts', `${slug}.md`), `---\ntitle: ${slug}\ndate: 2026-10-01\n---\n\n${body}\n`);
+    await post('alpha', 'See [[Beta]], [gamma](gamma.md#x), [again](https://g.example/blog/posts/beta.html), '
+      + '[live](../index.html#/post/gamma), [[Not Written]], [self](alpha.md), [elsewhere](https://other.example/posts/x.html) and ![](pic.png).');
+    await post('beta', '# Install\n\nText.\n\n## Step 1\n\n```sh\n# not a heading\n```\n\n# Use\n\nBack to [alpha](alpha.md).');
+    await post('gamma', 'No links.');
+    await writeFile(join(dir, 'posts', 'reading.md'), `---\ntitle: Reading\ndate: 2026-10-03\ntype: paper\npdf: r.pdf\n---\n\nNotes.\n\n\`\`\`md4c-annotations\n[\n${JSON.stringify({ id: 'a-rrrr11', page: 2, rects: [], title: 'Key idea', quote: 'the quote', comment: 'Why it **matters**', tags: ['method'], color: 'blue' })}\n]\n\`\`\`\n`);
+    await writeFile(join(dir, 'posts', 'locked.md'), '---\ntitle: Locked\ndate: 2026-10-02\npassword: pw\n---\n\nSecret [[Alpha]] link.\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('index.json lists the posts each post links to', async () => {
+    const items = JSON.parse(await read('index.json')).items;
+    const links = Object.fromEntries(items.map((i) => [i.path, i.links]));
+    assert.deepEqual(links['posts/alpha.md'], ['beta', 'gamma', 'not-written']);
+    assert.deepEqual(links['posts/beta.md'], ['alpha']);
+    assert.deepEqual(links['posts/gamma.md'], []);
+    assert.deepEqual(links['posts/locked.md'], [], 'a protected post keeps its links secret');
+    const alpha = items.find((i) => i.path === 'posts/alpha.md');
+    assert.deepEqual(alpha.context.beta, ['See ', 'Beta', ', gamma, again, live, Not Written, self, elsewhere and .'],
+      'where each link appears: text before, link text, text after');
+    assert.deepEqual(items.find((i) => i.path === 'posts/beta.md').context.alpha, ['Back to ', 'alpha', '.']);
+    assert.equal(items.find((i) => i.path === 'posts/locked.md').context, undefined);
+  });
+
+  test('paper highlights are listed in index.json, for highlights.html', async () => {
+    const items = JSON.parse(await read('index.json')).items;
+    assert.deepEqual(items.find((i) => i.path === 'posts/reading.md').highlights,
+      [{ id: 'a-rrrr11', page: 2, label: 'Key idea', quote: 'the quote', comment: 'Why it matters', tags: ['method'], color: 'blue' }]);
+    assert.equal(items.find((i) => i.path === 'posts/alpha.md').highlights, undefined);
+    const { graphData } = await import('../blog/graph.js');
+    const linked = graphData([
+      { path: 'posts/p.md', metadata: { title: 'P' }, links: [], highlights: [{ id: 'a-1111', label: 'One', color: 'red', refs: ['a-2222'] }, { id: 'a-2222', label: 'Two' }] },
+      { path: 'posts/q.md', metadata: { title: 'Q' }, links: ['p'], refs: ['a-1111'] },
+      { path: 'posts/r.md', metadata: { title: 'R' }, links: [] },
+    ], { postHref: (slug) => `${slug}.html`, highlights: true, commentsOnly: true });
+    assert.deepEqual(linked.nodes.map((n) => n.id).sort(), ['h:a-1111', 'h:a-2222', 'p:p', 'p:q'], 'posts without comments stay out');
+    assert.ok(linked.edges.some((e) => e.source === 'h:a-1111' && e.target === 'h:a-2222' && !e.tag), 'a comment links to another');
+    assert.ok(linked.edges.some((e) => e.source === 'p:q' && e.target === 'h:a-1111'), 'a post links to a comment');
+    const g = graphData(items, { postHref: (slug) => `${slug}.html`, highlights: true, commentsOnly: true });
+    assert.deepEqual(g.nodes.map((n) => `${n.id}:${n.kind}`).sort(), ['h:a-rrrr11:note', 'p:reading:post']);
+    assert.deepEqual(g.nodes.find((n) => n.kind === 'note').href, 'reading.html#a-rrrr11');
+    assert.ok(g.edges.some((e) => e.source === 'p:reading' && e.target === 'h:a-rrrr11' && e.tag), 'a comment hangs from its paper');
+    const page = await read('highlights.html');
+    assert.match(page, /data-page="highlights"/);
+    assert.match(page, /paper\.css/);
+    assert.match(await read('posts/reading.html'), /data-tags="method"[\s\S]*title="Page 2">Key idea<\/a>/);
+  });
+
+  test('a Graph page, linked from every page', async () => {
+    const graph = await read('graph.html');
+    assert.match(graph, /data-page="graph"/);
+    assert.match(graph, /id="graph-view"/);
+    assert.match(graph, /name="robots" content="noindex, follow"/);
+    assert.match(await read('posts/alpha.html'), /<a href="\.\.\/graph\.html">Graph<\/a>/);
+    assert.match(await read('index.html'), /<a href="graph\.html">Graph<\/a>/);
+  });
+
+  test('"# Section" headings in the body become h2, so posts get contents and numbers', async () => {
+    const beta = await read('posts/beta.html');
+    assert.match(beta, /<h2>Install<\/h2>/);
+    assert.match(beta, /<h3>Step 1<\/h3>/);
+    assert.match(beta, /<h2>Use<\/h2>/);
+    assert.match(beta, /# not a heading/, 'code is left alone');
+    assert.equal((beta.match(/<h1[\s>]/g) ?? []).length, 1, 'the title is the only h1');
+  });
+
+  test('graphData and neighbourhood', async () => {
+    const { graphData, neighbourhood } = await import('../blog/graph.js');
+    const items = JSON.parse(await read('index.json')).items;
+    const g = graphData(items, { postHref: (s) => `${s}.html` });
+    assert.deepEqual(g.nodes.map((n) => `${n.id}:${n.kind}`).sort(),
+      ['p:alpha:post', 'p:beta:post', 'p:gamma:post', 'p:locked:post', 'p:not-written:missing', 'p:reading:post']);
+    assert.deepEqual(g.edges.map((e) => `${e.source}>${e.target}${e.both ? ' both' : ''}`).sort(),
+      ['p:alpha>p:beta both', 'p:alpha>p:gamma', 'p:alpha>p:not-written'], 'links both ways are one edge, with both arrows');
+    const near = neighbourhood(g, 'p:gamma', 1);
+    assert.deepEqual(near.nodes.map((n) => n.id).sort(), ['p:alpha', 'p:gamma'], 'backlinks count');
+    assert.equal(neighbourhood(g, 'p:gamma', 2).nodes.length, 4);
+    const tagged = graphData([{ path: 'posts/a.md', metadata: { title: 'A', tags: 'x, y' }, links: [] }],
+      { postHref: (s) => s, tags: true });
+    assert.deepEqual(tagged.nodes.map((n) => `${n.id}:${n.kind}`), ['p:a:post', 't:x:tag', 't:y:tag']);
+    assert.ok(tagged.edges.every((e) => e.tag), 'tag edges are marked as such');
+  });
+});
+
+describe("private Markdown: the public bucket gets only pages", () => {
+  let dir;
+  const pub = (p) => readFile(join(dir, 'public', p), 'utf8');
+  const has = (folder, p) => stat(join(dir, folder, p)).then(() => true, () => false);
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-private-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'posts', 'one.md'), '---\ntitle: One\ndate: 2026-10-01\n---\n\nSee [[Two]].\n');
+    await writeFile(join(dir, 'posts', 'two.md'), '---\ntitle: Two\ndate: 2026-10-02\n---\n\nText.\n');
+    // Published the old way first: Markdown in the public bucket.
+    await publish('--posts', join(dir, 'posts'));
+  });
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('--sources-bucket moves the Markdown out and builds from it', async () => {
+    assert.ok(await has('public', 'posts/one.md'), 'the old way: public');
+    await publish('--posts', join(dir, 'posts'), '--sources-bucket', 'private');
+    assert.equal(await has('public', 'posts/one.md'), false);
+    assert.equal(await has('public', 'posts/two.md'), false);
+    assert.ok(await has('private', '.published/posts/one.md'));
+    assert.match(await pub('posts/one.html'), /<a href="two\.html">Two<\/a>/);
+    const index = JSON.parse(await pub('index.json'));
+    assert.equal(index.build.sources, 'private');
+    assert.deepEqual(index.items.map((i) => i.path), ['posts/one.md', 'posts/two.md']);
+    await publish('--no-posts', '--sources-bucket', 'private', '--full');
+    assert.ok(await has('public', 'posts/two.html'), 'rebuilds from the private copy');
+  });
+
+  test('a rebuild without the private Markdown is refused, not destructive', async () => {
+    await assert.rejects(publish('--no-posts'), /keeps its posts' Markdown privately/);
+    assert.ok(await has('public', 'posts/one.html'), 'pages untouched');
+  });
+});
+
+describe('per-post style in the front matter: toc and numbered', () => {
+  let dir;
+  const read = (p) => readFile(join(dir, 'public', p), 'utf8');
+  const publish = (...args) => run(process.execPath, [PUBLISH, '--to', 'fs', ...args], {
+    env: { ...process.env, FS_ROOT: dir, FS_FOLDER: 'public' },
+  });
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'blog-style-'));
+    await mkdir(join(dir, 'posts'));
+    await writeFile(join(dir, 'site.json'), JSON.stringify({ title: 'S' }));
+    await writeFile(join(dir, 'posts', 'plain.md'), '---\ntitle: Plain\ndate: 2026-10-01\n---\n\n# A\n\n# B\n');
+    await writeFile(join(dir, 'posts', 'styled.md'), '---\ntitle: Styled\ndate: 2026-10-02\ntoc: no\nnumbered: yes\n---\n\n# A\n\n# B\n');
+    await publish('--posts', join(dir, 'posts'), '--config', join(dir, 'site.json'));
+  });
+  after(() => rm(dir, { recursive: true, force: true }));
+
+  test('sections are not numbered unless the site or the post asks', async () => {
+    const plain = await read('posts/plain.html');
+    assert.match(plain, /<html [^>]*data-numbered="false"/);
+    assert.match(plain, /<article [^>]*data-numbered="false"/);
+    assert.doesNotMatch(plain, /data-toc=/);
+    const styled = await read('posts/styled.html');
+    assert.match(styled, /<html [^>]*data-numbered="true"/);
+    assert.match(styled, /<article [^>]*data-numbered="true" data-toc="false"/);
+    const meta = JSON.parse(await read('index.json')).items.find((i) => i.path === 'posts/styled.md').metadata;
+    assert.equal(meta.toc, 'false');
+    assert.equal(meta.numbered, 'true');
+  });
+});
+
+test('uploads to R2/S3 keep their Cache-Control (storagesdk drops it)', async () => {
+  const { s3Put } = await import('../scripts/s3-put.mjs');
+  const seen = [];
+  const server = createServer((req, res) => {
+    seen.push({ method: req.method, url: req.url, cache: req.headers['cache-control'], type: req.headers['content-type'] });
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { etag: '"x"' });
+      res.end();
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const put = await s3Put('r2', {
+      R2_ENDPOINT: `http://127.0.0.1:${server.address().port}`, R2_BUCKET: 'blog', R2_ACCESS_KEY_ID: 'id', R2_SECRET_ACCESS_KEY: 'secret',
+    });
+    await put('lib/render.js', 'export {}', { contentType: 'text/javascript', cacheControl: 'public, no-cache' });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].method, 'PUT');
+    assert.match(seen[0].url, /^\/blog\/lib\/render\.js/);
+    assert.equal(seen[0].cache, 'public, no-cache');
+    assert.equal(seen[0].type, 'text/javascript');
+    assert.equal(await s3Put('fs'), null);
+  } finally {
+    server.close();
+  }
+});
+
+test('a Google tag in the site settings goes in every page, allowed by the CSP', async () => {
+  const { googleTagId, normalizeSite } = await import('../js/site-config.js');
+  const { homePage, postPage, graphPage, CSP } = await import('../js/pages.js');
+  const { createHash } = await import('node:crypto');
+  const snippet = `<!-- Google tag (gtag.js) -->\n<script async src="https://www.googletagmanager.com/gtag/js?id=G-M75SMCS8TE"></script>\n<script>gtag('config', 'G-M75SMCS8TE');</script>`;
+  assert.equal(googleTagId(snippet), 'G-M75SMCS8TE', 'the whole snippet may be pasted');
+  assert.equal(googleTagId('nonsense'), '');
+  const site = normalizeSite({ url: 'https://b.example/', googleTag: 'G-M75SMCS8TE' }, 'https://b.example/');
+  const post = { slug: 'p', page: 'posts/p.html', title: 'P', date: '2026-10-16', tags: '' };
+  for (const html of [homePage(site, []), postPage(site, post, '<p>x</p>'), postPage(site, { ...post, protected: 'true' }, ''), graphPage(site)]) {
+    const head = html.slice(html.indexOf('<head>'), html.indexOf('</head>'));
+    assert.equal((head.match(/googletagmanager\.com\/gtag\/js\?id=G-M75SMCS8TE/g) ?? []).length, 1, 'exactly one tag');
+    // Google's own snippet, inline, as Search Console's check expects it.
+    const inline = /<script>([\s\S]*?)<\/script>/.exec(head)[1];
+    assert.match(inline, /gtag\('config', 'G-M75SMCS8TE'\);/);
+    assert.match(inline, /function gtag\(\)\{dataLayer\.push\(arguments\);\}/);
+    assert.ok(head.indexOf('Content-Security-Policy') < head.indexOf('googletagmanager'), 'after the CSP, which only covers what follows');
+    // The CSP allows exactly that inline script, by its hash.
+    const hash = createHash('sha256').update(inline).digest('base64');
+    assert.ok(head.includes(`script-src 'self' 'wasm-unsafe-eval' 'sha256-${hash}' https://*.googletagmanager.com`));
+    assert.match(head, /connect-src 'self' https:\/\/\*\.google-analytics\.com/);
+    assert.equal((head.match(/<script>/g) ?? []).length, 1, 'no other inline script');
+  }
+  const plain = homePage(normalizeSite({}, 'https://b.example/'), []);
+  assert.doesNotMatch(plain, /googletagmanager/);
+  assert.match(plain, new RegExp(CSP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'without a tag the CSP is unchanged');
+});
+
+test("publish.mjs refuses to put posts' Markdown in a public bucket without --sources-bucket", async () => {
+  const env = { ...process.env, R2_BUCKET: 'blog', R2_ACCOUNT_ID: 'acc', R2_ACCESS_KEY_ID: 'id', R2_SECRET_ACCESS_KEY: 'secret', R2_ENDPOINT: 'http://127.0.0.1:9' };
+  await assert.rejects(run(process.execPath, [PUBLISH, '--to', 'r2'], { env }), (err) => {
+    assert.equal(err.code, 2);
+    assert.match(err.stderr, /Refusing to put the posts' Markdown in the public bucket/);
+    return true;
+  });
+});
+
+describe('citations and a bibliography', () => {
+  const BIB = `@string{nips = "Advances in Neural Information Processing Systems"}
+@inproceedings{vaswani2017, title = {Attention is All you Need}, author = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki},
+  booktitle = nips, pages = {5998--6008}, year = 2017, doi = {https://doi.org/10.5555/3295222.3295349}}
+@article{jurgen, author = "J{\\"u}rgen Schmidhuber", title = "Deep Learning in Neural Networks", journal = {Neural Networks}, volume = 61, pages = "85--117", year = 2015}
+@book{sutton, author = {Richard S. Sutton and Andrew G. Barto}, title = {Reinforcement Learning}, publisher = {MIT Press}, year = {2018}}
+@misc{oa1, author = {{OpenAI}}, title = {B report}, year = 2019}
+@misc{oa2, author = {{OpenAI}}, title = {A report}, year = 2019}
+@misc{broken, title = {no end`;
+
+  test('BibTeX is read: strings, braces, accents, names', async () => {
+    const { parseBibtex, texToText } = await import('../js/cite.js');
+    const bib = parseBibtex(BIB);
+    assert.deepEqual([...bib.keys()], ['vaswani2017', 'jurgen', 'sutton', 'oa1', 'oa2']);
+    assert.equal(bib.get('vaswani2017').fields.booktitle, 'Advances in Neural Information Processing Systems');
+    assert.equal(texToText('J{\\"u}rgen \\c{c}a --- {\\ss} $x_{1}$'), 'Jürgen ça — ß $x_{1}$', 'accents as letters, math kept');
+  });
+
+  test('citations in both styles, and the references list', async () => {
+    const { parseBibtex, citationTokens, createBibliography } = await import('../js/cite.js');
+    const bib = parseBibtex(BIB);
+    const text = 'As @vaswani2017 show [@jurgen, p. 3; see @sutton] and [-@vaswani2017]. [@oa1; @oa2] [@nope] @fig:one [@sec:intro] {#eq:e1} a@b.com.';
+    const tokens = citationTokens(text, (k) => bib.has(k));
+    assert.deepEqual(tokens.filter((t) => t.xref || t.label), [{ xref: 'fig:one' }, { xref: 'sec:intro' }, { label: 'eq:e1' }]);
+    assert.ok(tokens.at(-1).text.endsWith('a@b.com.'), 'an e-mail address is not a citation');
+    const plain = (style) => {
+      const b = createBibliography(bib, { style });
+      b.use(tokens.flatMap((t) => t.cite?.map((c) => c.key) ?? []));
+      return [tokens.filter((t) => t.cite).map((t) => b.citationHtml(t).replace(/<[^>]+>/g, '')), b.referencesHtml()];
+    };
+    const [ay, refs] = plain('author-year');
+    assert.deepEqual(ay, ['Vaswani et al. (2017)', '(Schmidhuber, 2015, p. 3; see Sutton &amp; Barto, 2018)', '(2017)',
+      '(OpenAI, 2019b; OpenAI, 2019a)', '(nope?)']);
+    assert.match(refs, /<li id="ref-vaswani2017">Vaswani, A\., Shazeer, N\., &amp; Parmar, N\. \(2017\)\. Attention is All you Need\. In <em>Advances in Neural Information Processing Systems<\/em> \(pp\. 5998–6008\)\. <a href="https:\/\/doi\.org\/10\.5555\/3295222\.3295349"/);
+    assert.match(refs, /href="#cite-vaswani2017-1"[^>]*>↩<\/a> <a [^>]*href="#cite-vaswani2017-2"/, 'each citation is linked back');
+    assert.ok(refs.indexOf('ref-oa2') < refs.indexOf('ref-jurgen') && refs.indexOf('ref-jurgen') < refs.indexOf('ref-vaswani2017'), 'sorted by author');
+    assert.match(refs, /OpenAI \(2019a\)\. A report/);
+    const [num, numRefs] = plain('numeric');
+    assert.deepEqual(num, ['Vaswani et al. [1]', '[2, p. 3, see 3]', '[1]', '[4, 5]', '[nope?]']);
+    assert.ok(numRefs.indexOf('ref-vaswani2017') < numRefs.indexOf('ref-jurgen'), 'in order of citation');
+  });
+
+  test('a post names its .bib files; they are published with it', async () => {
+    const { postMetadata } = await import('../js/post-format.js');
+    const m = postMetadata('---\ntitle: T\nbibliography: refs.bib, ../assets/more.bib\ncitestyle: numeric\nnocite: "*"\n---\nx', () => '<p>x</p>', 't');
+    assert.deepEqual([m.bibliography, m.citeStyle, m.nocite], ['refs.bib, ../assets/more.bib', 'numeric', '*']);
+    const { referencedKeys } = await import('../admin/src/paths.js');
+    assert.deepEqual(referencedKeys('---\ntitle: T\nbibliography: refs.bib, ../assets/more.bib\n---\nx', 'posts/t.md').sort(), ['assets/more.bib', 'posts/refs.bib']);
+    const { postPage } = await import('../js/pages.js');
+    const { siteSettings } = await import('../js/site-build.js');
+    assert.match(postPage(siteSettings({}), { slug: 't', page: 'posts/t.html', ...m }, '<p>x</p>'), /data-bibliography="refs\.bib, \.\.\/assets\/more\.bib" data-cite-style="numeric" data-nocite="\*"/);
+  });
+});
+
+describe('paper notes: a PDF with highlights and comments', () => {
+  test('annotations round-trip through the post, cleaned', async () => {
+    const { splitAnnotations, joinAnnotations, cleanAnnotation, newAnnotationId, paperPdf } = await import('../js/paper.js');
+    const a = { id: 'a-abc123', page: 2, rects: [[0.1, 0.2, 0.5, 0.02]], quote: 'Q "x"', comment: 'C [[other#a-zz9988]]', color: 'green', at: '2026-10-25' };
+    const body = joinAnnotations('Notes.\n', [a]);
+    const back = splitAnnotations(body);
+    assert.equal(back.body.trim(), 'Notes.');
+    assert.deepEqual(back.annotations, [a]);
+    assert.equal(cleanAnnotation({ ...a, id: 'x' }), null, 'bad ids are dropped');
+    assert.equal(cleanAnnotation({ ...a, color: 'crimson' }).color, 'yellow');
+    assert.deepEqual(cleanAnnotation({ ...a, rects: [[2, -1, 0.5, 0.5]] }).rects, [[1, 0, 0.5, 0.5]]);
+    assert.match(newAnnotationId(), /^a-[a-z0-9]{6}$/);
+    assert.equal(paperPdf({ pdf: 'x.pdf' }), 'x.pdf');
+    assert.equal(paperPdf({ pdf: 'https://evil.example/x.pdf' }), '', 'only the blog\'s own storage');
+    assert.equal(paperPdf({ pdf: 'x.html' }), '');
+  });
+
+  test('highlights have colours and shapes; references make chips and backlinks', async () => {
+    const { cleanAnnotation, markAnnotationRefs, backlinks, referencedIds } = await import('../js/paper.js');
+    const base = { id: 'a-dddd44', page: 2, rects: [[0, 0, 1, 1]] };
+    assert.equal(cleanAnnotation({ ...base, color: 'purple', shape: 'box' }).shape, 'box');
+    assert.equal(cleanAnnotation({ ...base, color: 'purple' }).color, 'purple');
+    assert.equal(cleanAnnotation({ ...base, shape: 'highlight' }).shape, undefined, 'the default shape is not written');
+    assert.equal(cleanAnnotation({ ...base, shape: 'zigzag', color: 'nope' }).shape, undefined);
+    assert.deepEqual(referencedIds('[[#a-dddd44]] and [[x#a-eeee55|y]]'), ['a-dddd44', 'a-eeee55']);
+    const list = [{ ...base, quote: 'a long quote', comment: '' }, { id: 'a-eeee55', page: 3, rects: [], quote: '', comment: 'see [[#a-dddd44]]' }];
+    assert.deepEqual(backlinks(list, 'Notes on [[#a-dddd44]]').get('a-dddd44'), ['notes', 'a-eeee55']);
+    assert.equal(markAnnotationRefs('<a href="#a-dddd44">#a-dddd44</a>', list),
+      '<a href="#a-dddd44" class="annotation-ref" data-ref="a-dddd44">“a long quote”</a>', 'a bare reference gets the label');
+    const { annotationLabel, cleanTags, annotationSummary } = await import('../js/paper.js');
+    assert.equal(annotationLabel({ page: 1, title: 'Model-free RL', quote: 'q' }), 'Model-free RL', 'a title names it');
+    assert.equal(annotationLabel({ page: 1, quote: 'q', comment: 'Add **definition** of [[#a-x|model]] free\n\nMore.' }), 'Add definition of model free', 'else its comment');
+    assert.equal(annotationLabel({ page: 4 }), 'Page 4');
+    const { mathText } = await import('../js/paper.js');
+    assert.equal(mathText('Loss $x<1$ and $$\\sum_i a$$'), 'Loss <x-equation>x&lt;1</x-equation> and <x-equation type="display">\\sum_i a</x-equation>');
+    assert.equal(annotationLabel({ page: 1, comment: 'Bound $O(n^2)$ holds' }), 'Bound $O(n^2)$ holds', 'math stays in labels, to typeset');
+    assert.deepEqual(annotationSummary({ ...base, quote: '', comment: 'see [[#a-eeee55]]', color: 'red' }).refs, ['a-eeee55']);
+    const { isAutoLabel } = await import('../js/paper.js');
+    assert.ok(isAutoLabel('p. 1: “Attention is…”', 'a-x') && isAutoLabel('p.&nbsp;3', 'a-x') && isAutoLabel('paper#a-x', 'a-x'));
+    assert.ok(!isAutoLabel('the encoder', 'a-x'), 'text written by hand stays');
+    assert.equal(markAnnotationRefs('<a href="this.html#a-dddd44">p. 2: “a long…”</a>', list),
+      '<a href="this.html#a-dddd44" class="annotation-ref" data-ref="a-dddd44">“a long quote”</a>', 'old "p. N" labels take the name');
+    assert.deepEqual(cleanTags('#Method, deep learning, method,, 強化学習'), ['method', 'deep-learning', '強化学習']);
+    assert.deepEqual(cleanAnnotation({ ...base, title: ' T ', tags: ['A b'] }).tags, ['a-b']);
+    assert.deepEqual(annotationSummary({ ...base, quote: 'x', comment: '', tags: ['m'], color: 'red' }), { id: 'a-dddd44', page: 2, label: '“x”', quote: 'x', tags: ['m'], color: 'red' });
+  });
+
+  test('a paper post is built with its viewer, comments and cross-references', async () => {
+    const { articleHtml, postLinks } = await import('../js/blog-render.js');
+    const md4c = await loadMd4c(WASM_URL);
+    const { PARSER_FLAGS } = await import('../js/blog-render.js');
+    const { joinAnnotations } = await import('../js/paper.js');
+    const body = joinAnnotations('See [[second#a-bbbb22|the encoder]].', [
+      { id: 'a-aaaa11', page: 1, rects: [[0.1, 0.1, 0.5, 0.02]], quote: '<b>q</b>', comment: '**Key** [[#a-aaaa22]]', color: 'yellow' },
+    ]);
+    const html = articleHtml({ type: 'paper', pdf: 'p.pdf' }, body, (m) => md4c.toHtml(m, { parserFlags: PARSER_FLAGS }));
+    assert.match(html, /<div class="paper" data-pdf="p\.pdf">/);
+    assert.match(html, /<li class="annotation" id="a-aaaa11" data-page="1" data-color="yellow" data-rects="\[\[0\.1,0\.1,0\.5,0\.02\]\]">/);
+    assert.ok(html.indexOf('class="paper-notes"') < html.indexOf('class="paper"'), 'the notes come first');
+    assert.doesNotMatch(html, /<h2[^>]*>Comments/, 'no numbered heading for the comments');
+    assert.match(html, /&lt;b&gt;q&lt;\/b&gt;/, 'quotes are text');
+    assert.match(html, /<strong>Key<\/strong> <a href="#a-aaaa22" class="annotation-ref" data-ref="a-aaaa22">/);
+    assert.match(html, /<a href="second\.html#a-bbbb22" class="annotation-ref" data-ref="a-bbbb22">the encoder<\/a>/);
+    assert.doesNotMatch(html, /md4c-annotations/);
+    assert.deepEqual(postLinks(html), ['second'], 'cross-references count as links (backlinks, graph)');
+    const { referencedKeys } = await import('../admin/src/paths.js');
+    assert.deepEqual(referencedKeys(`---\ntype: paper\npdf: p.pdf\n---\n${body}`, 'posts/x.md'), ['posts/p.pdf'], 'publishing copies the PDF');
+  });
+
+  test('a password-protected paper post encrypts its comments too', async () => {
+    const { protectPost, decryptText } = await import('../js/protect.js');
+    const { articleHtml, PARSER_FLAGS } = await import('../js/blog-render.js');
+    const { joinAnnotations } = await import('../js/paper.js');
+    const md4c = await loadMd4c(WASM_URL);
+    const src = `---\ntitle: S\ntype: paper\npdf: p.pdf\npassword: pw\n---\n${joinAnnotations('Secret notes.', [{ id: 'a-cccc33', page: 1, rects: [], quote: 'secret quote', comment: 'secret comment', color: 'blue' }])}`;
+    const env = await protectPost(src, (md, meta) => articleHtml(meta, md, (m) => md4c.toHtml(m, { parserFlags: PARSER_FLAGS })));
+    assert.doesNotMatch(env, /secret/);
+    assert.match(env, /^type: paper$/m, 'the kind of post stays readable (for its stylesheet)');
+    const json = JSON.parse(/```md4c-protected-v1\n(.+)\n```/.exec(env)[1]);
+    const html = await decryptText(json, 'pw');
+    assert.match(html, /secret comment/);
+    assert.match(html, /class="paper"/);
+  });
+});
