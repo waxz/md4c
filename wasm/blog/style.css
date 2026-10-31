@@ -313,6 +313,11 @@ main.page:focus { outline: none; }
 .prose hr::after { content: "\2042"; font-size: 1.2rem; }
 .prose img, .prose video { max-width: 100%; height: auto; }
 
+/* Illustrations (```embed blocks, render.js): a sandboxed frame, the column's width. */
+.prose .embed { margin: 2em 0; }
+.prose .embed-frame { display: block; width: 100%; border: 0; background: transparent; }
+@media print { .prose .embed { break-inside: avoid; } }
+
 /* Figures: a paragraph holding only an image becomes a numbered figure. */
 .prose figure { margin: 2.2em 0; text-align: center; counter-increment: figure; }
 .prose figure img { display: block; margin: 0 auto; border-radius: 2px; }

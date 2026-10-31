@@ -503,9 +503,78 @@ export async function enhanceCode(container) {
   }
 }
 
+/* ---------- Illustrations: ```embed blocks ---------- */
+
+// A fenced ```embed block holds HTML for an illustration: a chart, a 3D
+// scene, a small interactive (three.js, Chart.js, D3… from a CDN). It is
+// shown in a sandboxed frame (sandbox="allow-scripts", no same origin):
+// embed.html, whose own policy lets the illustration's scripts run there,
+// cut off from this page, its cookies and storage. Without JavaScript the
+// block stays as code. "<!-- height: 420 -->" in it fixes the height;
+// otherwise the frame takes the height of what it shows.
+const EMBED_MAX = 2400; // px
+const embedHtml = new WeakMap(); // frame -> { html, base }
+const embedListening = new WeakSet(); // windows
+const isDark = (win) => {
+  const scheme = win.document.documentElement.dataset.scheme;
+  return scheme === 'dark' || (scheme !== 'light' && win.matchMedia('(prefers-color-scheme: dark)').matches);
+};
+function listenToEmbeds(win) {
+  if (embedListening.has(win)) return;
+  embedListening.add(win);
+  win.addEventListener('message', (e) => {
+    const d = e.data;
+    if (!d || typeof d.type !== 'string' || !d.type.startsWith('md4c-embed')) return;
+    const frame = [...win.document.querySelectorAll('iframe.embed-frame')].find((f) => f.contentWindow === e.source);
+    const sent = frame && embedHtml.get(frame);
+    if (!sent) return;
+    if (d.type === 'md4c-embed-ready') {
+      const dark = isDark(win);
+      frame.style.colorScheme = dark ? 'dark' : 'light'; // (as the frame's: else it is drawn opaque)
+      const cs = win.getComputedStyle(frame.parentElement);
+      e.source.postMessage({
+        type: 'md4c-embed', html: sent.html, base: sent.base, dark,
+        ink: cs.color, accent: cs.getPropertyValue('--accent').trim(),
+      }, '*'); // (the frame's origin is opaque: "null")
+    } else if (d.type === 'md4c-embed-size' && !frame.dataset.height && Number.isFinite(d.height)) {
+      frame.style.height = `${Math.min(EMBED_MAX, Math.max(40, Math.round(d.height)))}px`;
+    }
+  });
+}
+
+/** Frame the ```embed blocks of `container` (before code blocks are dressed up). */
+export function mountEmbeds(container, base = location.href) {
+  const doc = container.ownerDocument;
+  const blocks = [...container.querySelectorAll('pre > code.language-embed')];
+  if (!blocks.length) return;
+  listenToEmbeds(doc.defaultView);
+  const src = new URL('./embed.html', import.meta.url).href;
+  for (const code of blocks) {
+    const html = code.textContent;
+    const fixed = /<!--\s*height\s*[:=]\s*(\d{2,4})\s*(?:px)?\s*-->/i.exec(html)?.[1];
+    const fig = doc.createElement('div'); // (not a <figure>: figures are numbered)
+    fig.className = 'embed';
+    const frame = doc.createElement('iframe');
+    frame.className = 'embed-frame';
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('title', /<title>([^<]{1,120})<\/title>/i.exec(html)?.[1].trim() || 'Illustration');
+    frame.setAttribute('loading', 'lazy');
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    if (fixed) frame.dataset.height = fixed;
+    frame.style.height = `${Math.min(EMBED_MAX, Number(fixed) || 320)}px`;
+    frame.style.colorScheme = isDark(doc.defaultView) ? 'dark' : 'light';
+    embedHtml.set(frame, { html, base });
+    frame.src = src;
+    fig.append(frame);
+    code.parentElement.replaceWith(fig);
+  }
+}
+
 /** Everything an article needs once its .prose is in the page. */
 export async function finishArticle(article, site, info) {
   const prose = article.querySelector('.prose');
+  // (First: the illustrations' code is not text for citations or math.)
+  mountEmbeds(prose, info.embedBase ?? location.href);
   await applyCitations(prose, site, {
     // A list of URLs, or the front matter's value (the page's data-bibliography).
     bibliography: Array.isArray(info.bibliography) ? info.bibliography : [

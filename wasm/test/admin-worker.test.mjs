@@ -132,6 +132,17 @@ describe('Cloudflare Access', () => {
     assert.match(r.headers.get('content-security-policy'), /img-src 'self' blob: data: https:\/\/blog.example.com/);
     assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
   });
+
+  test("the illustrations' host page runs scripts, but only sandboxed", async () => {
+    for (const path of ['/embed.html', '/embed']) {
+      const csp = (await call('GET', path)).headers.get('content-security-policy');
+      assert.match(csp, /script-src 'self' 'unsafe-inline' 'unsafe-eval' https:/, path);
+      assert.match(csp, /; sandbox allow-scripts$/, path); // never the admin's origin, even opened directly
+      assert.doesNotMatch(csp, /allow-same-origin/, path);
+    }
+    // Every other page keeps the strict policy.
+    assert.doesNotMatch((await call('GET', '/read')).headers.get('content-security-policy'), /unsafe-inline/);
+  });
 });
 
 describe('CSRF defence', () => {

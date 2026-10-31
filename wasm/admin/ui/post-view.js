@@ -122,6 +122,7 @@ export async function renderPostInto(article, {
   }
   await finishArticle(article, { ...site, citation: false }, {
     title, date, slug, url: '', toc: meta.toc, paperViewer,
+    embedBase: where.postUrl, // (an illustration's own relative files: next to the post)
     bibliography: bibliographyFor(store, key, meta.bibliography),
     citeStyle: meta.citestyle || meta['cite-style'] || site.citeStyle,
     nocite: meta.nocite,

@@ -303,6 +303,46 @@ Table: Results on WMT 2014 {#tbl:results}
   to insert `[@key]`, and **Ref…** the labels in the post to insert
   `@fig:x`. Settings has the site's bibliography and default style.
 
+### Illustrations: embedded HTML
+
+A fenced block marked `embed` holds HTML for an illustration: a chart, a 3D
+scene, a small interactive, with its scripts and libraries (three.js,
+Chart.js, D3, … from a CDN):
+
+````markdown
+```embed
+<!-- height: 360 -->
+<canvas id="c"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+new Chart(document.getElementById('c'), {
+  type: 'bar',
+  data: { labels: ['A', 'B', 'C'], datasets: [{ label: 'Votes', data: [3, 7, 5] }] },
+});
+</script>
+```
+````
+
+- **It runs in a sandboxed frame** (`sandbox="allow-scripts"`, without
+  `allow-same-origin`) that loads `embed.html` and receives the block's HTML
+  from the page. The frame has an origin of its own, so its scripts can't
+  read the page, the blog's or the admin's cookies or storage, and can't
+  navigate the page. `embed.html` has its own policy that allows inline
+  scripts and scripts from any `https:` host. The blog's pages keep their
+  strict one. `embed.html` shows nothing unless it is sandboxed.
+- **Height:** the frame takes the height of what it shows. A comment
+  `<!-- height: 420 -->` in the block fixes it instead, which suits a canvas
+  sized to the window. `<title>…</title>` names the frame for screen readers.
+- **Look:** the frame is transparent and matches the page's light or dark
+  scheme. `html[data-scheme="dark"]` and the CSS variables `--ink` and
+  `--accent` let an illustration follow the page's colours.
+- **Files:** relative URLs (`data.csv`, `model.glb`) resolve next to the
+  post. Modules work, including an `importmap` (`"three":
+  "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"`).
+- The same render runs on the blog, in the admin's preview and in the
+  reader. Without JavaScript, the block shows as code. Frames load when
+  scrolled near.
+
 ### Paper notes
 
 A post can be notes on a paper: the PDF is the main part of the page, with
@@ -419,7 +459,9 @@ need their own SDKs.
 - **XSS:** posts may contain raw HTML, so all rendered HTML goes through
   DOMPurify. It removes scripts, event handlers, `javascript:` URLs, iframes
   and forms, and adds `rel="noopener noreferrer nofollow"` to external
-  links. This guards against a bad or compromised post.
+  links. This guards against a bad or compromised post. Scripts run only
+  in a post's `embed` blocks, each in a sandboxed frame with an origin of
+  its own (see *Illustrations*).
 - **CSP:** a static bucket can't add response headers, so `index.html`
   sets a Content-Security-Policy through a `<meta>` tag (`script-src 'self'
   'wasm-unsafe-eval'`, no inline script or style, `form-action 'none'`).

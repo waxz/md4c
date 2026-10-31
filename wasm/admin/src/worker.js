@@ -28,6 +28,14 @@ function pageCsp(env) {
   ].join('; ');
 }
 
+// The host of a post's illustrations (embed.html, ```embed blocks): framed
+// sandboxed, without the admin's origin, so its scripts (inline, or from a
+// CDN) run cut off from the admin. As the page's own meta policy.
+const EMBED_CSP = "default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: blob:; "
+  + "style-src 'self' 'unsafe-inline' https:; img-src 'self' https: data: blob:; media-src 'self' https: data: blob:; "
+  + "font-src 'self' https: data:; connect-src 'self' https: data: blob:; worker-src 'self' blob: https:; "
+  + "form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts";
+
 // API responses are data: never rendered as a document in the admin origin.
 const API_CSP = "default-src 'none'; sandbox; frame-ancestors 'none'";
 
@@ -61,8 +69,9 @@ export default {
     // its modules without a round trip each. Pages and plain addresses are
     // checked every time.
     const res = await env.ASSETS.fetch(request);
+    const embed = url.pathname === '/embed' || url.pathname === '/embed.html';
     return withHeaders(res, {
-      'content-security-policy': pageCsp(env),
+      'content-security-policy': embed ? EMBED_CSP : pageCsp(env),
       'cache-control': res.status === 200 && url.searchParams.has('v') ? 'private, max-age=31536000, immutable' : 'no-cache',
     });
   },
