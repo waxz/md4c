@@ -28,6 +28,12 @@ import {
 
 const PDFJS = new URL('./vendor/pdfjs/', import.meta.url);
 let pdfjsPromise;
+/** Safari, or any browser on iOS/iPadOS (WebKit underneath, whatever its name). */
+function isWebKit() {
+  const ua = navigator.userAgent;
+  return /AppleWebKit/.test(ua) && !/Chrome\/|Chromium\/|Edg\/|OPR\//.test(ua);
+}
+
 function loadPdfjs() {
   pdfjsPromise ??= import('./vendor/pdfjs/pdf.min.js').then((lib) => {
     lib.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.js', import.meta.url).href;
@@ -130,6 +136,12 @@ export async function mountPaper(el, opts = {}) {
       standardFontDataUrl: new URL('standard_fonts/', PDFJS).href,
       wasmUrl: new URL('wasm/', PDFJS).href,
       iccUrl: new URL('iccs/', PDFJS).href,
+      // Safari, and every browser on an iPhone or iPad (all WebKit): pdf.js
+      // turns images into bitmaps with OffscreenCanvas in its worker, and
+      // WebKit hands some back empty, so a paper's figures (JPEGs, colour
+      // profiles) vanished and pages looked black and white. Plain pixels
+      // there instead.
+      ...(isWebKit() ? { isOffscreenCanvasSupported: false } : {}),
     });
     doc = await loading.promise;
   } catch (err) {
