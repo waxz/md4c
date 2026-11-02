@@ -69,6 +69,7 @@ export function cleanAnnotation(a) {
     color: COLORS.includes(a.color) ? a.color : COLORS[0],
     ...(SHAPES.includes(a.shape) && a.shape !== SHAPES[0] ? { shape: a.shape } : {}),
     ...(a.at ? { at: String(a.at).slice(0, 30) } : {}),
+    ...(a.col === 1 || a.col === 2 ? { col: a.col } : {}),
   };
 }
 
@@ -93,10 +94,72 @@ export function joinAnnotations(body, annotations) {
   return `${notes}\n\n\`\`\`${ANNOTATIONS_MARK}\n[\n${lines.join(',\n')}\n]\n\`\`\`\n`;
 }
 
-/** Annotations in reading order: page, then top to bottom. */
+/* ---------- Reading order, also on pages set in two columns ---------- */
+
+/**
+ * The gutter of a page set in two columns, as a fraction of its width, or
+ * 0 for one column: from its text's boxes ([left, right] fractions), the
+ * place near the middle that the fewest of them cross.
+ */
+export function columnGutter(boxes) {
+  const wide = boxes.filter(([l, r]) => r - l > 0.005);
+  if (wide.length < 20) return 0;
+  const crossing = (g) => wide.filter(([l, r]) => l < g - 0.002 && r > g + 0.002).length;
+  let fewest = Infinity;
+  let at = [];
+  for (let i = 0; i <= 40; i++) {
+    const g = 0.4 + i * 0.005;
+    const n = crossing(g);
+    if (n < fewest) [fewest, at] = [n, [g]];
+    else if (n === fewest) at.push(g);
+  }
+  const g = at.reduce((x, y) => x + y, 0) / at.length; // (the middle of the gap)
+  const left = wide.filter(([, r]) => r <= g + 0.01).length;
+  const right = wide.filter(([l]) => l >= g - 0.01).length;
+  if (fewest > wide.length * 0.08 || left < wide.length * 0.2 || right < wide.length * 0.2) return 0;
+  return Math.round(g * 1000) / 1000;
+}
+
+/** The column of a highlight on a page with this gutter: 1 (left), 2 (right), or 0 (across, or one column). */
+export function columnOf(rects, gutter) {
+  if (!gutter || !rects?.length) return 0;
+  if (rects.every(([x, , w]) => x + w <= gutter + 0.01)) return 1;
+  if (rects.every(([x]) => x >= gutter - 0.01)) return 2;
+  return 0;
+}
+
+/** A highlight's column: as recorded, else (older ones) several lines all in one half of the page. */
+function columnOfAnnotation(a) {
+  if (a.col === 1 || a.col === 2) return a.col;
+  if (a.rects.length >= 2 && a.rects.every(([, , w]) => w < 0.46)) {
+    if (a.rects.every(([x, , w]) => x + w <= 0.52)) return 1;
+    if (a.rects.every(([x]) => x >= 0.48)) return 2;
+  }
+  return 0;
+}
+
+/**
+ * Annotations in reading order: page by page; on a page, top to bottom,
+ * and where it is set in two columns, the left column before the right.
+ * What spans both columns (a title, a figure across the page) divides the
+ * page into bands, read one after another.
+ */
 export function sortAnnotations(list) {
-  const top = (a) => (a.rects[0] ? a.rects[0][1] : 0);
-  return [...list].sort((a, b) => a.page - b.page || top(a) - top(b));
+  const top = (a) => (a.rects.length ? Math.min(...a.rects.map((r) => r[1])) : 0);
+  const pages = new Map();
+  for (const a of list) {
+    if (!pages.has(a.page)) pages.set(a.page, []);
+    pages.get(a.page).push(a);
+  }
+  const out = [];
+  for (const page of [...pages.keys()].sort((x, y) => x - y)) {
+    const items = pages.get(page).map((a) => ({ a, col: columnOfAnnotation(a), top: top(a) }));
+    const across = items.filter((i) => !i.col).sort((x, y) => x.top - y.top);
+    for (const i of items) i.band = i.col ? across.filter((s) => s.top < i.top).length : across.indexOf(i);
+    items.sort((x, y) => x.band - y.band || (x.col ? 0 : 1) - (y.col ? 0 : 1) || x.col - y.col || x.top - y.top);
+    out.push(...items.map((i) => i.a));
+  }
+  return out;
 }
 
 /** A new annotation id ("a-" and 6 letters or digits). */

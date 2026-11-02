@@ -22,8 +22,8 @@
 // blog's own scripts), loaded on first use, with eval off.
 
 import {
-  COLORS, SHAPES, annotationLabel, backlinks, backlinksHtml, cleanTags, markAnnotationRefs, mathText, namedByQuote, newAnnotationId,
-  sortAnnotations, tagsHtml,
+  COLORS, SHAPES, annotationLabel, backlinks, backlinksHtml, cleanTags, columnGutter, columnOf, markAnnotationRefs, mathText,
+  namedByQuote, newAnnotationId, sortAnnotations, tagsHtml,
 } from './lib/paper.js';
 
 const PDFJS = new URL('./vendor/pdfjs/', import.meta.url);
@@ -205,11 +205,40 @@ export async function mountPaper(el, opts = {}) {
       text.append(end);
       layerEnds.set(text, end);
       p.rendered = s;
+      if (p.gutter === undefined) learnColumns(p);
     } catch (err) {
       if (err?.name !== 'RenderingCancelledException') console.warn('pdf page', p.n, err);
     } finally {
       p.task = null;
       if (p.rendered !== scale() && p.visible) render(p); // zoomed meanwhile
+    }
+  }
+
+  /* Two columns: where a page's gutter is (from its text), so comments are
+     listed in reading order (sortAnnotations): left column, then right. */
+  function learnColumns(p) {
+    const box = p.el.getBoundingClientRect();
+    const boxes = [];
+    for (const span of p.el.querySelectorAll('.textLayer span')) {
+      if (span.children.length || !span.textContent.trim()) continue;
+      const r = span.getBoundingClientRect();
+      boxes.push([(r.left - box.left) / box.width, (r.right - box.left) / box.width]);
+    }
+    p.gutter = columnGutter(boxes);
+    // Highlights made before columns were recorded: theirs now, saved with
+    // the post (so the blog lists them in this order too).
+    if (!editable || !p.gutter) return;
+    let learnt = false;
+    for (const a of list) {
+      if (a.page !== p.n || a.col) continue;
+      const col = columnOf(a.rects, p.gutter);
+      if (col) [a.col, learnt] = [col, true];
+    }
+    if (learnt) {
+      list = sortAnnotations(list);
+      opts.onChange?.(list.map(({ li, ...a }) => a));
+      renderSide();
+      if (activeId) setActive(activeId);
     }
   }
 
@@ -703,7 +732,14 @@ export async function mountPaper(el, opts = {}) {
       renderSide();
       drawHighlights();
     }
-    const fresh = (page, rects, quote, s = style) => ({
+    /** Its column on a page in two columns (for the reading order), if the page's gutter is known. */
+    const withColumn = (a) => {
+      const col = columnOf(a.rects, pages[a.page - 1]?.gutter);
+      if (col) a.col = col;
+      else delete a.col;
+      return a;
+    };
+    const fresh = (page, rects, quote, s = style) => withColumn({
       id: newAnnotationId(), page, rects, quote, comment: '', color: s.color,
       ...(s.shape !== SHAPES[0] ? { shape: s.shape } : {}), at: new Date().toISOString().slice(0, 10),
     });
@@ -904,7 +940,7 @@ export async function mountPaper(el, opts = {}) {
     function moveTo(page, rects, quote) {
       const a = stopMove();
       if (!a) return;
-      Object.assign(a, { page, rects, quote: quote || a.quote });
+      withColumn(Object.assign(a, { page, rects, quote: quote || a.quote }));
       list = sortAnnotations(list);
       changed();
       renderSide();

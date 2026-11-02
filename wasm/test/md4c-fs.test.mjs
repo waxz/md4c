@@ -802,6 +802,33 @@ describe('paper notes: a PDF with highlights and comments', () => {
     assert.equal(paperPdf({ pdf: 'x.html' }), '');
   });
 
+  test('comments in reading order, also on pages in two columns', async () => {
+    const { sortAnnotations, columnGutter, columnOf, cleanAnnotation } = await import('../js/paper.js');
+    const A = (id, page, rects, col) => ({ id, page, rects, ...(col ? { col } : {}) });
+    const ids = (list) => sortAnnotations(list).map((a) => a.id);
+    // Left column top to bottom, then the right; what spans both divides the page into bands.
+    assert.deepEqual(ids([
+      A('rtop', 1, [[0.55, 0.30, 0.38, 0.02]], 2), A('lbot', 1, [[0.08, 0.80, 0.38, 0.02]], 1),
+      A('title', 1, [[0.2, 0.05, 0.6, 0.03]]), A('ltop', 1, [[0.08, 0.25, 0.38, 0.02]], 1),
+      A('figure', 1, [[0.08, 0.55, 0.84, 0.15]]), A('rafter', 1, [[0.55, 0.75, 0.38, 0.02]], 2),
+      A('lafter', 1, [[0.08, 0.90, 0.38, 0.02]], 1), A('p2', 2, [[0.1, 0.1, 0.5, 0.02]]),
+    ]), ['title', 'ltop', 'rtop', 'figure', 'lbot', 'lafter', 'rafter', 'p2']);
+    // One column (no "col"): top to bottom, as before; older passages of several lines in one half count as that column.
+    assert.deepEqual(ids([A('b', 1, [[0.6, 0.5, 0.2, 0.02]]), A('a', 1, [[0.1, 0.3, 0.2, 0.02]]), A('c', 1, [[0.1, 0.7, 0.8, 0.02]])]), ['a', 'b', 'c']);
+    assert.deepEqual(ids([A('right', 1, [[0.55, 0.2, 0.4, 0.02], [0.55, 0.22, 0.3, 0.02]]), A('left', 1, [[0.08, 0.6, 0.4, 0.02], [0.08, 0.62, 0.3, 0.02]])]), ['left', 'right']);
+    // The gutter, from the text's boxes.
+    const two = [...Array(30)].flatMap(() => [[0.08, 0.45], [0.55, 0.92]]).concat([[0.2, 0.8]]);
+    assert.equal(columnGutter(two), 0.5);
+    assert.equal(columnGutter([...Array(30)].map(() => [0.1, 0.9])), 0);
+    assert.equal(columnOf([[0.6, 0.3, 0.3, 0.02]], 0.5), 2);
+    assert.equal(columnOf([[0.1, 0.3, 0.3, 0.02]], 0.5), 1);
+    assert.equal(columnOf([[0.1, 0.3, 0.8, 0.02]], 0.5), 0);
+    assert.equal(columnOf([[0.6, 0.3, 0.3, 0.02]], 0), 0);
+    // Kept with the highlight.
+    assert.equal(cleanAnnotation({ id: 'a-abcdef', page: 1, rects: [], col: 2 }).col, 2);
+    assert.equal(cleanAnnotation({ id: 'a-abcdef', page: 1, rects: [], col: 7 }).col, undefined);
+  });
+
   test('a paper\'s PDF on the web: linked on the blog, its source kept', async () => {
     const { paperHtml, paperPdfRemote, paperPdfSource } = await import('../js/paper.js');
     const url = 'https://arxiv.org/pdf/1706.03762';
