@@ -19,6 +19,8 @@ main.page:has(.paper) .article-header, main.page:has(.paper) .paper-notes { max-
 .paper-toolbar button { font: inherit; min-width: 2rem; padding: .2rem .5rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); color: var(--ink); cursor: pointer; }
 .paper-pageinfo { margin-left: .5rem; font-variant-numeric: tabular-nums; }
 .paper-download { margin-left: auto; color: var(--accent); text-decoration: none; }
+.paper-source { margin-left: .7rem; color: var(--muted); text-decoration: none; }
+.paper-source:hover { color: var(--accent); }
 .paper-pages { height: min(80vh, 60rem); overflow: auto; padding: 12px; outline: none; }
 @media (max-width: 900px) { .paper-pages { height: 70vh; } }
 .paper-loading { margin: 1rem; }

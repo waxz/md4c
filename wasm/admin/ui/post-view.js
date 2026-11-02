@@ -10,7 +10,7 @@
 import { api } from './client.js';
 import { state } from './shared.js';
 import { parseTags } from './lib/post-format.js';
-import { isPaper, paperHtml, paperPdf, splitAnnotations } from './lib/paper.js';
+import { isPaper, paperHtml, paperPdf, paperPdfRemote, splitAnnotations } from './lib/paper.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
 import { esc, finishArticle, formatDate, renderLive, renderLiveHtml } from './render.js';
 
@@ -116,7 +116,10 @@ export async function renderPostInto(article, {
       (m) => md4c.toHtml(m, { parserFlags: PARSER_FLAGS })), where));
     const paper = prose.querySelector('.paper');
     const pdf = paperPdf(meta);
-    if (paper && pdf) paper.dataset.pdf = postFileUrl(store, key, pdf); // the viewer reads it from here
+    const remote = paperPdfRemote(meta);
+    // The viewer reads it from here: next to the post, or from the web through the Worker.
+    if (paper && pdf) paper.dataset.pdf = postFileUrl(store, key, pdf);
+    else if (paper && remote) paper.dataset.pdf = api.remoteUrl(remote);
   } else {
     prose.replaceChildren(renderLive({ render: (m, o) => md4c.toHtml(m, o) }, body, { ...where, sourcePositions }));
   }

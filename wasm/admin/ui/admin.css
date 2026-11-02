@@ -447,6 +447,10 @@ button.post-card-link:disabled { cursor: default; opacity: .4; }
 .paper-switch button[aria-selected="true"] { background: var(--bg); color: var(--ink); font-weight: 600; }
 .editor.is-paper .paper-switch button[aria-selected="true"] { background: color-mix(in srgb, var(--muted) 14%, transparent); }
 .paper-only[hidden] { display: none; }
+/* A paper's PDF read from the web: the offer to keep a copy (editor.js). */
+.paper-remote-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .7rem; margin: 0 0 .6rem; border-color: var(--line); }
+.paper-remote-bar[hidden] { display: none; }
+.pdf-remote .btn { margin-left: .3rem; }
 
 /* Comments: every paper's highlights (comments.js, blog/highlights.js),
    with the blog's paper styles in the admin's colours. */

@@ -108,13 +108,34 @@ export function newAnnotationId() {
 /**
  * The PDF a paper post names, if usable: a relative path (next to the post,
  * or ../assets/…). Other addresses are refused: the pages' CSP only lets
- * the blog read its own storage.
+ * the blog read its own storage (see paperPdfRemote).
  */
 export function paperPdf(meta) {
   const v = String(meta?.pdf ?? '').trim();
   if (!v || /^[a-z][a-z0-9+.-]*:|^\/\/|[?#\\<>"']/i.test(v) || !/\.pdf$/i.test(v)) return '';
   return v.replace(/^\.\//, '');
 }
+
+/** An http(s) address: what a post's "pdf:" names when the PDF is elsewhere, or its "pdf-source:". */
+function webUrl(v) {
+  const t = String(v ?? '').trim();
+  if (!/^https?:\/\/[^\s"'<>]+$/i.test(t)) return '';
+  try {
+    return new URL(t).href;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The PDF of a paper post kept elsewhere ("pdf: https://…"), or ''. The
+ * admin shows it (its Worker fetches it) and can download it next to the
+ * post; the blog links to it, as its pages may only read its own storage.
+ */
+export const paperPdfRemote = (meta) => webUrl(meta?.pdf);
+
+/** Where a paper post's PDF was downloaded from ("pdf-source:"), or ''. */
+export const paperPdfSource = (meta) => webUrl(meta?.['pdf-source']);
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -242,6 +263,8 @@ export const backlinksHtml = (from, list) => (from.length
  */
 export function paperHtml(meta, body, annotations, renderMd) {
   const pdf = paperPdf(meta);
+  const remote = pdf ? '' : paperPdfRemote(meta);
+  const source = paperPdfSource(meta);
   const list = sortAnnotations(annotations);
   const back = backlinks(list, body);
   const md = (m) => markAnnotationRefs(renderMd(m), list);
@@ -253,10 +276,12 @@ ${backlinksHtml(back.get(a.id), list)}</li>`).join('\n');
   const notes = body.trim() ? `<div class="paper-notes" id="paper-notes">
 ${md(body)}</div>
 ` : '';
-  return `${notes}<div class="paper"${pdf ? ` data-pdf="${esc(pdf)}"` : ''}>
+  return `${notes}<div class="paper"${pdf ? ` data-pdf="${esc(pdf)}"` : ''}${remote ? ` data-pdf-remote="${esc(remote)}"` : ''}${source ? ` data-pdf-source="${esc(source)}"` : ''}>
 <div class="paper-viewer">${pdf
     ? `<p class="paper-fallback"><a href="${esc(pdf)}">Open the PDF</a></p>`
-    : '<p class="paper-fallback">No PDF: name one in the front matter (<code>pdf: paper.pdf</code>).</p>'}</div>
+    : remote
+      ? `<p class="paper-fallback">The PDF is at <a href="${esc(remote)}" rel="noopener noreferrer nofollow">${esc(new URL(remote).host)}</a>: open it there.</p>`
+      : '<p class="paper-fallback">No PDF: name one in the front matter (<code>pdf: paper.pdf</code>).</p>'}</div>
 <aside class="paper-comments" aria-label="Comments">
 <div class="paper-comments-head"><span>Comments</span><span class="count">${list.length}</span><a class="paper-all" href="../highlights.html">All highlights</a></div>
 ${list.length ? `<ol class="annotations">\n${items}\n</ol>` : '<p class="muted">No highlights yet.</p>'}

@@ -133,6 +133,51 @@ describe('Cloudflare Access', () => {
     assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
   });
 
+  test('a PDF on the web: shown through the Worker, or downloaded into a store', async () => {
+    const real = globalThis.fetch;
+    const pdf = new TextEncoder().encode('%PDF-1.7\n1 0 obj << >> endobj\n%%EOF\n');
+    const seen = [];
+    globalThis.fetch = async (input, init) => {
+      const u = String(input?.url ?? input);
+      if (!u.startsWith('https://papers.example/')) return real(input, init);
+      seen.push({ u, cookie: new Headers(init?.headers).get('cookie') });
+      if (u.endsWith('/paper.pdf')) return new Response(pdf, { headers: { 'content-type': 'application/octet-stream', 'content-length': String(pdf.length) } });
+      if (u.endsWith('/page')) return new Response('<html><script>alert(1)</script></html>', { headers: { 'content-type': 'text/html' } });
+      return new Response('gone', { status: 404 });
+    };
+    try {
+      const url = 'https://papers.example/paper.pdf';
+      const shown = await call('GET', `/api/remote?url=${encodeURIComponent(url)}`);
+      assert.equal(shown.status, 200);
+      assert.equal(shown.headers.get('content-type'), 'application/pdf'); // whatever the host said
+      assert.match(shown.headers.get('content-security-policy'), /sandbox/);
+      assert.ok(seen.every((s) => !s.cookie), 'no credentials go along');
+      // Even an HTML page comes back as a PDF (never as a page of the admin's origin).
+      assert.equal((await call('GET', `/api/remote?url=${encodeURIComponent('https://papers.example/page')}`)).headers.get('content-type'), 'application/pdf');
+      for (const bad of ['file:///etc/passwd', 'javascript:alert(1)', 'not a url', 'https://user:pw@papers.example/paper.pdf']) {
+        assert.equal((await call('GET', `/api/remote?url=${encodeURIComponent(bad)}`)).data.code, 'bad-url', bad);
+      }
+      assert.equal((await call('GET', `/api/remote?url=${encodeURIComponent('https://papers.example/missing.pdf')}`)).status, 502);
+
+      const imported = await postJson('/api/import', { store: 'drafts', key: 'posts/web-paper.pdf', url });
+      assert.equal(imported.status, 201, JSON.stringify(imported.data));
+      assert.equal(imported.data.key, 'posts/web-paper.pdf');
+      assert.equal(imported.data.size, pdf.length);
+      const kept = await env.DRAFTS.get('posts/web-paper.pdf');
+      assert.equal(kept.httpMetadata.contentType, 'application/pdf');
+      assert.deepEqual(new Uint8Array(await kept.arrayBuffer()), pdf);
+      // A new file only; a .pdf must be a PDF; only attachments.
+      assert.equal((await postJson('/api/import', { store: 'drafts', key: 'posts/web-paper.pdf', url })).data.code, 'exists');
+      assert.equal((await postJson('/api/import', { store: 'drafts', key: 'posts/page.pdf', url: 'https://papers.example/page' })).data.code, 'not-pdf');
+      assert.equal(await env.DRAFTS.head('posts/page.pdf'), null);
+      assert.equal((await postJson('/api/import', { store: 'drafts', key: 'posts/web.md', url })).data.code, 'bad-path');
+      // Writes need the admin's own request (as every other write).
+      assert.equal((await call('POST', '/api/import', { body: JSON.stringify({ store: 'drafts', key: 'posts/x.pdf', url }), headers: { 'x-admin-request': '0', 'content-type': 'application/json' } })).status, 403);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
   test("the illustrations' host page runs scripts, but only sandboxed", async () => {
     for (const path of ['/embed.html', '/embed']) {
       const csp = (await call('GET', path)).headers.get('content-security-policy');

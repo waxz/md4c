@@ -16,7 +16,9 @@ import { bibliographyFor, renderPostInto } from './post-view.js';
 import { mountPaper } from './paper.js';
 import { SHOW_KEY } from './comments.js';
 import { citeStyle, parseBibtex, referenceText } from './lib/cite.js';
-import { annotationLabel, isPaper, joinAnnotations, paperPdf, sortAnnotations, splitAnnotations } from './lib/paper.js';
+import {
+  annotationLabel, isPaper, joinAnnotations, paperPdf, paperPdfRemote, paperPdfSource, sortAnnotations, splitAnnotations,
+} from './lib/paper.js';
 import { attachSourceSync } from './sync.js';
 import { publishPost } from './post-actions.js';
 import { Cancelled } from './tasks.js';
@@ -25,7 +27,7 @@ import { LOCAL_ID } from './local-store.js';
 import { attachmentMarkdown, editHref, filesHref, IMAGE_EXT, uploadFiles } from './explorer.js';
 import {
   confirmDialog, dialog, draftStores, esc, formatTime, getMd4c, publicUrl, rebuildSite, reportError, state,
-  storeLabel, toast,
+  formatSize, safeName, storeLabel, toast,
 } from './shared.js';
 
 const KNOWN = ['title', 'date', 'tags', 'author', 'description', 'summary', 'image', 'banner', 'cover', 'background', 'password', 'toc', 'numbered', 'type', 'pdf', 'bibliography', 'citestyle'];
@@ -190,7 +192,8 @@ export async function showEditor(view, store, key, newStore) {
         <div class="field span-2"><span>Page background image (optional)</span><span class="field-row"><input name="background" aria-label="Page background image" autocapitalize="off" spellcheck="false" placeholder="e.g. paper.jpg"><label class="btn btn-small">Upload<input type="file" accept="image/*" data-image-for="background" hidden></label></span></div>
         <label class="field"><span>Kind of post</span><select name="type">
           <option value="">Article</option><option value="paper">Paper notes: a PDF with highlights and comments</option></select></label>
-        <div class="field paper-only"><span>The PDF</span><span class="field-row"><input name="pdf" aria-label="The PDF" autocapitalize="off" spellcheck="false" placeholder="e.g. paper.pdf"><label class="btn btn-small">Upload<input type="file" accept="application/pdf,.pdf" data-image-for="pdf" hidden></label></span></div>
+        <div class="field paper-only"><span>The PDF: a file next to the post, or its address on the web</span><span class="field-row"><input name="pdf" aria-label="The PDF" autocapitalize="off" spellcheck="false" placeholder="e.g. paper.pdf or https://arxiv.org/pdf/…"><label class="btn btn-small">Upload<input type="file" accept="application/pdf,.pdf" data-image-for="pdf" hidden></label></span>
+          <span class="field-hint pdf-remote" hidden></span></div>
         <div class="field"><span>Bibliography: BibTeX file(s) to cite from (optional; the site's is used too)</span><span class="field-row"><input name="bibliography" aria-label="Bibliography" autocapitalize="off" spellcheck="false" placeholder="e.g. refs.bib"><label class="btn btn-small">Upload<input type="file" accept=".bib,text/x-bibtex,text/plain" data-image-for="bibliography" hidden></label></span></div>
         <label class="field"><span>Citation style</span><select name="citestyle">
           <option value="">site default</option><option value="author-year">author–year: (Vaswani et al., 2017)</option><option value="numeric">numeric: [1]</option></select></label>
@@ -488,10 +491,78 @@ export async function showEditor(view, store, key, newStore) {
   let annotator = null;
   let annotatorFor = null; // the PDF shown (null: none yet)
   let paperView = 'annotate';
+  // The PDF: next to the post (through the Worker), or on the web (fetched by the Worker).
   const pdfUrl = () => {
     const ref = paperPdf({ pdf: f.pdf.value });
-    return ref ? new URL(ref, api.rawUrl(home(), `posts/${slug() || 'untitled'}.md`)).href : '';
+    if (ref) return new URL(ref, api.rawUrl(home(), `posts/${slug() || 'untitled'}.md`)).href;
+    const remote = paperPdfRemote({ pdf: f.pdf.value });
+    return remote ? api.remoteUrl(remote) : '';
   };
+
+  /* ---- A PDF on the web: read from there, or downloaded into storage, next to the post ---- */
+  // Said under the PDF field, and in a bar above the PDF (the fields may be folded away).
+  const pdfNote = form.querySelector('.pdf-remote');
+  const pdfBar = document.createElement('div');
+  pdfBar.className = 'notice paper-remote-bar';
+  pdfBar.hidden = true;
+  annotatorEl.before(pdfBar);
+  function renderPdfNote() {
+    const remote = paperPdfRemote({ pdf: f.pdf.value });
+    const source = paperPdfSource(extra);
+    const host = (u) => new URL(u).host;
+    const offer = remote ? `Read from ${esc(host(remote))}. The blog can only show a PDF it stores:
+      <button type="button" class="btn btn-small" data-act="pdf-download">Download to storage</button>` : '';
+    pdfNote.hidden = !remote && !source;
+    pdfNote.innerHTML = offer || (source ? `Downloaded from <a href="${esc(source)}" target="_blank" rel="noopener noreferrer">${esc(host(source))}</a>.` : '');
+    pdfBar.innerHTML = offer;
+    pdfBar.hidden = !remote || f.type.value !== 'paper' || annotatorEl.hidden;
+  }
+  /** A file name for a PDF's address: its last part ("1706.03762v7" → "1706.03762v7.pdf"). */
+  function pdfFileName(url) {
+    const u = new URL(url);
+    const last = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() ?? '') || u.host;
+    const name = safeName(last.replace(/\.pdf$/i, '')).replace(/^[.-]+|[.-]+$/g, '') || 'paper';
+    return `${name.slice(0, 80)}.pdf`;
+  }
+  async function downloadPdf(button) {
+    let url = paperPdfRemote({ pdf: f.pdf.value });
+    if (!url) return;
+    for (const b of form.querySelectorAll('[data-act="pdf-download"]')) b.disabled = true;
+    // (arXiv: the paper's page → its PDF.)
+    url = url.replace(/^https?:\/\/(?:www\.)?arxiv\.org\/abs\//i, 'https://arxiv.org/pdf/');
+    const base = pdfFileName(url);
+    button.disabled = true;
+    button.textContent = 'Downloading…';
+    try {
+      let name = base;
+      let written;
+      for (let n = 2; ; n++) {
+        try {
+          written = await api.importUrl(home(), `posts/${name}`, url);
+          break;
+        } catch (err) {
+          if (!(err instanceof ApiError && err.code === 'exists') || n > 30) throw err;
+          name = base.replace(/\.pdf$/i, `-${n}.pdf`);
+        }
+      }
+      // The post names its copy; where it came from is kept with it.
+      extra['pdf-source'] = url;
+      f.pdf.value = name;
+      f.pdf.dispatchEvent(new Event('input', { bubbles: true }));
+      toast(`Downloaded ${name}${written?.size ? ` (${formatSize(written.size)})` : ''} into ${storeLabel(home())}, next to the post.`, 'success');
+    } catch (err) {
+      reportError(err, 'The PDF could not be downloaded');
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Download to storage';
+    }
+  }
+  for (const el of [pdfNote, pdfBar]) {
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-act="pdf-download"]');
+      if (b) downloadPdf(b);
+    });
+  }
   // Tags used in the published papers, offered when tagging a comment.
   let siteTags = [];
   api.read('site', 'index.json').then((r) => {
@@ -515,6 +586,7 @@ export async function showEditor(view, store, key, newStore) {
     const annotate = paper && paperView === 'annotate';
     annotatorEl.hidden = !annotate;
     iframe.hidden = annotate;
+    renderPdfNote();
     for (const b of paperSwitch.querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.view === paperView));
     if (!annotate) return;
     const url = pdfUrl();
@@ -530,6 +602,7 @@ export async function showEditor(view, store, key, newStore) {
     mountPaper(annotatorEl, {
       editable: true,
       pdfUrl: url,
+      pdfSource: paperPdfSource(extra) || paperPdfRemote({ pdf: f.pdf.value }),
       annotations: ed.annotations,
       onChange: (list) => {
         ed.annotations = list;
@@ -575,6 +648,7 @@ export async function showEditor(view, store, key, newStore) {
       notesTimer = setTimeout(() => annotator?.refresh(), 800);
     }
     if (e.target === f.pdf) {
+      renderPdfNote();
       clearTimeout(pdfTimer);
       pdfTimer = setTimeout(() => paperUi(), 600);
     }
@@ -583,6 +657,7 @@ export async function showEditor(view, store, key, newStore) {
     if (e.target === f.type || e.target === f.pdf) paperUi();
   });
   paperUi();
+  renderPdfNote();
 
   for (const tab of form.querySelectorAll('.pane-tabs button')) {
     tab.addEventListener('click', () => {

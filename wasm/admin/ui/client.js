@@ -300,6 +300,26 @@ export const api = {
     });
   },
 
+  /** A file on the web as the admin's viewers read it: fetched by the Worker (a PDF given by its URL). */
+  remoteUrl: (url) => new URL(`api/remote?${q({ url })}`, location.href).href,
+
+  /**
+   * Download the file at `url` into `store` at `key` (a new attachment),
+   * as an upload would: the Worker fetches it. A .pdf must be a PDF.
+   * For this browser's store, it comes through the Worker to here.
+   */
+  async importUrl(store, key, url) {
+    if (!isLocal(store)) {
+      return request('POST', 'import', { body: JSON.stringify({ store, key, url }), headers: { 'content-type': 'application/json' } });
+    }
+    const bytes = new Uint8Array(await (await request('GET', `remote?${q({ url })}`, { raw: true })).arrayBuffer());
+    const head = String.fromCharCode(...bytes.subarray(0, 1024));
+    if (/\.pdf$/i.test(key) && !head.includes('%PDF-')) {
+      throw new ApiError(415, { error: 'That address does not give a PDF (it may be a web page about it: use the link to the PDF itself)', code: 'not-pdf' });
+    }
+    return localStore.write(key, bytes, null);
+  },
+
   /** Draft stores: deployed ones, and the ones saved from the Storage page. */
   storage: () => request('GET', 'storage'),
 

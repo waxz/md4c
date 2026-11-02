@@ -366,6 +366,20 @@ General notes, in Markdown. The encoder is discussed in
   highlight; clicking a highlight shows its comment (on a phone, in a small
   card over the PDF). Each highlight has its own address,
   `…/attention-notes.html#a-k3j9x2`, and a link button on its card.
+- **A PDF on the web:** `pdf:` can also be an address,
+  `pdf: https://arxiv.org/pdf/1706.03762`. The admin (editor, preview,
+  reader) shows it and lets you highlight it: its Worker fetches the PDF,
+  since most hosts don't let a browser read their files from another site.
+  A bar above the PDF offers **Download to storage**. The Worker downloads
+  the file into the post's store, next to the post (`1706.03762.pdf`; an
+  arXiv `/abs/` page becomes its PDF). Then `pdf:` names the copy and
+  `pdf-source:` keeps the address, shown as **Source ↗** by the viewer. The
+  highlights stay where they are, since it is the same PDF. Publishing
+  copies the PDF to the site like any attachment. The blog's pages can
+  only read the blog's own storage, so a post still pointing at the web
+  shows a link to the PDF there instead of the viewer: download it before
+  publishing. Downloads follow *Largest upload* (Settings), must be a PDF,
+  and carry no cookies or credentials.
 - **Cross-references:** `[[#a-…]]` links to a highlight in the same paper,
   `[[other-paper#a-…]]` to one in another paper post (the page opens
   there); in the notes and in comments. They show as chips (a bare

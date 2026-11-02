@@ -264,6 +264,105 @@ async function readBody(request, env, stores, entry, kind) {
   return body;
 }
 
+/* ---------- Files from the web (a paper's PDF given as a URL) ---------- */
+
+// The Worker fetches them: the browser cannot (most hosts send no CORS
+// headers, and the admin's CSP only lets it reach its own origin). No
+// cookies or credentials go with the request; only http(s) addresses.
+
+/** Whether the first KB holds "%PDF-" (a PDF's header; some start after a few bytes). */
+function isPdf(bytes) {
+  const n = Math.min(bytes.length, 1024) - 5;
+  for (let i = 0; i <= n; i++) {
+    if (bytes[i] === 0x25 && bytes[i + 1] === 0x50 && bytes[i + 2] === 0x44 && bytes[i + 3] === 0x46 && bytes[i + 4] === 0x2d) return true;
+  }
+  return false;
+}
+const NOT_PDF = () => new ApiError(415, 'That address does not give a PDF (it may be a web page about it: use the link to the PDF itself)', { code: 'not-pdf' });
+
+/** GET `url` from the web, checked: an http(s) address, an answer, not over `limit` bytes. */
+async function fetchRemote(url, limit, mb) {
+  let u;
+  try {
+    u = new URL(String(url ?? ''));
+  } catch {
+    throw new ApiError(400, 'Give a full address (https://…)', { code: 'bad-url' });
+  }
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password) throw new ApiError(400, 'Only http(s) addresses can be fetched', { code: 'bad-url' });
+  let res;
+  try {
+    res = await fetch(u.href, { redirect: 'follow', headers: { accept: 'application/pdf,*/*;q=0.5', 'user-agent': 'Mozilla/5.0 (blog admin)' } });
+  } catch (err) {
+    throw new ApiError(502, `${u.host} could not be reached (${err.message ?? err})`, { code: 'remote-failed' });
+  }
+  if (!res.ok) throw new ApiError(502, `${u.host} answered HTTP ${res.status}`, { code: 'remote-failed', status: res.status });
+  const length = Number(res.headers.get('content-length'));
+  if (length > limit) throw new ApiError(413, `The file is larger than ${mb} MB (Settings: "Largest upload")`, { code: 'too-large', limitMb: mb });
+  return { res, length };
+}
+
+/** A remote PDF, for the admin's viewer (the editor, the reader) before or without keeping it. */
+async function remoteFile(url, env, stores) {
+  const mb = await uploadLimitMb(env, stores);
+  const { res, length } = await fetchRemote(url, mb * 1024 * 1024, mb);
+  return new Response(res.body, {
+    headers: {
+      // Shown only as a PDF, whatever the host says it is.
+      'content-type': 'application/pdf',
+      'content-disposition': 'inline',
+      ...(length && !res.headers.get('content-encoding') ? { 'content-length': String(length) } : {}),
+    },
+  });
+}
+
+/**
+ * Download `url` into a store at `key` (a new attachment: posts/… or
+ * assets/…), as an upload would put it there. A .pdf must be a PDF.
+ * Large files are streamed to stores that can take a stream (R2).
+ */
+async function importFile(request, env, stores) {
+  const body = await request.json().catch(() => ({}));
+  const entry = storeOf(stores, body.store);
+  const key = String(body.key ?? '');
+  if (requireWritable(entry, key) !== 'asset') {
+    throw new ApiError(400, 'Only attachments (posts/<file>, assets/…) can be downloaded into storage', { code: 'bad-path' });
+  }
+  await checkNewKey(stores, entry, key);
+  const mb = await uploadLimitMb(env, stores);
+  const limit = mb * 1024 * 1024;
+  const { res, length } = await fetchRemote(body.url, limit, mb);
+  const pdf = /\.pdf$/i.test(key);
+  let data;
+  if (entry.store.streams && length > STREAM_BYTES && !res.headers.get('content-encoding')) {
+    // Streamed: the first bytes are checked on the way.
+    let head = new Uint8Array(0);
+    data = sized(res.body.pipeThrough(new TransformStream({
+      transform(chunk, c) {
+        if (pdf && head.length < 1024) {
+          const next = new Uint8Array(head.length + chunk.length);
+          next.set(head);
+          next.set(chunk, head.length);
+          head = next;
+          if (head.length >= 1024 && !isPdf(head)) return c.error(NOT_PDF());
+        }
+        c.enqueue(chunk);
+      },
+    })), length);
+  } else {
+    data = await res.arrayBuffer();
+    if (data.byteLength > limit) throw new ApiError(413, `The file is larger than ${mb} MB (Settings: "Largest upload")`, { code: 'too-large', limitMb: mb });
+    if (pdf && !isPdf(new Uint8Array(data))) throw NOT_PDF();
+  }
+  let written;
+  try {
+    written = await entry.store.put(key, data, putOpts(key));
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError(502, `The download did not complete: ${err.message ?? err}`, { code: 'remote-failed' });
+  }
+  return json({ ...info(entry, written), source: res.url }, 201);
+}
+
 /** Whether two stores hold the same file at `key` (sizes, then etags, then the bytes when small). */
 async function sameFile(a, b, key, ma, mb) {
   if (ma.size !== mb.size) return false;
@@ -870,6 +969,10 @@ export async function handleApi(request, env, user) {
         return await publish(request, stores);
       case 'POST /api/copy':
         return await copyToSite(request, stores);
+      case 'POST /api/import':
+        return await importFile(request, env, stores);
+      case 'GET /api/remote':
+        return await remoteFile(q('url'), env, stores);
       case 'POST /api/folder':
         return await createFolder(request, stores);
       case 'DELETE /api/folder':

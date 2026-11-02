@@ -110,7 +110,8 @@ export async function mountPaper(el, opts = {}) {
       <button type="button" data-zoom="1" aria-label="Zoom in">+</button>
       <span class="paper-pageinfo muted"></span>
       ${editable ? `<button type="button" class="paper-area-btn" aria-pressed="false" title="Draw a box around a figure, table or formula">${ICON.area}<span>Area</span></button>` : ''}
-      <a class="paper-download" href="${esc(pdfUrl)}" target="_blank" rel="noopener">PDF ↗</a>
+      <a class="paper-download" href="${esc(pdfUrl)}" target="_blank" rel="noopener">PDF ↗</a>${
+  /^https?:\/\//i.test(opts.pdfSource ?? el.dataset.pdfSource ?? '') ? `<a class="paper-source" href="${esc(opts.pdfSource ?? el.dataset.pdfSource)}" target="_blank" rel="noopener noreferrer" title="Where this PDF was downloaded from">Source ↗</a>` : ''}
     </div>
     <div class="paper-pages" tabindex="0" aria-label="PDF pages"><p class="paper-loading muted">Loading the PDF…</p></div>`;
   const pagesEl = viewer.querySelector('.paper-pages');

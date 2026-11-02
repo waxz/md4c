@@ -802,6 +802,25 @@ describe('paper notes: a PDF with highlights and comments', () => {
     assert.equal(paperPdf({ pdf: 'x.html' }), '');
   });
 
+  test('a paper\'s PDF on the web: linked on the blog, its source kept', async () => {
+    const { paperHtml, paperPdfRemote, paperPdfSource } = await import('../js/paper.js');
+    const url = 'https://arxiv.org/pdf/1706.03762';
+    assert.equal(paperPdfRemote({ pdf: url }), url);
+    for (const bad of ['javascript:alert(1)', 'data:application/pdf;base64,AA', 'paper.pdf', 'https://a.example/x" onload="y']) {
+      assert.equal(paperPdfRemote({ pdf: bad }), '', bad);
+    }
+    // Not downloaded: the page links to it (its CSP only reads the blog's storage), no viewer.
+    const remote = paperHtml({ pdf: url }, '', [], (m) => m);
+    assert.match(remote, /data-pdf-remote="https:\/\/arxiv.org\/pdf\/1706.03762"/);
+    assert.doesNotMatch(remote, / data-pdf="/);
+    assert.match(remote, /The PDF is at <a href="https:\/\/arxiv.org\/pdf\/1706.03762" rel="noopener noreferrer nofollow">arxiv.org<\/a>/);
+    // Downloaded: the copy is shown; where it came from is kept.
+    const kept = paperHtml({ pdf: '1706.03762.pdf', 'pdf-source': url }, '', [], (m) => m);
+    assert.match(kept, /data-pdf="1706.03762.pdf"/);
+    assert.match(kept, /data-pdf-source="https:\/\/arxiv.org\/pdf\/1706.03762"/);
+    assert.equal(paperPdfSource({ 'pdf-source': 'javascript:x' }), '');
+  });
+
   test('highlights have colours and shapes; references make chips and backlinks', async () => {
     const { cleanAnnotation, markAnnotationRefs, backlinks, referencedIds } = await import('../js/paper.js');
     const base = { id: 'a-dddd44', page: 2, rects: [[0, 0, 1, 1]] };
