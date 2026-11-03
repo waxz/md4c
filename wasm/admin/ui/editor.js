@@ -20,7 +20,7 @@ import {
   annotationLabel, isPaper, joinAnnotations, paperPdf, paperPdfRemote, paperPdfSource, sortAnnotations, splitAnnotations,
 } from './lib/paper.js';
 import { attachSourceSync } from './sync.js';
-import { publishPost } from './post-actions.js';
+import { bringPostFiles, hasFile, publishPost, whereIs } from './post-actions.js';
 import { Cancelled } from './tasks.js';
 import { drop, entryKey, isEmptyPost, keep, newId, read, setOpen, takeRestore } from './unsaved.js';
 import { LOCAL_ID } from './local-store.js';
@@ -139,6 +139,14 @@ export async function showEditor(view, store, key, newStore) {
       const locked = published && store !== 'site' ? readProtected(published.text) : null;
       if (locked) published.text = locked.meta.source === await digest(source) ? source : '';
     } catch (err) {
+      // Moved to another draft store since this address was made: open it there.
+      const moved = err.status === 404 && store !== 'site' && !direct
+        ? await findDraft(stores.filter((s) => s.id !== store), key) : null;
+      if (moved) {
+        toast(`This draft is now in ${storeLabel(moved)}.`, 'info');
+        history.replaceState(null, '', editHref(moved, key));
+        return showEditor(view, moved, key);
+      }
       view.innerHTML = `<p class="error">${esc(err.message)}</p><p><a href="#/posts">Back to posts</a></p>`;
       return;
     }
@@ -296,9 +304,17 @@ export async function showEditor(view, store, key, newStore) {
   // A draft saved with its front matter in the text: fixed, to be saved.
   const liftedOnOpen = liftFrontMatter();
   f.target?.addEventListener('change', () => {
+    const was = ed.target;
     ed.target = f.target.value;
     renderActions();
     schedulePreview();
+    // Files uploaded for it so far went to where it was to be kept: they come along.
+    if (!was || was === ed.target || ed.store) return;
+    bringPostFiles(text(), `posts/${slug() || 'untitled'}.md`, was, ed.target).then(({ copied }) => {
+      if (!copied.length) return;
+      toast(`${copied.length} file(s) of this post copied to ${storeLabel(ed.target)}.`, 'success');
+      paperUi(true);
+    }, (err) => reportError(err, `The post's files could not be copied to ${storeLabel(ed.target)}`));
   });
 
   const text = () => compose(
@@ -492,8 +508,11 @@ export async function showEditor(view, store, key, newStore) {
   let annotatorFor = null; // the PDF shown (null: none yet)
   let paperView = 'annotate';
   // The PDF: next to the post (through the Worker), or on the web (fetched by the Worker).
+  const pdfKey = (ref) => decodeURIComponent(new URL(ref, `https://x/posts/${slug() || 'untitled'}.md`).pathname.slice(1));
+  let pdfElsewhere = null; // { key, store }: the PDF found in another store than the post's
   const pdfUrl = () => {
     const ref = paperPdf({ pdf: f.pdf.value });
+    if (ref && pdfElsewhere?.key === pdfKey(ref)) return api.rawUrl(pdfElsewhere.store, pdfElsewhere.key);
     if (ref) return new URL(ref, api.rawUrl(home(), `posts/${slug() || 'untitled'}.md`)).href;
     const remote = paperPdfRemote({ pdf: f.pdf.value });
     return remote ? api.remoteUrl(remote) : '';
@@ -517,6 +536,47 @@ export async function showEditor(view, store, key, newStore) {
     pdfBar.innerHTML = offer;
     pdfBar.hidden = !remote || f.type.value !== 'paper' || annotatorEl.hidden;
   }
+  /* ---- A PDF not where the post is (left behind by a move): shown from there, and copied on request ---- */
+  const missingBar = document.createElement('div');
+  missingBar.className = 'notice paper-remote-bar';
+  missingBar.hidden = true;
+  annotatorEl.before(missingBar);
+  async function findMissingPdf() {
+    const ref = paperPdf({ pdf: f.pdf.value });
+    if (!ref || direct) return;
+    const key = pdfKey(ref);
+    if (await hasFile(home(), key)) return; // there after all: something else went wrong
+    const store = await whereIs(key, draftStores().map((d) => d.id).filter((id) => id !== home()));
+    if (paperPdf({ pdf: f.pdf.value }) !== ref) return; // (changed meanwhile)
+    if (store) {
+      pdfElsewhere = { key, store };
+      missingBar.innerHTML = `${esc(key)} is in ${esc(storeLabel(store))}, not with the post in ${esc(storeLabel(home()))}
+        (shown from there). <button type="button" class="btn btn-small btn-primary" data-act="pdf-bring">Copy it here</button>`;
+      paperUi(true);
+    } else if (!(await hasFile('site', key))) {
+      missingBar.innerHTML = `${esc(key)} is not in ${esc(storeLabel(home()))} or any other storage: upload it again (PDF field, Upload).`;
+    } else return;
+    missingBar.hidden = false;
+  }
+  missingBar.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act="pdf-bring"]');
+    if (!b || !pdfElsewhere) return;
+    b.disabled = true;
+    b.textContent = 'Copying…';
+    try {
+      const { bytes } = await api.read(pdfElsewhere.store, pdfElsewhere.key, 'bytes');
+      await api.write(home(), pdfElsewhere.key, bytes, null);
+      toast(`${pdfElsewhere.key} copied to ${storeLabel(home())}, next to the post.`, 'success');
+      pdfElsewhere = null;
+      missingBar.hidden = true;
+      paperUi(true);
+    } catch (err) {
+      reportError(err, 'The PDF could not be copied');
+      b.disabled = false;
+      b.textContent = 'Copy it here';
+    }
+  });
+
   /** A file name for a PDF's address: its last part ("1706.03762v7" → "1706.03762v7.pdf"). */
   function pdfFileName(url) {
     const u = new URL(url);
@@ -624,6 +684,7 @@ export async function showEditor(view, store, key, newStore) {
       confirmDelete: (a) => confirmDialog('Delete this highlight?', `${a.quote ? `“${a.quote.slice(0, 100)}” ` : ''}and its comment are removed from the post.`, 'Delete'),
     }).then((h) => {
       annotator = h;
+      if (!h && !pdfElsewhere) findMissingPdf().catch((err) => console.warn('pdf:', err)); // (not opened: is it elsewhere?)
       // Opened from the Comments page: go to that highlight.
       let id = null;
       try {
@@ -648,6 +709,7 @@ export async function showEditor(view, store, key, newStore) {
       notesTimer = setTimeout(() => annotator?.refresh(), 800);
     }
     if (e.target === f.pdf) {
+      missingBar.hidden = true;
       renderPdfNote();
       clearTimeout(pdfTimer);
       pdfTimer = setTimeout(() => paperUi(), 600);

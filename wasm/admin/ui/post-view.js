@@ -8,7 +8,7 @@
 // .bib file outside posts/ is the site's.
 
 import { api } from './client.js';
-import { state } from './shared.js';
+import { draftStores, state } from './shared.js';
 import { parseTags } from './lib/post-format.js';
 import { isPaper, paperHtml, paperPdf, paperPdfRemote, splitAnnotations } from './lib/paper.js';
 import { PARSER_FLAGS } from './lib/blog-render.js';
@@ -33,6 +33,20 @@ export function postFileUrl(store, key, ref) {
   if (/^[a-z][a-z0-9+.-]*:|^\/\//i.test(v)) return v;
   if (v.startsWith('/')) return api.rawUrl(store, v.replace(/^\/+/, ''));
   return new URL(v, api.rawUrl(store, key)).href;
+}
+
+/**
+ * A draft's PDF: next to it, or, left behind by a move (not in the draft's
+ * store), wherever another draft store has it.
+ */
+async function pdfWhereItIs(store, key, ref) {
+  const url = postFileUrl(store, key, ref);
+  if (store === 'site' || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(String(ref).trim())) return url;
+  const file = decodeURIComponent(new URL(String(ref).trim(), `https://x/${key}`).pathname.slice(1));
+  const has = async (s) => (await api.listAll(s, file).catch(() => [])).some((i) => i.key === file);
+  if (await has(store)) return url;
+  for (const s of draftStores()) if (s.id !== store && await has(s.id)) return api.rawUrl(s.id, file);
+  return url; // (nowhere else: the viewer says it could not be opened)
 }
 
 /** The .bib files a post cites from: its own (front matter), then the site's. */
@@ -118,7 +132,7 @@ export async function renderPostInto(article, {
     const pdf = paperPdf(meta);
     const remote = paperPdfRemote(meta);
     // The viewer reads it from here: next to the post, or from the web through the Worker.
-    if (paper && pdf) paper.dataset.pdf = postFileUrl(store, key, pdf);
+    if (paper && pdf) paper.dataset.pdf = paperViewer ? await pdfWhereItIs(store, key, pdf) : postFileUrl(store, key, pdf);
     else if (paper && remote) paper.dataset.pdf = api.remoteUrl(remote);
   } else {
     prose.replaceChildren(renderLive({ render: (m, o) => md4c.toHtml(m, o) }, body, { ...where, sourcePositions }));

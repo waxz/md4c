@@ -284,11 +284,27 @@ async function showPost(key, storeParam, listing, reading) {
   if (kept) {
     // As this browser kept it, at once; drawn again if the server's differs.
     await renderPost(key, store, published, kept.text);
-    const fresh = await reading.catch(() => null);
-    if (fresh && fresh.etag !== kept.etag) await renderPost(key, store, published, fresh.text);
+    const fresh = await reading.catch((err) => err);
+    if (fresh instanceof Error) await followMove(key, store, fresh).catch(() => {});
+    else if (fresh.etag !== kept.etag) await renderPost(key, store, published, fresh.text);
     return;
   }
-  await renderPost(key, store, published, (await reading).text);
+  let text;
+  try {
+    ({ text } = await reading);
+  } catch (err) {
+    return followMove(key, store, err);
+  }
+  await renderPost(key, store, published, text);
+}
+
+/** Not where this address says (moved to another store since): go to where it is now; else the error. */
+async function followMove(key, store, err) {
+  if (err?.status !== 404) throw err;
+  const now = (await api.posts()).posts.filter((p) => p.key === key && p.store !== store);
+  const there = now.find(isDraft) ?? now[0];
+  if (!there) throw err;
+  location.replace(readHref(key, there.store));
 }
 
 async function renderPost(key, store, published, text) {

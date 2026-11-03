@@ -227,6 +227,67 @@ export async function askMoveTarget(post) {
   });
 }
 
+/** Whether `store` has the file `key` (without reading it). */
+export async function hasFile(store, key) {
+  const items = await api.listAll(store, key).catch(() => []);
+  return items.some((i) => i.key === key);
+}
+
+/**
+ * Where a file a post uses is: the first of `stores` that has it, with its
+ * bytes; or null. (A post's files go with it, but a file can be left
+ * behind: the draft saved elsewhere before its first save, or in this
+ * browser while signed out.)
+ */
+export async function findFile(key, stores) {
+  for (const store of stores) {
+    if (!(await hasFile(store, key))) continue;
+    const r = await api.read(store, key, 'bytes').catch(() => null);
+    if (r) return { store, bytes: r.bytes };
+  }
+  return null;
+}
+
+/** The first of `stores` that has the file `key`, without reading it; or null. */
+export async function whereIs(key, stores) {
+  for (const store of stores) if (await hasFile(store, key)) return store;
+  return null;
+}
+
+/**
+ * Copy the files the post `text` (at `postKey`) uses into the draft store
+ * `to`: from `from`, else from any other draft store that has them. Files
+ * already there stay; a different file of the same name there stops it
+ * before anything is copied. Returns { copied, missing } (missing: in no
+ * draft store, nor public).
+ */
+export async function bringPostFiles(text, postKey, from, to, { step, log } = {}) {
+  const others = draftStores().map((d) => d.id).filter((id) => id !== from && id !== to);
+  const todo = [];
+  const missing = [];
+  for (const key of referencedKeys(text, postKey)) {
+    if (classify('drafts', key) !== 'asset') continue;
+    const there = await hasFile(to, key) ? (await api.read(to, key, 'bytes').catch(() => null))?.bytes : null;
+    const found = await findFile(key, [from, ...others].filter(Boolean));
+    if (!found) {
+      if (!there && !(await hasFile('site', key))) missing.push(key);
+      continue;
+    }
+    if (there) {
+      if (!sameBytes(there, found.bytes)) throw new Error(`${storeLabel(to)} already has a different ${key}; rename one of them first.`);
+      continue;
+    }
+    todo.push({ key, ...found });
+  }
+  for (const f of todo) {
+    step?.(`Copying ${f.key}…`);
+    await api.write(to, f.key, f.bytes, null);
+    log?.(`copied ${f.key}${f.store !== from ? ` (from ${storeLabel(f.store)})` : ''}`);
+  }
+  for (const key of missing) log?.(`missing ${key}: in no storage`);
+  return { copied: todo.map((f) => f.key), missing };
+}
+
 /**
  * Move a draft to another draft store (e.g. from this browser to a cloud
  * store, or back), with the files it uses. Different files with the same
@@ -236,24 +297,13 @@ export function moveDraft(post, to) {
   const { draft } = post;
   return runTask(`Move ${quoted(post)} to ${storeLabel(to)}`, async ({ step, log }) => {
     step('Reading the draft…');
-    const { text } = await api.read(draft.store, draft.key);
-    const files = [];
-    for (const key of referencedKeys(text, draft.key)) {
-      if (classify('drafts', key) !== 'asset') continue;
-      const bytes = await api.read(draft.store, key, 'bytes').then((r) => r.bytes, () => null);
-      if (!bytes) continue; // not in this store (public, or missing)
-      const there = await api.read(to, key, 'bytes').then((r) => r.bytes, () => null);
-      if (there && !sameBytes(there, bytes)) throw new Error(`${storeLabel(to)} already has a different ${key}; rename one of them first.`);
-      if (!there) files.push({ key, bytes });
-    }
-    for (const f of files) {
-      step(`Copying ${f.key}…`);
-      await api.write(to, f.key, f.bytes, null);
-      log(`copied ${f.key}`);
-    }
+    // (The version moved is the one read now: a list shown from the cache may be older.)
+    const { text, etag } = await api.read(draft.store, draft.key);
+    const { copied, missing } = await bringPostFiles(text, draft.key, draft.store, to, { step, log });
     step('Moving the post…');
-    await api.move({ store: draft.store, key: draft.key }, { store: to, key: draft.key }, draft.etag);
-    toast(`Moved ${quoted(post)} to ${storeLabel(to)}${files.length ? ` with ${files.length} file(s)` : ''}.`, 'success');
+    await api.move({ store: draft.store, key: draft.key }, { store: to, key: draft.key }, etag);
+    toast(`Moved ${quoted(post)} to ${storeLabel(to)}${copied.length ? ` with ${copied.length} file(s)` : ''}.${
+      missing.length ? ` Not found anywhere: ${missing.join(', ')}.` : ''}`, missing.length ? 'info' : 'success');
   }, { key: draft.key });
 }
 

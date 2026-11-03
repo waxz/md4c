@@ -224,7 +224,11 @@ export const api = {
     // Text is kept in this browser: asked for with its etag, an unchanged
     // file comes back as "304 Not Modified", without its contents.
     const kept = as === 'text' ? await cachedFile(store, key) : null;
-    const res = await request('GET', `file?${q({ store, key })}`, { raw: true, headers: kept ? { 'if-none-match': `"${kept.etag}"` } : {} });
+    const res = await request('GET', `file?${q({ store, key })}`, { raw: true, headers: kept ? { 'if-none-match': `"${kept.etag}"` } : {} })
+      .catch((err) => {
+        if (err.status === 404) forgetFile(store, key); // (moved or deleted: the kept copy is no more)
+        throw err;
+      });
     const etag = res.headers.get('x-object-etag') ?? '';
     if (res.status === 304 && kept) return { text: kept.text, etag: kept.etag };
     if (as === 'bytes') return { bytes: new Uint8Array(await res.arrayBuffer()), etag };
