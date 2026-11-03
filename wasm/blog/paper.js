@@ -21,6 +21,7 @@
 // pdf.js is self-hosted under vendor/pdfjs/ (the pages' CSP allows only the
 // blog's own scripts), loaded on first use, with eval off.
 
+import { attachTools } from './paper-tools.js';
 import {
   COLORS, SHAPES, annotationLabel, backlinks, backlinksHtml, cleanTags, columnGutter, columnOf, markAnnotationRefs, mathText,
   namedByQuote, newAnnotationId, sortAnnotations, tagsHtml,
@@ -61,6 +62,10 @@ const ICON = {
   trash: svg('<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/>'),
   area: svg('<path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11"/>'),
   comment: svg('<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>'),
+  search: svg('<circle cx="7" cy="7" r="4"/><path d="M10 10l3.5 3.5"/>'),
+  refs: svg('<path d="M3 4h10M3 8h10M3 12h6"/>'),
+  full: svg('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>'),
+  book: svg('<path d="M2.5 3.5c2-1 4-1 5.5.5v9c-1.5-1.5-3.5-1.5-5.5-.5zM13.5 3.5c-2-1-4-1-5.5.5v9c1.5-1.5 3.5-1.5 5.5-.5z"/>'),
 };
 const SHAPE_NAMES = { highlight: 'Highlight', underline: 'Underline', strike: 'Strike out', box: 'Box' };
 const shapeOf = (a) => (SHAPES.includes(a.shape) ? a.shape : SHAPES[0]);
@@ -115,6 +120,10 @@ export async function mountPaper(el, opts = {}) {
       <button type="button" data-zoom="0" class="paper-zoom-label" aria-label="Fit the width">100%</button>
       <button type="button" data-zoom="1" aria-label="Zoom in">+</button>
       <span class="paper-pageinfo muted"></span>
+      <button type="button" data-tool="find" aria-pressed="false" title="Search the PDF (Ctrl+F)" aria-label="Search the PDF">${ICON.search}</button>
+      <button type="button" data-tool="refs" aria-pressed="false" title="The paper's references" aria-label="References">${ICON.refs}<span class="paper-tool-label">Refs</span></button>
+      <button type="button" data-tool="full" aria-pressed="false" title="Read in the full window" aria-label="Full window">${ICON.full}</button>
+      <button type="button" data-tool="comments" class="paper-comments-toggle" title="Show the comments">Comments</button>
       ${editable ? `<button type="button" class="paper-area-btn" aria-pressed="false" title="Draw a box around a figure, table or formula">${ICON.area}<span>Area</span></button>` : ''}
       <a class="paper-download" href="${esc(pdfUrl)}" target="_blank" rel="noopener">PDF ↗</a>${
   /^https?:\/\//i.test(opts.pdfSource ?? el.dataset.pdfSource ?? '') ? `<a class="paper-source" href="${esc(opts.pdfSource ?? el.dataset.pdfSource)}" target="_blank" rel="noopener noreferrer" title="Where this PDF was downloaded from">Source ↗</a>` : ''}
@@ -152,6 +161,7 @@ export async function mountPaper(el, opts = {}) {
   /* ---------- Pages ---------- */
 
   const cleanups = [];
+  let tools = null; // paper-tools.js
   let activeId = ''; // the highlight shown
   let quietUntil = 0; // a click that ends drawing a box is not a click on it
   let filterTag = ''; // the comments shown: those with this tag ('' all)
@@ -750,6 +760,7 @@ export async function mountPaper(el, opts = {}) {
     selbar.setAttribute('role', 'toolbar');
     selbar.setAttribute('aria-label', 'Highlight the selection');
     selbar.innerHTML = `<div class="pop-row pop-new">${shapes(style.shape)}<span class="pop-sep"></span>${swatches(style.color, 'color')}<span class="pop-sep"></span>
+      <button type="button" class="pop-btn" data-act="lookup" title="Look up in a dictionary" aria-label="Look up">${ICON.book}<span>Look up</span></button>
       <button type="button" class="pop-btn" data-act="comment">${ICON.comment}<span>Comment</span></button></div>
       <div class="pop-row pop-move"><button type="button" class="pop-btn pop-primary" data-act="move-here">Move the highlight here</button></div>`;
     tint(selbar, style.color);
@@ -826,6 +837,11 @@ export async function mountPaper(el, opts = {}) {
         return;
       }
       const sel = pending;
+      if (b.dataset.act === 'lookup') {
+        closeSelbar();
+        tools?.lookup(sel.quote, sel.at);
+        return;
+      }
       if (b.dataset.act === 'move-here') {
         window.getSelection()?.removeAllRanges();
         closeSelbar();
@@ -1157,6 +1173,10 @@ export async function mountPaper(el, opts = {}) {
       document.removeEventListener('pointerdown', onDownEdit, true);
     });
   }
+
+  // Reading tools: the full window, search, looking up, the references (paper-tools.js).
+  tools = attachTools({ el, viewer, pagesEl, pages, render, scale, popup, place, editable });
+  cleanups.push(() => tools.destroy());
 
   layout();
   return {

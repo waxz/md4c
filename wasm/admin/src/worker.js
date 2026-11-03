@@ -18,7 +18,8 @@ function pageCsp(env) {
     `img-src 'self' blob: data:${blog}`,
     `media-src 'self'${blog}`,
     "font-src 'self'",
-    "connect-src 'self'",
+    // A paper's PDF viewer looks words up there, when asked (blog/paper-tools.js).
+    "connect-src 'self' https://api.dictionaryapi.dev https://*.wikipedia.org",
     "frame-src 'self'",
     "object-src 'none'",
     "base-uri 'none'",

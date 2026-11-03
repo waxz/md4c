@@ -366,6 +366,20 @@ General notes, in Markdown. The encoder is discussed in
   highlight; clicking a highlight shows its comment (on a phone, in a small
   card over the PDF). Each highlight has its own address,
   `…/attention-notes.html#a-k3j9x2`, and a link button on its card.
+- **Reading tools** (the viewer's toolbar, on the blog and in the admin):
+  ⛶ reads in the **full window** (the comments beside the PDF; on a
+  phone behind a *Comments* button; Esc leaves). 🔍 **searches the whole
+  text** (Ctrl+F in the viewer; Enter / Shift+Enter for the next and
+  previous match, marked on the page). **Refs** lists the paper's
+  **references**, read from its "References" (or "Bibliography") section:
+  numbered (`[1]`, `1.`) or author–year (by the hanging indent), each with
+  DOI, arXiv and Google Scholar links; click one to see it in the PDF, or
+  *Copy all*. Select text and **Look up** (in the selection bar) shows a
+  definition: the Free Dictionary for an English word, else Wikipedia's
+  summary (Japanese text on ja.wikipedia.org), with links to Wiktionary,
+  Wikipedia, Weblio and Google. Only the selected text is sent, only when
+  *Look up* is pressed; the pages' CSP allows `api.dictionaryapi.dev` and
+  `*.wikipedia.org` for it (rebuild the site once so its pages carry it).
 - **A PDF on the web:** `pdf:` can also be an address,
   `pdf: https://arxiv.org/pdf/1706.03762`. The admin (editor, preview,
   reader) shows it and lets you highlight it: its Worker fetches the PDF,

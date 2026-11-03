@@ -130,6 +130,8 @@ describe('Cloudflare Access', () => {
     assert.match(r.headers.get('content-security-policy'), /script-src 'self' 'wasm-unsafe-eval'/);
     assert.match(r.headers.get('content-security-policy'), /frame-ancestors 'self'/);
     assert.match(r.headers.get('content-security-policy'), /img-src 'self' blob: data: https:\/\/blog.example.com/);
+    // (Looking a word up in a paper reaches these two, and no other host.)
+    assert.match(r.headers.get('content-security-policy'), /connect-src 'self' https:\/\/api\.dictionaryapi\.dev https:\/\/\*\.wikipedia\.org;/);
     assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
   });
 

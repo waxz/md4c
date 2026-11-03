@@ -22,9 +22,12 @@
 import { parseTags } from './post-format.js';
 import { siteLinkHref } from './site-config.js';
 
+// A paper's PDF viewer looks words up there, when a reader asks (paper-tools.js).
+export const LOOKUP_HOSTS = 'https://api.dictionaryapi.dev https://*.wikipedia.org';
+
 export const CSP =
   "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; font-src 'self'; " +
-  "img-src 'self' https: data:; media-src 'self' https:; connect-src 'self'; object-src 'none'; " +
+  "img-src 'self' https: data:; media-src 'self' https:; connect-src 'self' " + LOOKUP_HOSTS + "; object-src 'none'; " +
   "base-uri 'none'; form-action 'none'";
 
 // What the Google tag needs (Google's documented CSP for gtag.js / GA4).
