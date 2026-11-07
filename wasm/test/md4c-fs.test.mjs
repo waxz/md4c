@@ -715,7 +715,7 @@ test('a Google tag in the site settings goes in every page, allowed by the CSP',
     const hash = createHash('sha256').update(inline).digest('base64');
     assert.ok(head.includes(`script-src 'self' 'wasm-unsafe-eval' 'sha256-${hash}' https://*.googletagmanager.com`));
     assert.match(head, /connect-src 'self' https:\/\/\*\.google-analytics\.com/);
-    assert.match(head, /https:\/\/api\.dictionaryapi\.dev https:\/\/\*\.wikipedia\.org; object-src/); // (a paper's look-ups)
+    assert.match(head, /https:\/\/api\.dictionaryapi\.dev https:\/\/\*\.wikipedia\.org https:\/\/api\.mymemory\.translated\.net; object-src/); // (a paper's look-ups)
     assert.equal((head.match(/<script>/g) ?? []).length, 1, 'no other inline script');
   }
   const plain = homePage(normalizeSite({}, 'https://b.example/'), []);

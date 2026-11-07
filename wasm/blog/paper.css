@@ -340,7 +340,21 @@ html.paper-full-open { overflow: hidden; }
 .paper-ref-links { display: flex; flex-wrap: wrap; gap: .1rem .7rem; margin-top: .15rem; font-size: .78rem; }
 .paper-ref-links a { color: var(--accent); text-decoration: none; }
 
-/* Looking up */
+/* Looking up (and saving to the flash cards, cards.js) */
+.paper-badge { min-width: 1.1rem; padding: 0 .3rem; border-radius: 999px; background: var(--accent); color: var(--accent-ink, #fff); font-size: .68rem; line-height: 1.1rem; text-align: center; }
+.paper-badge[hidden] { display: none; }
+.paper-lookup .lookup-top { display: flex; align-items: flex-start; gap: .6rem; }
+.paper-lookup .lookup-top .lookup-head { flex: 1; overflow-wrap: anywhere; }
+.paper-lookup .lookup-head b { font-size: 1.05rem; }
+.paper-lookup .lookup-head b.is-phrase { font-size: .92rem; font-weight: 500; }
+.paper-lookup .lookup-save { flex: none; font: inherit; font-size: .8rem; padding: .2rem .6rem; border: 1px solid var(--rule); border-radius: 999px; background: none; color: var(--ink); cursor: pointer; }
+.paper-lookup .lookup-save.is-saved { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--rule)); }
+.paper-lookup .lookup-say { margin: .1rem 0 .35rem; }
+.paper-lookup .lookup-translation { margin: .45rem 0; padding: .45rem .6rem; border-radius: 8px; background: color-mix(in srgb, var(--muted) 9%, transparent); }
+.paper-lookup .lookup-translation.is-main p { font-size: 1rem; }
+.paper-lookup .lookup-translation p { margin: .25rem 0 0; }
+.paper-lookup .lookup-translation-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.paper-lookup .lookup-to { font: inherit; font-size: .78rem; padding: .1rem .25rem; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 5px; }
 .paper-lookup { width: min(24rem, calc(100vw - 16px)); max-height: 60vh; overflow: auto; padding: .6rem .8rem; }
 .paper-lookup p { margin: 0 0 .3rem; }
 .paper-lookup .lookup-pos { margin-top: .4rem; font-style: italic; color: var(--muted); font-size: .82rem; }

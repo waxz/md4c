@@ -51,9 +51,11 @@ code { font-family: var(--mono); font-size: .9em; }
   background: var(--surface); border-bottom: 1px solid var(--line);
 }
 .app-title { font-weight: 700; color: var(--ink); text-decoration: none; margin-right: auto; }
-.app-nav { display: flex; gap: .25rem; order: 3; width: 100%; }
+/* (On a phone the links scroll sideways in their row, so the page never gets wider than the screen.) */
+.app-nav { display: flex; gap: .25rem; order: 3; width: 100%; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.app-nav::-webkit-scrollbar { display: none; }
 .app-nav a {
-  flex: 1; text-align: center; padding: .5rem .25rem; border-radius: var(--radius);
+  flex: 1 0 auto; white-space: nowrap; text-align: center; padding: .5rem .45rem; border-radius: var(--radius);
   color: var(--ink); text-decoration: none; font-size: .95rem;
 }
 .app-nav a[aria-current="true"] { background: var(--bg); font-weight: 600; }
@@ -474,3 +476,7 @@ button.post-card-link:disabled { cursor: default; opacity: .4; }
 .graph-label.is-lit { color: var(--accent); }
 .graph-label .katex { font-size: 1.05em; }
 .md-cite, .md-xref { font: inherit; font-size: .85rem; max-width: 8.5rem; padding: .25rem .3rem; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+
+/* Cards (cards.js): the blog's flash card manager, as a page. */
+.cards-page { --rule: var(--line); max-width: 48rem; margin: 0 auto; }
+.cards-page .cards-head { position: static; padding: 0 0 .6rem; background: none; }

@@ -22,8 +22,8 @@
 import { parseTags } from './post-format.js';
 import { siteLinkHref } from './site-config.js';
 
-// A paper's PDF viewer looks words up there, when a reader asks (paper-tools.js).
-export const LOOKUP_HOSTS = 'https://api.dictionaryapi.dev https://*.wikipedia.org';
+// A paper's PDF viewer looks words up and translates there, when a reader asks (paper-tools.js).
+export const LOOKUP_HOSTS = 'https://api.dictionaryapi.dev https://*.wikipedia.org https://api.mymemory.translated.net';
 
 export const CSP =
   "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; font-src 'self'; " +

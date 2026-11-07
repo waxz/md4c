@@ -65,6 +65,7 @@ const ICON = {
   search: svg('<circle cx="7" cy="7" r="4"/><path d="M10 10l3.5 3.5"/>'),
   refs: svg('<path d="M3 4h10M3 8h10M3 12h6"/>'),
   full: svg('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>'),
+  cards: svg('<rect x="2.5" y="4.5" width="9" height="9" rx="1.5"/><path d="M5 2.5h7a1.5 1.5 0 011.5 1.5v7"/>'),
   book: svg('<path d="M2.5 3.5c2-1 4-1 5.5.5v9c-1.5-1.5-3.5-1.5-5.5-.5zM13.5 3.5c-2-1-4-1-5.5.5v9c1.5-1.5 3.5-1.5 5.5-.5z"/>'),
 };
 const SHAPE_NAMES = { highlight: 'Highlight', underline: 'Underline', strike: 'Strike out', box: 'Box' };
@@ -123,6 +124,7 @@ export async function mountPaper(el, opts = {}) {
       <button type="button" data-tool="find" aria-pressed="false" title="Search the PDF (Ctrl+F)" aria-label="Search the PDF">${ICON.search}</button>
       <button type="button" data-tool="refs" aria-pressed="false" title="The paper's references" aria-label="References">${ICON.refs}<span class="paper-tool-label">Refs</span></button>
       <button type="button" data-tool="full" aria-pressed="false" title="Read in the full window" aria-label="Full window">${ICON.full}</button>
+      <button type="button" data-tool="cards" title="Your flash cards: the words and sentences saved from Look up" aria-label="Flash cards">${ICON.cards}<span class="paper-tool-label">Cards</span><span class="paper-badge" hidden></span></button>
       <button type="button" data-tool="comments" class="paper-comments-toggle" title="Show the comments">Comments</button>
       ${editable ? `<button type="button" class="paper-area-btn" aria-pressed="false" title="Draw a box around a figure, table or formula">${ICON.area}<span>Area</span></button>` : ''}
       <a class="paper-download" href="${esc(pdfUrl)}" target="_blank" rel="noopener">PDF ↗</a>${
@@ -838,8 +840,9 @@ export async function mountPaper(el, opts = {}) {
       }
       const sel = pending;
       if (b.dataset.act === 'lookup') {
+        const context = tools?.contextOfSelection() ?? {};
         closeSelbar();
-        tools?.lookup(sel.quote, sel.at);
+        tools?.lookup(sel.quote, sel.at, context);
         return;
       }
       if (b.dataset.act === 'move-here') {

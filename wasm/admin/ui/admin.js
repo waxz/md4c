@@ -10,6 +10,7 @@
 //   #/storage                   draft stores; add WebDAV, S3 or GitHub storage
 //   #/settings                  site settings and rebuild
 //   #/comments                  every paper's highlights and comments (comments.js)
+//   #/cards                     flash cards saved from papers' Look up (cards.js)
 
 import { api } from './client.js';
 import { showPosts } from './posts.js';
@@ -29,8 +30,12 @@ function parseRoute() {
   return { name, store: store || 'site', path: decodeURIComponent(rest.join('/')) };
 }
 
+let cardsView = null; // the Cards page, while shown
+
 async function route() {
   const r = parseRoute();
+  cardsView?.destroy();
+  cardsView = null;
   if (r.name !== 'edit' && r.name !== 'new') setOpen(''); // no post open: count them all
   const section = { edit: 'posts', new: 'new', view: 'files', text: 'files' }[r.name] ?? r.name;
   document.querySelectorAll('.app-nav a').forEach((a) => {
@@ -47,6 +52,12 @@ async function route() {
       await (await import('./storage.js')).showStorage(view);
     }
     else if (r.name === 'comments') await (await import('./comments.js')).showComments(view);
+    else if (r.name === 'cards') {
+      const box = document.createElement('div');
+      box.className = 'cards-page';
+      view.replaceChildren(box);
+      cardsView = (await import('./cards.js')).mountCards(box);
+    }
     else if (r.name === 'files') await (await explorer()).showFiles(view, r.store, r.path);
     else await showPosts(view);
     view.focus({ preventScroll: true });
