@@ -341,6 +341,14 @@ html.paper-full-open { overflow: hidden; }
 .paper-selbar.is-docked:not(.paper-readbar) [data-act="read"] { order: 3; }
 @media (pointer: coarse) { .paper-tts button, .paper-tts select { min-height: 2.5rem; } }
 
+/* Reading an article aloud (article-tts.js): the player docked at the bottom; the sentence read */
+.tts-dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: none; justify-content: center; padding: 0 8px max(8px, env(safe-area-inset-bottom)); pointer-events: none; }
+.tts-dock.is-open { display: flex; }
+.tts-dock .paper-tts { width: min(46rem, 100%); pointer-events: auto; border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 10px 34px rgb(0 0 0 / .2); font-family: var(--font-sans); }
+::highlight(tts-reading) { background-color: rgb(56 189 248 / .3); }
+.tts-block { background: rgb(56 189 248 / .14); border-radius: 3px; }
+.is-picking, .is-picking * { cursor: crosshair; }
+
 /* References */
 .paper-refs {
   position: absolute; right: 0; bottom: 0; z-index: 5; width: min(30rem, 100%); overflow: auto; overscroll-behavior: contain;

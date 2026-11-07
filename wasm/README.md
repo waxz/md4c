@@ -415,6 +415,13 @@ General notes, in Markdown. The encoder is discussed in
   secret `TTS_API_KEY`, with `TTS_BASE_URL`, `TTS_MODEL`, `TTS_VOICE`),
   never in a page, and blog visitors always get their browser's voice.
   The next sentences are fetched while one plays; stopping cancels them.
+  In the admin's **reader**, any post can be read aloud too (**🔊 Read
+  aloud** in its bar; the player docks at the bottom of the window): its
+  title, headings, paragraphs, list items, quotes and captions, the
+  sentence read highlighted; not code, math, tables, illustrations or the
+  contents box, and the references only when asked. ▶ starts at what is
+  in view, or at the selected text; *Selection* reads just the selection;
+  ⌖ starts at a clicked sentence. Only one reader speaks at a time.
 - **A PDF on the web:** `pdf:` can also be an address,
   `pdf: https://arxiv.org/pdf/1706.03762`. The admin (editor, preview,
   reader) shows it and lets you highlight it: its Worker fetches the PDF,

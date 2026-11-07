@@ -52,3 +52,8 @@
 .reader-graph-help { font-family: var(--font-sans); font-size: .85rem; }
 main.page:has(.reader-graph) { max-width: min(84rem, 100%); }
 main.page:has(.reader-graph) .reader-head { max-width: var(--measure); margin: 0 auto; }
+
+/* Read aloud (article-tts.js) */
+.reader-tts { font: inherit; padding: .1rem .55rem; border: 1px solid var(--rule); border-radius: 999px; background: none; color: var(--ink); cursor: pointer; }
+.reader-tts[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+body:has(.tts-dock.is-open) main.page { padding-bottom: 8rem; }

@@ -20,6 +20,7 @@ import {
 import { articleHtml, PARSER_FLAGS, postLinks } from './lib/blog-render.js';
 import { esc, formatDate, renderMath } from './render.js';
 import { applyLook, renderPostInto } from './post-view.js';
+import { attachArticleReader } from './article-tts.js';
 
 const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
@@ -307,6 +308,8 @@ async function followMove(key, store, err) {
   location.replace(readHref(key, there.store));
 }
 
+let articleReader = null; // the article's reader aloud, while a post is shown
+
 async function renderPost(key, store, published, text) {
   const md4c = await getMd4c();
   const locked = readProtected(text);
@@ -320,7 +323,8 @@ async function renderPost(key, store, published, text) {
     : draft ? '<span class="reader-chip">public</span> the draft (it may have changes not yet on the blog)'
       : '<span class="reader-chip">public</span>';
   const pageUrl = published ? publicUrl(`posts/${key.slice(6, -3)}.html`) : '';
-  document.querySelector('.reader-actions').innerHTML = `<a href="${esc(editHref(store, key))}">Edit</a>${
+  document.querySelector('.reader-actions').innerHTML = `<button type="button" class="reader-tts" aria-pressed="false" title="Read the article aloud">🔊 Read aloud</button>
+    · <a href="${esc(editHref(store, key))}">Edit</a>${
     pageUrl ? ` · <a href="${esc(pageUrl)}" target="_blank" rel="noopener">On the blog ↗</a>` : ''}`;
 
   app.innerHTML = '<article><div class="prose"></div></article>';
@@ -333,6 +337,11 @@ async function renderPost(key, store, published, text) {
   }
   // As the editor's preview shows it (post-view.js); [[other post]] opens in the reader.
   await renderPostInto(article, { store, key, meta, body, md4c, postHref: (s) => readHref(`posts/${s}.md`) });
+  // Read aloud (article-tts.js): the article's text; a paper's PDF has its own 🔊.
+  articleReader?.destroy();
+  const button = document.querySelector('.reader-tts');
+  articleReader = attachArticleReader({ article, button });
+  button.addEventListener('click', () => articleReader.toggle());
   if (location.hash.length > 1) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
 }
 
