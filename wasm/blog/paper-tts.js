@@ -73,6 +73,51 @@ export function attachReader(ctx) {
     return (onPage.find(([u]) => at >= u.start && at < u.end) ?? onPage.filter(([u]) => u.start <= at).pop() ?? onPage[0])[1];
   }
 
+  /**
+   * A point of the text layer (text node `node`, character `offset`) as a
+   * place in its page's text (readText: the same text items, spaces
+   * folded): { page, at }, or null. Exact, where finding the words would
+   * stop at their first time on the page.
+   */
+  function placeOf(node, offset) {
+    if (node?.nodeType === 1) {
+      // A point between elements: the text that comes next.
+      const next = node.childNodes[offset] ?? node;
+      const walk = document.createTreeWalker(next, NodeFilter.SHOW_TEXT);
+      node = next.nodeType === 3 ? next : walk.nextNode();
+      offset = 0;
+    }
+    const pageEl = node?.parentElement?.closest('.paper-page');
+    const layer = pageEl?.querySelector('.textLayer');
+    if (!layer?.contains(node)) return null;
+    let at = 0;
+    let space = false;
+    const count = (text) => {
+      for (const c of text) {
+        const isSpace = /\s/.test(c);
+        if (!isSpace || !space) at += 1; // (a run of spaces is one, as in readText)
+        space = isSpace;
+      }
+    };
+    const walk = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      if (n === node) {
+        count(n.data.slice(0, offset));
+        return { page: Number(pageEl.dataset.page), at };
+      }
+      if (n.nodeType === 3) count(n.data);
+      else if (n.nodeName === 'BR') count(' ');
+    }
+    return null;
+  }
+  /** The unit holding place `at` of page `n`'s text. */
+  async function unitAtPlace(n, at) {
+    const list = await textUnits();
+    const onPage = list.map((u, i) => [u, i]).filter(([u]) => u.page === n);
+    if (!onPage.length) return list.findIndex((u) => u.page >= n);
+    return (onPage.find(([u]) => at >= u.start && at < u.end) ?? onPage.filter(([u]) => u.start <= at).pop() ?? onPage[0])[1];
+  }
+
   /* ---------- Marking the sentence read ---------- */
 
   function clearMark() {
@@ -161,22 +206,27 @@ export function attachReader(ctx) {
     clear: clearMark,
     label: (u, i, until) => `Page ${u.page} · ${i + 1} / ${until + 1}`,
     fromView,
-    fromViewTitle: 'Read from the page in view',
     pickArea: pagesEl,
     async indexAtPoint(e) {
+      const c = caretAt(e.clientX, e.clientY);
+      const place = c && placeOf(c.node, c.offset);
+      if (place) return unitAtPlace(place.page, place.at);
       const page = Number(e.target.closest('.paper-page')?.dataset.page);
       return page ? unitAt(page, probeAt(e.clientX, e.clientY)) : -1;
     },
-    indexAtSelection: (text, page) => unitAt(page, text),
+    /** `where`: the selection's Range (else a page number: found by its words). */
+    async indexAtSelection(text, where) {
+      const place = where?.startContainer ? placeOf(where.startContainer, where.startOffset) : null;
+      if (place) return unitAtPlace(place.page, place.at);
+      return unitAt(Number(where) || 1, text);
+    },
     selection() {
       const sel = window.getSelection();
       const text = String(sel ?? '').trim();
       if (!text || !sel.rangeCount || !pagesEl.contains(sel.anchorNode)) return null;
-      const node = sel.getRangeAt(0).startContainer;
-      const page = Number((node.nodeType === 3 ? node.parentElement : node).closest('.paper-page')?.dataset.page) || 1;
-      return { text, where: page };
+      return { text, where: sel.getRangeAt(0).cloneRange() };
     },
     empty: 'No text to read in this PDF (it may be scanned images).',
   };
-  return createReader({ source, mount: (player) => (viewer.querySelector('.paper-find') ?? bar).after(player), button: bar.querySelector('[data-tool="tts"]'), root: el });
+  return createReader({ source, button: bar.querySelector('[data-tool="tts"]'), root: el });
 }

@@ -54,6 +54,7 @@ main.page:has(.reader-graph) { max-width: min(84rem, 100%); }
 main.page:has(.reader-graph) .reader-head { max-width: var(--measure); margin: 0 auto; }
 
 /* Read aloud (article-tts.js) */
-.reader-tts { font: inherit; padding: .1rem .55rem; border: 1px solid var(--rule); border-radius: 999px; background: none; color: var(--ink); cursor: pointer; }
-.reader-tts[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+/* (As the PDF viewer's "Read aloud" button.) */
+.reader-tts { display: inline-flex; align-items: center; gap: .25rem; font: inherit; padding: .2rem .5rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); color: var(--ink); cursor: pointer; }
+.reader-tts[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 14%, var(--paper)); border-color: color-mix(in srgb, var(--accent) 45%, var(--rule)); color: var(--ink); }
 body:has(.tts-dock.is-open) main.page { padding-bottom: 8rem; }

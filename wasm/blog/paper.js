@@ -125,7 +125,7 @@ export async function mountPaper(el, opts = {}) {
       <button type="button" data-tool="find" aria-pressed="false" title="Search the PDF (Ctrl+F)" aria-label="Search the PDF">${ICON.search}</button>
       <button type="button" data-tool="refs" aria-pressed="false" title="The paper's references" aria-label="References">${ICON.refs}<span class="paper-tool-label">Refs</span></button>
       <button type="button" data-tool="full" aria-pressed="false" title="Read in the full window" aria-label="Full window">${ICON.full}</button>
-      <button type="button" data-tool="tts" aria-pressed="false" title="Read aloud" aria-label="Read aloud">${ICON.speak}</button>
+      <button type="button" data-tool="tts" aria-pressed="false" title="Read aloud">${ICON.speak}<span class="paper-tool-label">Read aloud</span></button>
       <button type="button" data-tool="cards" title="Your flash cards: the words and sentences saved from Look up" aria-label="Flash cards">${ICON.cards}<span class="paper-tool-label">Cards</span><span class="paper-badge" hidden></span></button>
       <button type="button" data-tool="comments" class="paper-comments-toggle" title="Show the comments">Comments</button>
       ${editable ? `<button type="button" class="paper-area-btn" aria-pressed="false" title="Draw a box around a figure, table or formula">${ICON.area}<span>Area</span></button>` : ''}
@@ -843,9 +843,9 @@ export async function mountPaper(el, opts = {}) {
       }
       const sel = pending;
       if (b.dataset.act === 'read') {
-        const { page } = tools?.contextOfSelection() ?? {};
+        const range = window.getSelection()?.rangeCount ? window.getSelection().getRangeAt(0).cloneRange() : sel.page;
         closeSelbar();
-        tools?.readAloud(sel.quote, page ?? sel.page, !e.shiftKey);
+        tools?.readAloud(sel.quote, range, !e.shiftKey);
         return;
       }
       if (b.dataset.act === 'lookup') {

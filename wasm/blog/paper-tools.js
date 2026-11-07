@@ -542,7 +542,7 @@ export function attachTools(ctx) {
           if (Date.now() - downAt > 800) readbar.hidden = true;
           return;
         }
-        selected = { text, rect: sel.getRangeAt(0).getBoundingClientRect(), context: contextOfSelection() };
+        selected = { text, rect: sel.getRangeAt(0).getBoundingClientRect(), context: contextOfSelection(), range: sel.getRangeAt(0).cloneRange() };
         place(readbar, selected.rect);
       }, 250);
     });
@@ -556,7 +556,7 @@ export function attachTools(ctx) {
       if (!b || !selected) return;
       readbar.hidden = true;
       if (b.dataset.act === 'lookup') lookup(selected.text, selected.rect, selected.context);
-      else if (b.dataset.act === 'read' || b.dataset.act === 'read-on') reader.readSelection(selected.text, selected.context.page, b.dataset.act === 'read-on');
+      else if (b.dataset.act === 'read' || b.dataset.act === 'read-on') reader.readSelection(selected.text, selected.range, b.dataset.act === 'read-on');
       else await navigator.clipboard?.writeText(selected.text).catch(() => {});
     });
     on(pagesEl, 'scroll', () => { if (!readbar.classList.contains('is-docked') && readerScrolled()) readbar.hidden = true; }, { passive: true });
@@ -759,8 +759,8 @@ export function attachTools(ctx) {
   return {
     lookup,
     contextOfSelection,
-    /** Read a selection aloud: just it, or on from it (`onwards`). */
-    readAloud: (text, page, onwards) => reader.readSelection(text, page, onwards),
+    /** Read a selection aloud: just it, or on from it (`onwards`); `where`: its Range. */
+    readAloud: (text, where, onwards) => reader.readSelection(text, where, onwards),
     openFind,
     setFull,
     destroy() {

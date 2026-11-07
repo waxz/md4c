@@ -5,11 +5,13 @@
 // references only when asked ("the references too"). The speech, the
 // voices and the player: tts.js.
 //
-// attachArticleReader({ article, button, mount }): `article` holds the
-// header and the .prose; `button` toggles the player; `mount(player)` puts
-// it in the page (by default, docked at the bottom of the window).
+// attachArticleReader({ article, button }): `article` holds the header and
+// the .prose; `button` toggles the player (docked at the bottom of the
+// window, as for a PDF).
 
-import { caretAt, createReader, sentences, speakable } from './tts.js';
+import { caretAt, createReader, sentences, speakable, SPEAK_ICON } from './tts.js';
+
+export { SPEAK_ICON };
 
 const BLOCKS = 'h1, h2, h3, h4, h5, h6, p, li, blockquote, dt, dd, figcaption';
 // Containers whose text is not read (the references are read last, if asked).
@@ -93,7 +95,7 @@ export function attachArticleReader({ article, button = null, mount = null }) {
     if (sel && !sel.isCollapsed && article.contains(sel.anchorNode)) return;
     const box = range.getBoundingClientRect();
     const top = document.querySelector('.reader-bar')?.getBoundingClientRect().bottom ?? 0;
-    const bottom = window.innerHeight - (dock?.offsetHeight ?? 0);
+    const bottom = window.innerHeight - (document.querySelector('.tts-dock.is-open')?.offsetHeight ?? 0);
     if (box.top < top + 8 || box.bottom > bottom - 8) {
       window.scrollTo({ top: window.scrollY + box.top - top - (bottom - top) / 3, behavior: 'smooth' });
     }
@@ -130,7 +132,6 @@ export function attachArticleReader({ article, button = null, mount = null }) {
       const i = (units ?? []).findIndex((u) => u.block.getBoundingClientRect().bottom > top);
       return i < 0 ? 0 : i;
     },
-    fromViewTitle: 'Read from what is in view (or from the selected text)',
     pickArea: article,
     async indexAtPoint(e) {
       const c = caretAt(e.clientX, e.clientY);
@@ -148,26 +149,12 @@ export function attachArticleReader({ article, button = null, mount = null }) {
     empty: 'No text to read in this article.',
   };
 
-  // Docked at the bottom of the window, unless told where.
-  let dock = null;
-  const reader = createReader({
-    source,
-    button,
-    root: article,
-    mount: mount ?? ((player) => {
-      dock = document.createElement('div');
-      dock.className = 'tts-dock';
-      dock.append(player);
-      document.body.append(dock);
-      new MutationObserver(() => dock.classList.toggle('is-open', !player.hidden)).observe(player, { attributes: true, attributeFilter: ['hidden'] });
-    }),
-  });
+  const reader = createReader({ source, button, root: article, mount });
   return {
     ...reader,
     destroy() {
       reader.destroy();
       clear();
-      dock?.remove();
     },
   };
 }

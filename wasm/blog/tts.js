@@ -9,13 +9,15 @@
 //     (Settings, Text to speech), so no key is ever in a page. A visitor of
 //     the blog has the browser's voice only.
 //
-// createReader({ source, mount(player), button, root }), where source = {
+// createReader({ source, mount(player), button, root }): the player is
+// docked at the bottom of the window, the same for a PDF and an article
+// (unless `mount` puts it elsewhere); `button` shows whether it is open.
+// source = {
 //   units(): Promise<[{ say, … }]>  what to read, in order
 //   referencesAt                    the first unit of the references (after units()), or null
 //   mark(unit), clear()             show the unit read; stop showing it
 //   label(unit, i, until)           the player's status ("Page 3 · 12 / 190")
-//   fromView(): Promise<index>      where ▶ starts
-//   fromViewTitle                   ▶'s title
+//   fromView(): Promise<index>      where ▶ starts (without a selection)
 //   pickArea                        where ⌖ listens for a click
 //   indexAtPoint(event)             the unit clicked (-1: none)
 //   indexAtSelection(text, where)   the unit a selection starts in
@@ -91,7 +93,28 @@ export function caretAt(x, y) {
 
 let speaking = null; // the reader that speaks now
 
-export function createReader({ source, mount, button = null, root = null }) {
+/** The speaker icon of every "Read aloud" button. */
+export const SPEAK_ICON = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6v4h2.5l3.5 3V3L5 6z"/><path d="M11 5.5a3.5 3.5 0 010 5M12.8 3.8a6 6 0 010 8.4"/></svg>';
+// The player's words, the same wherever it reads.
+const TITLE = {
+  play: 'Read aloud from what is in view, or from the selected text',
+  pause: 'Pause',
+  resume: 'Resume',
+  pick: 'Click a sentence to read from there',
+  sel: 'Read just the selected text',
+};
+
+/** The player at the bottom of the window. */
+function dock(player) {
+  const box = document.createElement('div');
+  box.className = 'tts-dock';
+  box.append(player);
+  document.body.append(box);
+  new MutationObserver(() => box.classList.toggle('is-open', !player.hidden)).observe(player, { attributes: true, attributeFilter: ['hidden'] });
+  return box;
+}
+
+export function createReader({ source, mount = null, button = null, root = null }) {
   const cleanups = [];
   const on = (target, type, fn, opts) => {
     target.addEventListener(type, fn, opts);
@@ -322,12 +345,12 @@ export function createReader({ source, mount, button = null, root = null }) {
   player.setAttribute('role', 'region');
   player.setAttribute('aria-label', 'Read aloud');
   player.innerHTML = `<div class="tts-row">
-      <button type="button" data-tts="play" class="tts-main" aria-label="Read aloud" title="${esc(source.fromViewTitle ?? 'Read from here')}">▶</button>
+      <button type="button" data-tts="play" class="tts-main" aria-label="Read aloud" title="${TITLE.play}">▶</button>
       <button type="button" data-tts="prev" aria-label="Previous sentence" title="Previous sentence">⏮</button>
       <button type="button" data-tts="next" aria-label="Next sentence" title="Next sentence">⏭</button>
       <button type="button" data-tts="stop" aria-label="Stop" title="Stop">⏹</button>
-      <button type="button" data-tts="pick" aria-pressed="false" title="Click a sentence to read from there">⌖ Start here</button>
-      <button type="button" data-tts="sel" title="Read the selected text (just it)">Selection</button>
+      <button type="button" data-tts="pick" aria-pressed="false" title="${TITLE.pick}">⌖ Start here</button>
+      <button type="button" data-tts="sel" title="${TITLE.sel}">Selection</button>
       <span class="tts-status muted" aria-live="polite"></span>
       <button type="button" data-tts="close" class="tts-close" aria-label="Close the reader" title="Close">×</button>
     </div>
@@ -337,7 +360,7 @@ export function createReader({ source, mount, button = null, root = null }) {
       <select data-pref="rate" aria-label="Speed">${[0.75, 0.9, 1, 1.15, 1.3, 1.5, 1.75, 2].map((r) => `<option value="${r}">${r}×</option>`).join('')}</select>
       <label class="tts-refs"><input type="checkbox" data-pref="toReferences"> the references too</label>
     </div>`;
-  mount(player);
+  const docked = mount ? (mount(player), null) : dock(player);
   const statusEl = player.querySelector('.tts-status');
   function status(text) {
     if (text !== undefined) {
@@ -361,7 +384,7 @@ export function createReader({ source, mount, button = null, root = null }) {
     const main = player.querySelector('[data-tts="play"]');
     main.textContent = state === 'playing' ? '⏸' : '▶';
     main.setAttribute('aria-label', state === 'playing' ? 'Pause' : state === 'paused' ? 'Resume' : 'Read aloud');
-    main.title = state === 'playing' ? 'Pause' : state === 'paused' ? 'Resume' : source.fromViewTitle ?? 'Read from here';
+    main.title = state === 'playing' ? TITLE.pause : state === 'paused' ? TITLE.resume : TITLE.play;
     player.querySelector('[data-pref="engine"]').value = p.engine === 'api' && apiOk ? 'api' : 'browser';
     player.querySelector('[data-pref="rate"]').value = String(p.rate);
     player.querySelector('[data-pref="toReferences"]').checked = p.toReferences;
@@ -481,6 +504,7 @@ export function createReader({ source, mount, button = null, root = null }) {
       stop(false);
       for (const f of cleanups) f();
       player.remove();
+      docked?.remove();
     },
   };
   return self;

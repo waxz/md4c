@@ -20,7 +20,7 @@ import {
 import { articleHtml, PARSER_FLAGS, postLinks } from './lib/blog-render.js';
 import { esc, formatDate, renderMath } from './render.js';
 import { applyLook, renderPostInto } from './post-view.js';
-import { attachArticleReader } from './article-tts.js';
+import { attachArticleReader, SPEAK_ICON } from './article-tts.js';
 
 const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
@@ -323,7 +323,7 @@ async function renderPost(key, store, published, text) {
     : draft ? '<span class="reader-chip">public</span> the draft (it may have changes not yet on the blog)'
       : '<span class="reader-chip">public</span>';
   const pageUrl = published ? publicUrl(`posts/${key.slice(6, -3)}.html`) : '';
-  document.querySelector('.reader-actions').innerHTML = `<button type="button" class="reader-tts" aria-pressed="false" title="Read the article aloud">🔊 Read aloud</button>
+  document.querySelector('.reader-actions').innerHTML = `<button type="button" class="reader-tts" aria-pressed="false" title="Read aloud">${SPEAK_ICON}<span>Read aloud</span></button>
     · <a href="${esc(editHref(store, key))}">Edit</a>${
     pageUrl ? ` · <a href="${esc(pageUrl)}" target="_blank" rel="noopener">On the blog ↗</a>` : ''}`;
 
