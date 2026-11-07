@@ -374,12 +374,31 @@ General notes, in Markdown. The encoder is discussed in
   **references**, read from its "References" (or "Bibliography") section:
   numbered (`[1]`, `1.`) or author–year (by the hanging indent), each with
   DOI, arXiv and Google Scholar links; click one to see it in the PDF, or
-  *Copy all*. Select text and **Look up** (in the selection bar) shows a
-  definition: the Free Dictionary for an English word, else Wikipedia's
-  summary (Japanese text on ja.wikipedia.org), with links to Wiktionary,
-  Wikipedia, Weblio and Google. Only the selected text is sent, only when
-  *Look up* is pressed; the pages' CSP allows `api.dictionaryapi.dev` and
-  `*.wikipedia.org` for it (rebuild the site once so its pages carry it).
+  *Copy all*.
+- **Look up:** select text and press **Look up** (in the selection bar).
+  For a **word**: its IPA by accent (US, UK…) with ▶ to hear the
+  recording (or the browser's own voice when there is none), its
+  meanings (the Free Dictionary; else Wikipedia's summary, Japanese text
+  on ja.wikipedia.org), its translations, and links to Wiktionary,
+  Wikipedia, Weblio and Google. For a **phrase or sentence**: its
+  translation (MyMemory), ▶ to hear it, and links to Google Translate and
+  DeepL. Translations go into the language picked in the card (kept in
+  this browser; at first, the browser's own non-English language). Only
+  the selected text is sent, only when *Look up* is pressed; the pages'
+  CSP allows `api.dictionaryapi.dev`, `*.wikipedia.org` and
+  `api.mymemory.translated.net` for it (rebuild the site once so its
+  pages carry it). MyMemory's free use is a few thousand words a day.
+- **Flash cards:** **☆ Save** in the look-up card keeps the word or
+  sentence, with its IPA, meaning, translation, the sentence it was read
+  in and a link to the paper and page. **Cards** (the viewer's toolbar,
+  with how many are due; in the admin also a page of its own) reviews them
+  by spaced repetition: the word in its sentence, *Show answer* (Space),
+  then *Again*, *Hard*, *Good* or *Easy* (1–4), each saying when the card
+  comes back. *All* lists, searches and deletes them; *More* exports them
+  (JSON, or CSV for Anki) and imports a JSON export (one card per word;
+  the one reviewed more is kept). The cards are kept in this browser
+  (`js/cards.js` schedules them, SM-2 simplified): the blog and the admin
+  are separate sites with a deck each; export and import to move them.
 - **A PDF on the web:** `pdf:` can also be an address,
   `pdf: https://arxiv.org/pdf/1706.03762`. The admin (editor, preview,
   reader) shows it and lets you highlight it: its Worker fetches the PDF,
