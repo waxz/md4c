@@ -112,6 +112,10 @@ async function showSettings() {
       ${state.site.indexNowKey && state.site.url ? '<button type="button" class="btn" data-act="indexnow">Notify search engines</button>' : ''}
     </div>
   </div>`;
+  // Text to speech, under the site settings (tts-settings.js).
+  const tts = document.createElement('section');
+  view.querySelector('.settings').after(tts);
+  import('./tts-settings.js').then((m) => m.mountTtsSettings(tts), (err) => console.warn('tts settings:', err));
   const ta = view.querySelector('textarea');
   ta.value = raw;
   const check = view.querySelector('.settings-check');

@@ -132,7 +132,7 @@ describe('Cloudflare Access', () => {
     assert.match(r.headers.get('content-security-policy'), /img-src 'self' blob: data: https:\/\/blog.example.com/);
     // (Looking up and translating in a paper reach these three, and no other host.)
     assert.match(r.headers.get('content-security-policy'), /connect-src 'self' https:\/\/api\.dictionaryapi\.dev https:\/\/\*\.wikipedia\.org https:\/\/api\.mymemory\.translated\.net;/);
-    assert.match(r.headers.get('content-security-policy'), /media-src 'self' https:\/\/blog\.example\.com https:\/\/api\.dictionaryapi\.dev;/); // (recorded pronunciations)
+    assert.match(r.headers.get('content-security-policy'), /media-src 'self' blob: https:\/\/blog\.example\.com https:\/\/api\.dictionaryapi\.dev;/); // (recorded pronunciations; speech)
     assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
   });
 
@@ -178,6 +178,53 @@ describe('Cloudflare Access', () => {
       assert.equal((await call('POST', '/api/import', { body: JSON.stringify({ store: 'drafts', key: 'posts/x.pdf', url }), headers: { 'x-admin-request': '0', 'content-type': 'application/json' } })).status, 403);
     } finally {
       globalThis.fetch = real;
+    }
+  });
+
+  test('text to speech: set up in KV, called by the Worker, the key never sent back', async () => {
+    const real = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (input, init) => {
+      const u = String(input?.url ?? input);
+      if (!u.startsWith('https://tts.example/')) return real(input, init);
+      calls.push({ u, auth: new Headers(init.headers).get('authorization'), body: JSON.parse(init.body) });
+      if (calls.at(-1).body.input === 'fail') return new Response(JSON.stringify({ error: { message: 'Incorrect API key provided' } }), { status: 401 });
+      return new Response(new Uint8Array([0x49, 0x44, 0x33, 1, 2, 3]), { headers: { 'content-type': 'audio/mpeg' } });
+    };
+    try {
+      assert.equal((await call('GET', '/api/tts')).data.configured, false);
+      assert.equal((await postJson('/api/tts/speech', { input: 'hello' })).data.code, 'not-configured');
+      const put = (body) => call('PUT', '/api/tts', { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+      let r = await put({ baseUrl: 'https://tts.example/v1/', model: 'tts-1', voice: 'nova', apiKey: 'sk-secret' });
+      assert.equal(r.status, 200);
+      assert.deepEqual({ ...r.data }, { configured: true, baseUrl: 'https://tts.example/v1', model: 'tts-1', voice: 'nova', keySet: true, from: 'kv', kv: true });
+      assert.ok(!JSON.stringify((await call('GET', '/api/tts')).data).includes('sk-secret'), 'the key is never sent back');
+      // Speech: the service's audio, asked with the key and the settings.
+      r = await call('POST', '/api/tts/speech', { body: JSON.stringify({ input: 'Attention is all you need.', speed: 9, voice: 'onyx' }), headers: { 'content-type': 'application/json' } });
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get('content-type'), 'audio/mpeg');
+      assert.deepEqual(calls.at(-1), {
+        u: 'https://tts.example/v1/audio/speech', auth: 'Bearer sk-secret',
+        body: { model: 'tts-1', input: 'Attention is all you need.', voice: 'onyx', speed: 4, response_format: 'mp3' },
+      });
+      // A full address is used as it is; an odd voice name is not passed on.
+      await put({ baseUrl: 'https://tts.example/speak/audio/speech', model: 'kokoro', voice: 'af_bella' });
+      await call('POST', '/api/tts/speech', { body: JSON.stringify({ input: 'x', voice: 'a b"c' }), headers: { 'content-type': 'application/json' } });
+      assert.equal(calls.at(-1).u, 'https://tts.example/speak/audio/speech');
+      assert.equal(calls.at(-1).body.voice, 'af_bella');
+      assert.equal(calls.at(-1).auth, 'Bearer sk-secret', 'an empty key field keeps the saved key');
+      // The service's error, said.
+      r = await call('POST', '/api/tts/speech', { body: JSON.stringify({ input: 'fail' }), headers: { 'content-type': 'application/json' } });
+      assert.equal(r.status, 502);
+      assert.match(r.data.error, /401: Incorrect API key provided/);
+      // Removing the key; turning it off; writes need the admin's own request.
+      assert.equal((await put({ baseUrl: 'https://tts.example/v1', clearKey: true })).data.keySet, false);
+      assert.equal((await put({ baseUrl: 'javascript:alert(1)' })).data.code, 'bad-url');
+      assert.equal((await call('PUT', '/api/tts', { body: '{}', headers: { 'x-admin-request': '0' } })).status, 403);
+      assert.equal((await put({ baseUrl: '' })).data.configured, false);
+    } finally {
+      globalThis.fetch = real;
+      await env.SETTINGS.delete('tts');
     }
   });
 

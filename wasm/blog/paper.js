@@ -65,6 +65,7 @@ const ICON = {
   search: svg('<circle cx="7" cy="7" r="4"/><path d="M10 10l3.5 3.5"/>'),
   refs: svg('<path d="M3 4h10M3 8h10M3 12h6"/>'),
   full: svg('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>'),
+  speak: svg('<path d="M2.5 6v4h2.5l3.5 3V3L5 6z"/><path d="M11 5.5a3.5 3.5 0 010 5M12.8 3.8a6 6 0 010 8.4"/>'),
   cards: svg('<rect x="2.5" y="4.5" width="9" height="9" rx="1.5"/><path d="M5 2.5h7a1.5 1.5 0 011.5 1.5v7"/>'),
   book: svg('<path d="M2.5 3.5c2-1 4-1 5.5.5v9c-1.5-1.5-3.5-1.5-5.5-.5zM13.5 3.5c-2-1-4-1-5.5.5v9c1.5-1.5 3.5-1.5 5.5-.5z"/>'),
 };
@@ -124,6 +125,7 @@ export async function mountPaper(el, opts = {}) {
       <button type="button" data-tool="find" aria-pressed="false" title="Search the PDF (Ctrl+F)" aria-label="Search the PDF">${ICON.search}</button>
       <button type="button" data-tool="refs" aria-pressed="false" title="The paper's references" aria-label="References">${ICON.refs}<span class="paper-tool-label">Refs</span></button>
       <button type="button" data-tool="full" aria-pressed="false" title="Read in the full window" aria-label="Full window">${ICON.full}</button>
+      <button type="button" data-tool="tts" aria-pressed="false" title="Read aloud" aria-label="Read aloud">${ICON.speak}</button>
       <button type="button" data-tool="cards" title="Your flash cards: the words and sentences saved from Look up" aria-label="Flash cards">${ICON.cards}<span class="paper-tool-label">Cards</span><span class="paper-badge" hidden></span></button>
       <button type="button" data-tool="comments" class="paper-comments-toggle" title="Show the comments">Comments</button>
       ${editable ? `<button type="button" class="paper-area-btn" aria-pressed="false" title="Draw a box around a figure, table or formula">${ICON.area}<span>Area</span></button>` : ''}
@@ -763,6 +765,7 @@ export async function mountPaper(el, opts = {}) {
     selbar.setAttribute('aria-label', 'Highlight the selection');
     selbar.innerHTML = `<div class="pop-row pop-new">${shapes(style.shape)}<span class="pop-sep"></span>${swatches(style.color, 'color')}<span class="pop-sep"></span>
       <button type="button" class="pop-btn" data-act="lookup" title="Look up in a dictionary" aria-label="Look up">${ICON.book}<span>Look up</span></button>
+      <button type="button" class="pop-btn" data-act="read" title="Read aloud from here (Shift: just the selection)" aria-label="Read aloud">${ICON.speak}</button>
       <button type="button" class="pop-btn" data-act="comment">${ICON.comment}<span>Comment</span></button></div>
       <div class="pop-row pop-move"><button type="button" class="pop-btn pop-primary" data-act="move-here">Move the highlight here</button></div>`;
     tint(selbar, style.color);
@@ -839,6 +842,12 @@ export async function mountPaper(el, opts = {}) {
         return;
       }
       const sel = pending;
+      if (b.dataset.act === 'read') {
+        const { page } = tools?.contextOfSelection() ?? {};
+        closeSelbar();
+        tools?.readAloud(sel.quote, page ?? sel.page, !e.shiftKey);
+        return;
+      }
       if (b.dataset.act === 'lookup') {
         const context = tools?.contextOfSelection() ?? {};
         closeSelbar();

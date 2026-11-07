@@ -363,6 +363,87 @@ async function importFile(request, env, stores) {
   return json({ ...info(entry, written), source: res.url }, 201);
 }
 
+/* ---------- Text to speech: an OpenAI-style speech API, for reading papers aloud ---------- */
+
+// Kept in KV ("tts": { baseUrl, model, voice, apiKey }) from Settings, or set
+// in the deploy (TTS_BASE_URL, TTS_MODEL, TTS_VOICE, and the secret
+// TTS_API_KEY). The key never leaves the Worker: the admin's pages ask
+// POST /api/tts/speech, and the Worker asks the service.
+const TTS_KEY = 'tts';
+const OPENAI_BASE = 'https://api.openai.com/v1';
+
+async function ttsSettings(env) {
+  let kv = {};
+  try {
+    kv = env.SETTINGS ? JSON.parse((await env.SETTINGS.get(TTS_KEY)) ?? '{}') ?? {} : {};
+  } catch {}
+  const apiKey = String(kv.apiKey || env.TTS_API_KEY || '');
+  const baseUrl = String(kv.baseUrl || env.TTS_BASE_URL || (apiKey ? OPENAI_BASE : ''));
+  return {
+    baseUrl,
+    model: String(kv.model || env.TTS_MODEL || 'gpt-4o-mini-tts'),
+    voice: String(kv.voice || env.TTS_VOICE || 'alloy'),
+    apiKey,
+    from: kv.baseUrl ? 'kv' : baseUrl ? 'deploy' : '',
+  };
+}
+
+/** What the admin may know of it: not the key. */
+async function ttsConfig(env) {
+  const t = await ttsSettings(env);
+  return json({ configured: Boolean(t.baseUrl), baseUrl: t.baseUrl, model: t.model, voice: t.voice, keySet: Boolean(t.apiKey), from: t.from, kv: Boolean(env.SETTINGS) });
+}
+
+async function saveTts(request, env) {
+  if (!env.SETTINGS) throw new ApiError(400, 'This deploy has no SETTINGS KV namespace: set TTS_BASE_URL and the secret TTS_API_KEY in the Worker instead', { code: 'no-kv' });
+  const body = await request.json().catch(() => ({}));
+  const baseUrl = String(body.baseUrl ?? '').trim().replace(/\/+$/, '');
+  if (baseUrl && !/^https?:\/\/[^\s/?#]+[^\s]*$/i.test(baseUrl)) throw new ApiError(400, 'The address must start with https:// (or http://)', { code: 'bad-url' });
+  const old = JSON.parse((await env.SETTINGS.get(TTS_KEY)) ?? '{}') ?? {};
+  const clean = (v, n) => String(v ?? '').trim().slice(0, n);
+  const next = baseUrl ? {
+    baseUrl,
+    model: clean(body.model, 100),
+    voice: clean(body.voice, 64),
+    // An empty key field keeps the saved key; "clearKey" removes it.
+    apiKey: body.clearKey ? '' : clean(body.apiKey, 500) || old.apiKey || '',
+  } : {};
+  await env.SETTINGS.put(TTS_KEY, JSON.stringify(next));
+  return ttsConfig(env);
+}
+
+/** Speech for `input` from the configured service: the audio, as it sends it. */
+async function speech(request, env) {
+  const t = await ttsSettings(env);
+  if (!t.baseUrl) throw new ApiError(400, 'No speech API is set up (Settings, Text to speech)', { code: 'not-configured' });
+  const body = await request.json().catch(() => ({}));
+  const input = String(body.input ?? '').trim().slice(0, 4096);
+  if (!input) throw new ApiError(400, 'Nothing to say', { code: 'empty' });
+  const voice = /^[\w.+-]{1,64}$/.test(body.voice ?? '') ? body.voice : t.voice;
+  const speed = Math.min(4, Math.max(0.25, Number(body.speed) || 1));
+  const url = /\/audio\/speech\/?$/.test(t.baseUrl) ? t.baseUrl : `${t.baseUrl}/audio/speech`;
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'audio/*', ...(t.apiKey ? { authorization: `Bearer ${t.apiKey}` } : {}) },
+      body: JSON.stringify({ model: t.model, input, voice, speed, response_format: 'mp3' }),
+    });
+  } catch (err) {
+    throw new ApiError(502, `The speech service could not be reached (${err.message ?? err})`, { code: 'tts-failed' });
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let msg = text.slice(0, 300);
+    try {
+      const d = JSON.parse(text);
+      msg = d.error?.message ?? d.detail ?? d.message ?? msg;
+    } catch {}
+    throw new ApiError(502, `The speech service answered ${res.status}${msg ? `: ${String(msg).slice(0, 300)}` : ''}`, { code: 'tts-failed', status: res.status });
+  }
+  return new Response(res.body, { headers: { 'content-type': res.headers.get('content-type') || 'audio/mpeg' } });
+}
+
 /** Whether two stores hold the same file at `key` (sizes, then etags, then the bytes when small). */
 async function sameFile(a, b, key, ma, mb) {
   if (ma.size !== mb.size) return false;
@@ -971,6 +1052,12 @@ export async function handleApi(request, env, user) {
         return await copyToSite(request, stores);
       case 'POST /api/import':
         return await importFile(request, env, stores);
+      case 'GET /api/tts':
+        return await ttsConfig(env);
+      case 'PUT /api/tts':
+        return await saveTts(request, env);
+      case 'POST /api/tts/speech':
+        return await speech(request, env);
       case 'GET /api/remote':
         return await remoteFile(q('url'), env, stores);
       case 'POST /api/folder':

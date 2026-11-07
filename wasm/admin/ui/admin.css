@@ -480,3 +480,8 @@ button.post-card-link:disabled { cursor: default; opacity: .4; }
 /* Cards (cards.js): the blog's flash card manager, as a page. */
 .cards-page { --rule: var(--line); max-width: 48rem; margin: 0 auto; }
 .cards-page .cards-head { position: static; padding: 0 0 .6rem; background: none; }
+
+/* Settings: text to speech (tts-settings.js) */
+.tts-settings { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.tts-settings h2 { font-size: 1.15rem; margin: 0 0 .4rem; }
+.tts-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .6rem; }

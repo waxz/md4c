@@ -16,6 +16,7 @@
 // (cards.js).
 
 import { deck, ipaHtml, openCards, speak, useCardsCss } from './cards.js';
+import { attachReader } from './paper-tts.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -47,8 +48,13 @@ export function attachTools(ctx) {
     for (let t = 0; t < 100 && (p.task || p.rendered !== scale()); t++) await sleep(40);
   }
 
+  // Scrolls made here (search, references, reading aloud) are not the reader's:
+  // they do not close the selection bar or the look-up card.
+  let ownScroll = 0;
+  const readerScrolled = () => Date.now() - ownScroll > 1200;
   /** Scroll the pages so that `y` (a fraction of page `p`) is a third down the view. */
   function scrollTo(p, y, smooth = true) {
+    ownScroll = Date.now();
     const top = p.el.offsetTop + y * p.el.offsetHeight - pagesEl.clientHeight / 3;
     pagesEl.scrollTo({ top: Math.max(0, top), behavior: smooth ? 'smooth' : 'auto' });
   }
@@ -522,6 +528,8 @@ export function attachTools(ctx) {
     readbar.classList.add('paper-readbar');
     readbar.setAttribute('role', 'toolbar');
     readbar.innerHTML = `<div class="pop-row"><button type="button" class="pop-btn" data-act="lookup">${ICON_BOOK}<span>Look up</span></button>
+      <button type="button" class="pop-btn" data-act="read" title="Read the selection aloud">${ICON_SPEAK}<span>Read</span></button>
+      <button type="button" class="pop-btn" data-act="read-on" title="Read aloud from here on">From here</button>
       <button type="button" class="pop-btn" data-act="copy">Copy</button></div>`;
     let selected = null;
     let timer;
@@ -548,9 +556,10 @@ export function attachTools(ctx) {
       if (!b || !selected) return;
       readbar.hidden = true;
       if (b.dataset.act === 'lookup') lookup(selected.text, selected.rect, selected.context);
+      else if (b.dataset.act === 'read' || b.dataset.act === 'read-on') reader.readSelection(selected.text, selected.context.page, b.dataset.act === 'read-on');
       else await navigator.clipboard?.writeText(selected.text).catch(() => {});
     });
-    on(pagesEl, 'scroll', () => { if (!readbar.classList.contains('is-docked')) readbar.hidden = true; }, { passive: true });
+    on(pagesEl, 'scroll', () => { if (!readbar.classList.contains('is-docked') && readerScrolled()) readbar.hidden = true; }, { passive: true });
   }
 
   /* ---------- References ---------- */
@@ -703,6 +712,20 @@ export function attachTools(ctx) {
     }
   });
 
+  /** Where the references begin: { page, text } (their heading's line), or null. */
+  async function referencesStart() {
+    for (let k = pages.length - 1; k >= 0; k--) {
+      const ls = await lines(pages[k]);
+      for (let i = ls.length - 1; i >= 0; i--) if (HEADING.test(ls[i].text)) return { page: k + 1, text: ls[i].text };
+    }
+    return null;
+  }
+
+  /* ---------- Reading aloud (paper-tts.js) ---------- */
+
+  const reader = attachReader({ el, viewer, bar, pages, pagesEl, ready, matchesOnPage, scrollTo, referencesStart });
+  cleanups.push(() => reader.destroy());
+
   /* ---------- The toolbar, keys ---------- */
 
   on(bar, 'click', (e) => {
@@ -714,6 +737,7 @@ export function attachTools(ctx) {
     else if (tool === 'full') setFull(!isFull());
     else if (tool === 'comments') el.classList.toggle('show-comments');
     else if (tool === 'cards') openCards();
+    else if (tool === 'tts') reader.toggle();
   });
   on(document, 'keydown', (e) => {
     const inPaper = isFull() || el.contains(document.activeElement);
@@ -730,11 +754,13 @@ export function attachTools(ctx) {
   on(document, 'pointerdown', (e) => {
     if (!lookupEl.hidden && !lookupEl.contains(e.target) && !readbar?.contains(e.target)) closeLookup();
   });
-  on(pagesEl, 'scroll', () => { if (!lookupEl.classList.contains('is-docked')) closeLookup(); }, { passive: true });
+  on(pagesEl, 'scroll', () => { if (!lookupEl.classList.contains('is-docked') && readerScrolled()) closeLookup(); }, { passive: true });
 
   return {
     lookup,
     contextOfSelection,
+    /** Read a selection aloud: just it, or on from it (`onwards`). */
+    readAloud: (text, page, onwards) => reader.readSelection(text, page, onwards),
     openFind,
     setFull,
     destroy() {
@@ -746,4 +772,5 @@ export function attachTools(ctx) {
   };
 }
 
+const ICON_SPEAK = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6v4h2.5l3.5 3V3L5 6z"/><path d="M11 5.5a3.5 3.5 0 010 5M12.8 3.8a6 6 0 010 8.4"/></svg>';
 const ICON_BOOK = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5c2-1 4-1 5.5.5v9c-1.5-1.5-3.5-1.5-5.5-.5zM13.5 3.5c-2-1-4-1-5.5.5v9c1.5-1.5 3.5-1.5 5.5-.5z"/></svg>';

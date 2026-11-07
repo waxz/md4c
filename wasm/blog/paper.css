@@ -324,6 +324,23 @@ html.paper-full-open { overflow: hidden; }
   }
 }
 
+/* Reading aloud (paper-tts.js) */
+.paper-tts { display: grid; gap: .3rem; padding: .35rem .5rem; border-bottom: 1px solid var(--rule); background: var(--surface); font-size: .85rem; }
+.paper-tts[hidden] { display: none; }
+.tts-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.paper-tts button, .paper-tts select { font: inherit; min-height: 1.9rem; padding: .1rem .5rem; border: 1px solid var(--rule); border-radius: 5px; background: var(--paper); color: var(--ink); cursor: pointer; }
+.paper-tts .tts-main { min-width: 2.4rem; background: var(--accent); border-color: var(--accent); color: var(--accent-ink, #fff); }
+.paper-tts [aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 14%, var(--paper)); border-color: color-mix(in srgb, var(--accent) 45%, var(--rule)); }
+.paper-tts select[data-pref="voice"] { max-width: 14rem; }
+.tts-status { flex: 1; min-width: 6rem; font-variant-numeric: tabular-nums; }
+.tts-close { margin-left: auto; }
+.tts-refs { display: inline-flex; align-items: center; gap: .3rem; color: var(--muted); }
+.paper-reading { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.paper-read-mark { position: absolute; border-radius: 2px; background: rgb(56 189 248 / .28); mix-blend-mode: multiply; }
+.paper-pages.is-picking, .paper-pages.is-picking .textLayer span { cursor: crosshair; }
+.paper-selbar.is-docked:not(.paper-readbar) [data-act="read"] { order: 3; }
+@media (pointer: coarse) { .paper-tts button, .paper-tts select { min-height: 2.5rem; } }
+
 /* References */
 .paper-refs {
   position: absolute; right: 0; bottom: 0; z-index: 5; width: min(30rem, 100%); overflow: auto; overscroll-behavior: contain;

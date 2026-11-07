@@ -324,6 +324,16 @@ export const api = {
     return localStore.write(key, bytes, null);
   },
 
+  /** Text to speech (an OpenAI-style API, called by the Worker): its settings, without the key. */
+  ttsConfig: () => request('GET', 'tts'),
+  /** Save them ({ baseUrl, model, voice, apiKey }; an empty key keeps the saved one; clearKey; baseUrl '' turns it off). */
+  saveTts: (cfg) => request('PUT', 'tts', { body: JSON.stringify(cfg), headers: { 'content-type': 'application/json' } }),
+  /** Speech for { input, voice?, speed? }: an audio Blob. */
+  async speech(body) {
+    const res = await request('POST', 'tts/speech', { body: JSON.stringify(body), headers: { 'content-type': 'application/json' }, raw: true });
+    return res.blob();
+  },
+
   /** Draft stores: deployed ones, and the ones saved from the Storage page. */
   storage: () => request('GET', 'storage'),
 

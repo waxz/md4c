@@ -16,7 +16,7 @@ function pageCsp(env) {
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self'",
     `img-src 'self' blob: data:${blog}`,
-    `media-src 'self'${blog} https://api.dictionaryapi.dev`, // (a word's recorded pronunciation)
+    `media-src 'self' blob:${blog} https://api.dictionaryapi.dev`, // (a word's recorded pronunciation; speech read aloud)
     "font-src 'self'",
     // A paper's PDF viewer looks words up and translates there, when asked (blog/paper-tools.js).
     "connect-src 'self' https://api.dictionaryapi.dev https://*.wikipedia.org https://api.mymemory.translated.net",
