@@ -21,6 +21,8 @@ import { articleHtml, PARSER_FLAGS, postLinks } from './lib/blog-render.js';
 import { esc, formatDate, renderMath } from './render.js';
 import { applyLook, renderPostInto } from './post-view.js';
 import { attachArticleReader, SPEAK_ICON } from './article-tts.js';
+import { createLookup } from './lookup.js';
+import { pagePopups, readerSelectionBar, sentenceAround } from './selbar.js';
 
 const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
@@ -308,7 +310,7 @@ async function followMove(key, store, err) {
   location.replace(readHref(key, there.store));
 }
 
-let articleReader = null; // the article's reader aloud, while a post is shown
+let articleTools = []; // the article's reader aloud, Look up and selection bar, while a post is shown
 
 async function renderPost(key, store, published, text) {
   const md4c = await getMd4c();
@@ -337,11 +339,23 @@ async function renderPost(key, store, published, text) {
   }
   // As the editor's preview shows it (post-view.js); [[other post]] opens in the reader.
   await renderPostInto(article, { store, key, meta, body, md4c, postHref: (s) => readHref(`posts/${s}.md`) });
-  // Read aloud (article-tts.js): the article's text; a paper's PDF has its own 🔊.
-  articleReader?.destroy();
+  // Read aloud (article-tts.js) and the bar by a selection (selbar.js: Look up,
+  // Read, Copy), as in a paper's PDF viewer, which has its own of both.
+  for (const x of articleTools) x.destroy();
   const button = document.querySelector('.reader-tts');
-  articleReader = attachArticleReader({ article, button });
-  button.addEventListener('click', () => articleReader.toggle());
+  const reader = attachArticleReader({ article, button });
+  const pops = pagePopups();
+  const looker = createLookup(pops);
+  const bar = readerSelectionBar({
+    area: article, ignore: '.paper', ...pops,
+    contextOf: (range) => ({ context: sentenceAround(range) }),
+    onLookup: (text, rect, context) => looker.lookup(text, rect, context),
+    onRead: (range) => reader.readFrom(range),
+  });
+  articleTools = [reader, looker, bar];
+  // A paper: its PDF is what is read (the viewer's own "Read aloud").
+  if (article.querySelector('.paper')) button.hidden = true;
+  else button.addEventListener('click', () => reader.toggle());
   if (location.hash.length > 1) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
 }
 

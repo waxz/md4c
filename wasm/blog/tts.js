@@ -18,8 +18,6 @@
 //   mark(unit), clear()             show the unit read; stop showing it
 //   label(unit, i, until)           the player's status ("Page 3 · 12 / 190")
 //   fromView(): Promise<index>      where ▶ starts (without a selection)
-//   pickArea                        where ⌖ listens for a click
-//   indexAtPoint(event)             the unit clicked (-1: none)
 //   indexAtSelection(text, where)   the unit a selection starts in
 //   selection()                     the reader's selection in this text: { text, where }, or null
 //   empty                           what to say when there is nothing to read
@@ -78,18 +76,6 @@ export function sentences(text, lang = 'en') {
   return out.map((s) => ({ ...s, text: text.slice(s.start, s.end).trim() })).filter((s) => s.text);
 }
 
-/** The text node and offset at a point of the page (where a click lands), or null. */
-export function caretAt(x, y) {
-  if (document.caretPositionFromPoint) {
-    const c = document.caretPositionFromPoint(x, y);
-    return c?.offsetNode ? { node: c.offsetNode, offset: c.offset } : null;
-  }
-  if (document.caretRangeFromPoint) {
-    const r = document.caretRangeFromPoint(x, y);
-    return r ? { node: r.startContainer, offset: r.startOffset } : null;
-  }
-  return null;
-}
 
 let speaking = null; // the reader that speaks now
 
@@ -100,8 +86,6 @@ const TITLE = {
   play: 'Read aloud from what is in view, or from the selected text',
   pause: 'Pause',
   resume: 'Resume',
-  pick: 'Click a sentence to read from there',
-  sel: 'Read just the selected text',
 };
 
 /** The player at the bottom of the window. */
@@ -252,56 +236,6 @@ export function createReader({ source, mount = null, button = null, root = null 
     }
   }
 
-  /** Read just `text` (a selection), not as part of the paper. */
-  async function sayText(text) {
-    stop(false);
-    if (speaking && speaking !== self) speaking.stop();
-    speaking = self;
-    const myRun = ++run;
-    const say = speakable(text);
-    if (!say) return;
-    state = 'playing';
-    render();
-    status('Reading the selection…');
-    let failed = false;
-    try {
-      if (p.engine === 'api' && (await api())) {
-        const res = await fetch(new URL('./api/tts/speech', import.meta.url), {
-          method: 'POST', credentials: 'same-origin',
-          headers: { 'content-type': 'application/json', 'x-admin-request': '1' },
-          body: JSON.stringify({ input: say.slice(0, 4000), voice: p.apiVoice || undefined, speed: p.rate }),
-        });
-        if (!res.ok) throw new Error(await res.json().then((d) => d.error, () => '') || `The speech service answered ${res.status}`);
-        const url = URL.createObjectURL(await res.blob());
-        if (myRun !== run) return;
-        audio ??= new Audio();
-        audio.src = url;
-        await audio.play();
-        await new Promise((r) => { audio.onended = r; audio.onerror = r; audio.onpause = () => { if (myRun !== run || state === 'stopped') r(); }; });
-        URL.revokeObjectURL(url);
-      } else {
-        if (!synth) throw new Error('This browser cannot read aloud.');
-        await new Promise((resolve) => {
-          const utter = new SpeechSynthesisUtterance(say);
-          const v = voices().find((x) => x.name === p.voice);
-          if (v) utter.voice = v;
-          utter.rate = p.rate;
-          utter.onend = resolve;
-          utter.onerror = resolve;
-          synth.speak(utter);
-        });
-      }
-    } catch (err) {
-      failed = true;
-      status(err.message);
-    }
-    if (myRun === run) {
-      state = 'stopped';
-      render();
-      if (!failed) status('');
-    }
-  }
-
   function pause() {
     if (state !== 'playing') return;
     state = 'paused';
@@ -348,16 +282,14 @@ export function createReader({ source, mount = null, button = null, root = null 
       <button type="button" data-tts="play" class="tts-main" aria-label="Read aloud" title="${TITLE.play}">▶</button>
       <button type="button" data-tts="prev" aria-label="Previous sentence" title="Previous sentence">⏮</button>
       <button type="button" data-tts="next" aria-label="Next sentence" title="Next sentence">⏭</button>
-      <button type="button" data-tts="stop" aria-label="Stop" title="Stop">⏹</button>
-      <button type="button" data-tts="pick" aria-pressed="false" title="${TITLE.pick}">⌖ Start here</button>
-      <button type="button" data-tts="sel" title="${TITLE.sel}">Selection</button>
+      <select data-pref="rate" aria-label="Speed" title="Speed">${[0.75, 0.9, 1, 1.15, 1.3, 1.5, 1.75, 2].map((r) => `<option value="${r}">${r}×</option>`).join('')}</select>
       <span class="tts-status muted" aria-live="polite"></span>
-      <button type="button" data-tts="close" class="tts-close" aria-label="Close the reader" title="Close">×</button>
+      <button type="button" data-tts="more" aria-expanded="false" aria-label="Voice" title="Voice, and what to read">⚙</button>
+      <button type="button" data-tts="close" class="tts-close" aria-label="Stop and close" title="Stop and close">×</button>
     </div>
-    <div class="tts-row tts-settings">
+    <div class="tts-row tts-settings" hidden>
       <select data-pref="engine" aria-label="Voice from"><option value="browser">This browser's voice</option><option value="api" disabled>Speech API (Settings)</option></select>
       <select data-pref="voice" aria-label="Voice"></select>
-      <select data-pref="rate" aria-label="Speed">${[0.75, 0.9, 1, 1.15, 1.3, 1.5, 1.75, 2].map((r) => `<option value="${r}">${r}×</option>`).join('')}</select>
       <label class="tts-refs"><input type="checkbox" data-pref="toReferences"> the references too</label>
     </div>`;
   const docked = mount ? (mount(player), null) : dock(player);
@@ -405,27 +337,15 @@ export function createReader({ source, mount = null, button = null, root = null 
   }
   function closePlayer() {
     stop();
-    setPick(false);
     player.hidden = true;
     render();
   }
-
-  // ⌖: the next click on the text says where to start.
-  let picking = false;
-  function setPick(onOff) {
-    picking = onOff;
-    player.querySelector('[data-tts="pick"]').setAttribute('aria-pressed', String(onOff));
-    source.pickArea.classList.toggle('is-picking', onOff);
-    if (onOff) status('Click the sentence to start from.');
+  /** Read on from the selection, if there is one here; else from what is in view. */
+  async function start() {
+    await textUnits();
+    const sel = source.selection?.();
+    play(sel ? await source.indexAtSelection(sel.text, sel.where) : await source.fromView());
   }
-  on(source.pickArea, 'click', async (e) => {
-    if (!picking) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setPick(false);
-    const i = await source.indexAtPoint(e);
-    if (i >= 0) play(i);
-  }, true);
 
   // (Pressing a button keeps the text selected.)
   on(player, 'pointerdown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
@@ -436,22 +356,14 @@ export function createReader({ source, mount = null, button = null, root = null 
     if (act === 'play') {
       if (state === 'playing') pause();
       else if (state === 'paused') resume();
-      else {
-        // From the selection, if there is one; else from what is in view.
-        await textUnits();
-        const sel = source.selection?.();
-        play(sel ? await source.indexAtSelection(sel.text, sel.where) : await source.fromView());
-      }
-    } else if (act === 'stop') stop();
-    else if (act === 'prev') skip(-1);
+      else start();
+    } else if (act === 'prev') skip(-1);
     else if (act === 'next') skip(1);
-    else if (act === 'pick') setPick(!picking);
-    else if (act === 'sel') {
-      const sel = source.selection?.();
-      if (sel) sayText(sel.text);
-      else status('Select some text first.');
-    }
-    else if (act === 'close') closePlayer();
+    else if (act === 'more') {
+      const box = player.querySelector('.tts-settings');
+      box.hidden = !box.hidden;
+      b.setAttribute('aria-expanded', String(!box.hidden));
+    } else if (act === 'close') closePlayer();
   });
   on(player, 'change', (e) => {
     const key = e.target.dataset.pref;
@@ -490,14 +402,17 @@ export function createReader({ source, mount = null, button = null, root = null 
 
   const self = {
     open: openPlayer,
-    toggle: () => (player.hidden ? openPlayer() : closePlayer()),
-    /** Read a selection: just it, or (`onwards`) on from it to the end (`where`: the source's idea of where it is). */
-    async readSelection(text, where, onwards) {
+    /** "Read aloud": reads at once (from the selection, else what is in view); again, stops and closes. */
+    async toggle() {
+      if (!player.hidden) return closePlayer();
       await openPlayer();
-      if (onwards) {
-        await textUnits();
-        play(await source.indexAtSelection(text, where));
-      } else sayText(text);
+      start();
+    },
+    /** Read on from a selection (`where`: its Range, as the source knows it). */
+    async readFrom(where) {
+      await openPlayer();
+      await textUnits();
+      play(await source.indexAtSelection('', where));
     },
     stop,
     destroy() {

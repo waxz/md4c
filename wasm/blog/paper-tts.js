@@ -2,13 +2,13 @@
 // text, page by page, in sentences, the one read marked on its page and
 // kept in view. The speech itself, the voices and the player: tts.js.
 //
-// Start at the page in view (▶), at a sentence clicked after ⌖, or at a
-// selection ("From here"); or read just a selection ("Read").
+// It starts at the selected text ("Read" in the selection bar), else at
+// the page in view.
 //
 // attachReader(ctx): ctx = { el, viewer, bar, pages, pagesEl, ready(p),
 // matchesOnPage(p, query), scrollTo(p, y), referencesStart() }.
 
-import { caretAt, createReader, sentences, speakable } from './tts.js';
+import { createReader, sentences, speakable } from './tts.js';
 
 export { sentences, speakable };
 
@@ -183,18 +183,6 @@ export function attachReader(ctx) {
     return i < 0 ? 0 : i;
   }
 
-  /** The text from the point (x, y) on: what is under the pointer, and after it. */
-  function probeAt(x, y) {
-    const c = caretAt(x, y);
-    const span = (c?.node?.nodeType === 3 ? c.node.parentElement : c?.node)?.closest?.('.textLayer span');
-    if (!span) return '';
-    // From the start of its word, on through the next spans.
-    let text = span.textContent.slice(0, c.offset).replace(/\S*$/, '').length;
-    text = span.textContent.slice(text);
-    for (let s = span.nextElementSibling; s && text.length < 60; s = s.nextElementSibling) text += s.tagName === 'BR' ? ' ' : ` ${s.textContent}`;
-    return text;
-  }
-
   const source = {
     async units() {
       const list = await textUnits();
@@ -206,14 +194,6 @@ export function attachReader(ctx) {
     clear: clearMark,
     label: (u, i, until) => `Page ${u.page} · ${i + 1} / ${until + 1}`,
     fromView,
-    pickArea: pagesEl,
-    async indexAtPoint(e) {
-      const c = caretAt(e.clientX, e.clientY);
-      const place = c && placeOf(c.node, c.offset);
-      if (place) return unitAtPlace(place.page, place.at);
-      const page = Number(e.target.closest('.paper-page')?.dataset.page);
-      return page ? unitAt(page, probeAt(e.clientX, e.clientY)) : -1;
-    },
     /** `where`: the selection's Range (else a page number: found by its words). */
     async indexAtSelection(text, where) {
       const place = where?.startContainer ? placeOf(where.startContainer, where.startOffset) : null;

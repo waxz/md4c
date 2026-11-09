@@ -9,7 +9,7 @@
 // the .prose; `button` toggles the player (docked at the bottom of the
 // window, as for a PDF).
 
-import { caretAt, createReader, sentences, speakable, SPEAK_ICON } from './tts.js';
+import { createReader, sentences, speakable, SPEAK_ICON } from './tts.js';
 
 export { SPEAK_ICON };
 
@@ -131,11 +131,6 @@ export function attachArticleReader({ article, button = null, mount = null }) {
       const top = (document.querySelector('.reader-bar')?.getBoundingClientRect().bottom ?? 0) + 4;
       const i = (units ?? []).findIndex((u) => u.block.getBoundingClientRect().bottom > top);
       return i < 0 ? 0 : i;
-    },
-    pickArea: article,
-    async indexAtPoint(e) {
-      const c = caretAt(e.clientX, e.clientY);
-      return c ? indexAt(c.node, c.offset) : -1;
     },
     async indexAtSelection(text, range) {
       return range ? Math.max(0, indexAt(range.startContainer, range.startOffset)) : 0;

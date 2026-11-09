@@ -22,6 +22,7 @@
 // blog's own scripts), loaded on first use, with eval off.
 
 import { attachTools } from './paper-tools.js';
+import { SELECTION_BUTTONS } from './selbar.js';
 import {
   COLORS, SHAPES, annotationLabel, backlinks, backlinksHtml, cleanTags, columnGutter, columnOf, markAnnotationRefs, mathText,
   namedByQuote, newAnnotationId, sortAnnotations, tagsHtml,
@@ -764,8 +765,7 @@ export async function mountPaper(el, opts = {}) {
     selbar.setAttribute('role', 'toolbar');
     selbar.setAttribute('aria-label', 'Highlight the selection');
     selbar.innerHTML = `<div class="pop-row pop-new">${shapes(style.shape)}<span class="pop-sep"></span>${swatches(style.color, 'color')}<span class="pop-sep"></span>
-      <button type="button" class="pop-btn" data-act="lookup" title="Look up in a dictionary" aria-label="Look up">${ICON.book}<span>Look up</span></button>
-      <button type="button" class="pop-btn" data-act="read" title="Read aloud from here (Shift: just the selection)" aria-label="Read aloud">${ICON.speak}</button>
+      ${SELECTION_BUTTONS.lookup}${SELECTION_BUTTONS.read}
       <button type="button" class="pop-btn" data-act="comment">${ICON.comment}<span>Comment</span></button></div>
       <div class="pop-row pop-move"><button type="button" class="pop-btn pop-primary" data-act="move-here">Move the highlight here</button></div>`;
     tint(selbar, style.color);
@@ -845,7 +845,7 @@ export async function mountPaper(el, opts = {}) {
       if (b.dataset.act === 'read') {
         const range = window.getSelection()?.rangeCount ? window.getSelection().getRangeAt(0).cloneRange() : sel.page;
         closeSelbar();
-        tools?.readAloud(sel.quote, range, !e.shiftKey);
+        tools?.readFrom(range);
         return;
       }
       if (b.dataset.act === 'lookup') {

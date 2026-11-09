@@ -399,29 +399,29 @@ General notes, in Markdown. The encoder is discussed in
   the one reviewed more is kept). The cards are kept in this browser
   (`js/cards.js` schedules them, SM-2 simplified): the blog and the admin
   are separate sites with a deck each; export and import to move them.
-- **Read aloud (🔊):** the player reads the paper sentence by sentence,
-  the one being read marked on its page and kept in view: ▶ from the page
-  in view, or ⌖ *Start here* and click a sentence; ⏮ ⏭ go back or on a
-  sentence; pause, stop, speed, voice. It stops before the references
-  (unless *the references too*), and leaves out page numbers, the authors'
-  addresses, citation numbers and links. Select text to read just it
-  (*Read*) or on from it (*From here*; in the editor's selection bar, 🔊
-  reads on from the selection, Shift+🔊 just the selection). The voice is
-  the browser's own (the Web Speech API: free, offline), or, in the admin,
-  an **OpenAI-style speech API** (`POST …/audio/speech`: OpenAI, or a
-  server of your own such as Kokoro or openedai-speech), set up in
-  **Settings → Text to speech** (address, model, voice, key; *Test* plays
-  a sample). The Worker calls it: the key stays in Cloudflare KV (or the
-  secret `TTS_API_KEY`, with `TTS_BASE_URL`, `TTS_MODEL`, `TTS_VOICE`),
+- **Selecting text** (in a PDF, and in an article in the admin's reader)
+  shows one bar: **Look up · Read · Copy**. In the editor's annotator the
+  same *Look up* and *Read* are in its bar, with the highlights and
+  *Comment*. On a phone the bar is docked at the bottom, its actions a row
+  of their own.
+- **Read aloud:** *Read* (in the selection bar) reads from the selected
+  sentence on; **Read aloud** (the PDF's toolbar; an article's bar in the
+  reader) reads from the selected text, else from what is in view. The
+  sentence read is marked and kept in view. The player, docked at the
+  bottom the same way for a PDF and an article: ▶/⏸ · ⏮ ⏭ (a sentence back
+  or on) · speed · ⚙ (the voice: this browser's, or the speech API; *the
+  references too*) · × (stop and close). It stops before the references,
+  and leaves out page numbers, the authors' addresses, citation numbers,
+  links, code, math, tables and illustrations. To hear just a word or a
+  sentence, *Look up* has ▶. Only one thing reads at a time.
+  The voice is the browser's own (the Web Speech API: free, offline), or,
+  in the admin, an **OpenAI-style speech API** (`POST …/audio/speech`:
+  OpenAI, or a server of your own such as Kokoro or openedai-speech), set
+  up in **Settings → Text to speech** (address, model, voice, key; *Test*
+  plays a sample). The Worker calls it: the key stays in Cloudflare KV (or
+  the secret `TTS_API_KEY`, with `TTS_BASE_URL`, `TTS_MODEL`, `TTS_VOICE`),
   never in a page, and blog visitors always get their browser's voice.
   The next sentences are fetched while one plays; stopping cancels them.
-  In the admin's **reader**, any post can be read aloud too (**🔊 Read
-  aloud** in its bar; the player docks at the bottom of the window): its
-  title, headings, paragraphs, list items, quotes and captions, the
-  sentence read highlighted; not code, math, tables, illustrations or the
-  contents box, and the references only when asked. ▶ starts at what is
-  in view, or at the selected text; *Selection* reads just the selection;
-  ⌖ starts at a clicked sentence. Only one reader speaks at a time.
 - **A PDF on the web:** `pdf:` can also be an address,
   `pdf: https://arxiv.org/pdf/1706.03762`. The admin (editor, preview,
   reader) shows it and lets you highlight it: its Worker fetches the PDF,
