@@ -251,6 +251,9 @@ struct MD_CTX_tag {
     OFF html_decl_horizon;
     OFF html_cdata_horizon;
 
+    /* For resolving permissive autolinks. */
+    OFF permissive_autolink_tail_horizon;
+
     /* For block analysis.
      * Notes:
      *   -- It holds MD_BLOCK as well as MD_LINE structures. After each
@@ -280,6 +283,8 @@ struct MD_CTX_tag {
     int html_block_type;    /* For checking closing raw HTML condition. */
     int last_line_has_list_loosening_effect;
     int consecutive_blank_lines;
+    int last_n_implicit_parents_beg;
+    int last_n_implicit_parents_end;
 };
 
 enum MD_LINETYPE_tag {
@@ -4025,22 +4030,21 @@ md_resolve_bracket_link(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines,
          * See https://github.com/mity/md4c/issues/152 for more info. */
         if(ctx->parser.flags & MD_FLAG_PERMISSIVEAUTOLINKS) {
             MD_MARK* first_nested;
-            MD_MARK* last_nested;
 
             first_nested = opener + 1;
             while(first_nested->ch == _T('D')  &&  first_nested < closer)
                 first_nested++;
 
-            last_nested = closer - 1;
-            while(first_nested->ch == _T('D')  &&  last_nested > opener)
-                last_nested--;
-
+            /* Note the autolink closer is not necessarily the last mark
+             * before the closer bracket: Resolved entity or escape marks
+             * may live inside the autolink. */
             if((first_nested->flags & MD_MARK_RESOLVED)  &&
                first_nested->beg == opener->end  &&
                ISANYOF_(first_nested->ch, _T("@:."))  &&
-               first_nested->next == (last_nested - ctx->marks)  &&
-               last_nested->end == closer->beg)
+               ctx->marks[first_nested->next].end == closer->beg)
             {
+                MD_MARK* last_nested = &ctx->marks[first_nested->next];
+
                 first_nested->ch = _T('D');
                 first_nested->flags &= ~MD_MARK_RESOLVED;
                 last_nested->ch = _T('D');
@@ -4462,6 +4466,7 @@ md_analyze_permissive_autolink(MD_CTX* ctx, int mark_index)
     OFF end = opener->end;
     MD_MARK* left_cursor = opener;
     MD_MARK* right_cursor = opener;
+    bool tail_trimmed = false;
 
     MD_ASSERT(closer->ch == 'D');
 
@@ -4507,11 +4512,22 @@ md_analyze_permissive_autolink(MD_CTX* ctx, int mark_index)
         }
     }
 
+    /* Abort the scan early if possible
+     * (https://github.com/mity/md4c/issues/464) */
+    if(end < ctx->permissive_autolink_tail_horizon)
+        return;
+
     if(opener->ch != '@' && end < line_end && ISANYOF(end, _T("/?#"))) {
         OFF tail_beg = end;
         OFF off = end;
-        OFF n_open_brackets = 0;
-        OFF n_close_brackets = 0;
+        OFF scan_end;
+        int n_open_parens = 0;
+        int n_close_parens = 0;
+        int n_open_brackets = 0;
+        int n_close_brackets = 0;
+        int n_open_braces = 0;
+        int n_close_braces = 0;
+        MD_MARK* cursor;
 
         /* Scan a continuous URL tail, stopping at whitespace or '<'.
          * Keep the mark check so URLs cannot cross resolved Markdown syntax. */
@@ -4527,43 +4543,85 @@ md_analyze_permissive_autolink(MD_CTX* ctx, int mark_index)
                 continue;
             }
 
-            if(!ISALNUM(off) &&
-                    md_scan_right_for_resolved_mark(ctx, right_cursor, off, &right_cursor) != NULL)
-                break;
+            if(!ISALNUM(off)) {
+                MD_MARK* mark = md_scan_right_for_resolved_mark(ctx, right_cursor, off, &right_cursor);
 
-            if(CH(off) == _T('(')) {
-                n_open_brackets++;
-            } else if(CH(off) == _T(')')) {
-                n_close_brackets++;
+                if(mark != NULL) {
+                    /* An entity reference or a backslash escape is not a span
+                     * but just a few characters of the URL, the same way as
+                     * in a standard autolink. Any other resolved mark ends
+                     * the URL. */
+                    if(mark->ch == _T('&')  ||  (mark->ch == _T('\\')  &&  !ISNEWLINE(mark->beg+1))) {
+                        off = mark->end;
+                        continue;
+                    }
+                    break;
+                }
+            }
+
+            switch(CH(off)) {
+                case _T('('):   n_open_parens++; break;
+                case _T(')'):   n_close_parens++; break;
+                case _T('['):   n_open_brackets++; break;
+                case _T(']'):   n_close_brackets++; break;
+                case _T('{'):   n_open_braces++; break;
+                case _T('}'):   n_close_braces++; break;
             }
             off++;
         }
+        scan_end = off;
 
-        /* Trim only excess trailing closing parentheses. Unmatched opening
-         * parentheses within a URL are valid. */
+        /* Exclude terminal punctuation and excess closing brackets from the
+         * URL as they more likely belong to the surrounding text. (Unmatched
+         * opening brackets within the URL are valid.)
+         *
+         * A trailing entity reference is excluded as a whole and so is
+         * a backslash escape of the terminal punctuation; we never split
+         * such marks. */
+        cursor = right_cursor;
         while(off > tail_beg) {
-            if(CH(off-1) == _T(')') && n_close_brackets > n_open_brackets) {
+            MD_MARK* mark = md_scan_left_for_resolved_mark(ctx, cursor, off-1, &cursor);
+            bool is_terminal_punct = ISANYOF(off-1, _T("?!.,:;*_~'\""));
+
+            if(mark != NULL) {
+                if(mark->ch == _T(';'))
+                    mark = &ctx->marks[mark->prev];     /* The '&' covers the whole entity. */
+                if(mark->ch == _T('&')  ||  is_terminal_punct)
+                    off = mark->beg;
+                else
+                    break;
+            } else if(CH(off-1) == _T(')')  &&  n_close_parens > n_open_parens) {
+                n_close_parens--;
+                off--;
+            } else if(CH(off-1) == _T(']')  &&  n_close_brackets > n_open_brackets) {
                 n_close_brackets--;
                 off--;
-            } else if(ISANYOF(off-1, _T("?!.,:;*_~'\""))) {
+            } else if(CH(off-1) == _T('}')  &&  n_close_braces > n_open_braces) {
+                n_close_braces--;
+                off--;
+            } else if(is_terminal_punct) {
                 off--;
             } else {
                 break;
             }
         }
         end = off;
+        tail_trimmed = (end < scan_end);
     }
 
     /* Verify there's line boundary, whitespace, allowed punctuation or
-     * resolved closer mark just after the suspected autolink. */
-    if(end < line_end && !ISUNICODEWHITESPACE(end) &&
+     * resolved closer mark just after the suspected autolink. (Anything we
+     * have excluded from the URL tail above is a fine follower too.) */
+    if(!tail_trimmed && end < line_end && !ISUNICODEWHITESPACE(end) &&
             !ISANYOF(end, _T(")}].!?,;")) &&
             !(opener->ch != '@' && ISANYOF(end, _T(":*_~'\"<")))) {
         MD_MARK* mark;
 
         mark = md_scan_right_for_resolved_mark(ctx, right_cursor, end, &right_cursor);
-        if(mark == NULL  ||  !(mark->flags & MD_MARK_CLOSER))
+        if(mark == NULL  ||  !(mark->flags & MD_MARK_CLOSER)) {
+            ctx->permissive_autolink_tail_horizon = end;
             return;
+        }
     }
 
     /* Success, we are an autolink. */
@@ -4623,8 +4681,6 @@ md_analyze_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines,
             case '&':   md_analyze_entity(ctx, i); break;
             case '_':   MD_FALLTHROUGH();
             case '*':   md_analyze_emph(ctx, i); break;
-            case '~':   md_analyze_generic(ctx, i); break;
-            case '^':   md_analyze_generic(ctx, i); break;
             case '$':   md_analyze_dollar(ctx, i); break;
             case '.':   MD_FALLTHROUGH();
             case ':':   MD_FALLTHROUGH();
@@ -4635,7 +4691,9 @@ md_analyze_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines,
                 if(mark->end - mark->beg == 2)
                     md_analyze_generic(ctx, i);
                 break;
-            case '=':   md_analyze_generic(ctx, i); break;
+            case '~':   MD_FALLTHROUGH();
+            case '^':   MD_FALLTHROUGH();
+            case '=':   MD_FALLTHROUGH();
             case '+':   md_analyze_generic(ctx, i); break;
         }
 
@@ -6629,6 +6687,8 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
     int prev_line_has_list_loosening_effect = ctx->last_line_has_list_loosening_effect;
     OFF off = beg;
     OFF hr_killer = 0;
+    int n_implicit_parents_beg = 0;
+    int n_implicit_parents_end = 0;
     int ret = 0;
 
     line->indent = md_line_indentation(ctx, total_indent, off, &off);
@@ -6670,8 +6730,23 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
         /* Blank line does not need any real indentation to be nested inside
          * a list. */
         if(n_brothers + n_children == 0) {
-            while(n_parents < ctx->n_containers  &&  ctx->containers[n_parents].ch != _T('>'))
+            n_implicit_parents_beg = n_parents;
+
+            while(n_parents < ctx->n_containers  &&  ctx->containers[n_parents].ch != _T('>')) {
+                if(ctx->last_n_implicit_parents_beg <= n_parents  &&
+                   n_parents <= ctx->last_n_implicit_parents_end  &&
+                   ctx->last_n_implicit_parents_end - ctx->last_n_implicit_parents_beg > 0)
+                {
+                    /* All containers in [beg, end) are lists, so any blank line
+                     * starting within that range ends at the same place. */
+                    n_parents = ctx->last_n_implicit_parents_end;
+                    break;
+                }
+
                 n_parents++;
+            }
+
+            n_implicit_parents_end = n_parents;
         }
     }
 
@@ -7118,6 +7193,9 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
     if(line->type != MD_LINE_BLANK  &&  line->beg < line->end  &&
        ctx->n_containers > 0  &&  ctx->containers[ctx->n_containers-1].ch != _T('>'))
         ctx->containers[ctx->n_containers-1].li_has_content = true;
+
+    ctx->last_n_implicit_parents_beg = n_implicit_parents_beg;
+    ctx->last_n_implicit_parents_end = n_implicit_parents_end;
 
 abort:
     return ret;
