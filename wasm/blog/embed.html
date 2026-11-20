@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<!--
+  The host of an illustration: a post's ```embed block (HTML, scripts,
+  libraries such as three.js or Chart.js from a CDN). render.js frames this
+  page with sandbox="allow-scripts" and no allow-same-origin, so it runs in
+  an origin of its own: it cannot read the blog's (or the admin's) pages,
+  cookies or storage, nor navigate them. That is why its policy can allow
+  inline scripts and scripts from any https: host, which the blog's pages
+  never do. The admin's Worker sends the same policy for this page.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'self' 'unsafe-inline' https:; img-src 'self' https: data: blob:; media-src 'self' https: data: blob:; font-src 'self' https: data:; connect-src 'self' https: data: blob:; worker-src 'self' blob: https:; form-action 'none'">
+<title>Illustration</title>
+</head>
+<body>
+<script>
+(function () {
+  // Only ever sandboxed (an opaque origin, "null"): framed any other way,
+  // e.g. by another site without the sandbox, it shows nothing, so nothing
+  // can run in the blog's own origin through it.
+  if (self.origin !== 'null') return;
+  // The page that framed this sends the illustration:
+  // { type: 'md4c-embed', html, base, dark, ink, accent }.
+  // It is written as this page's content, with a small script that tells
+  // the page how tall it is (unless the post fixed the height).
+  function attr(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+  function css(v) { return String(v || '').replace(/[;{}<>]/g, ''); }
+  // (The height of what is shown, not of the frame: so it can shrink too.)
+  var sizer = '(function(){var last=0;function send(){var b=document.body,h=Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height,b?b.scrollHeight:0));'
+    + 'if(h!==last){last=h;parent.postMessage({type:"md4c-embed-size",height:h},"*")}}'
+    + 'addEventListener("load",send);if(window.ResizeObserver)new ResizeObserver(send).observe(document.documentElement);setTimeout(send,30)})()';
+  // From a page framing this one (the editor's preview is framed in turn).
+  function fromAncestor(w) {
+    for (var a = parent; ; a = a.parent) {
+      if (w === a) return true;
+      if (a === a.parent) return false;
+    }
+  }
+  addEventListener('message', function take(e) {
+    var d = e.data;
+    if (!fromAncestor(e.source) || !d || d.type !== 'md4c-embed' || typeof d.html !== 'string') return;
+    removeEventListener('message', take);
+    var head = '<!DOCTYPE html><html data-scheme="' + (d.dark ? 'dark' : 'light') + '"><head><meta charset="utf-8">'
+      + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+      + (d.base ? '<base href="' + attr(d.base) + '">' : '')
+      + '<style>:root{color-scheme:' + (d.dark ? 'dark' : 'light') + ';--ink:' + css(d.ink) + ';--accent:' + css(d.accent) + '}'
+      + 'html,body{margin:0;background:transparent}body{color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}</style>'
+      + '<script>' + sizer + '<\/script></head><body>';
+    document.open();
+    document.write(head + d.html + '</body></html>');
+    document.close();
+  });
+  parent.postMessage({ type: 'md4c-embed-ready' }, '*');
+})();
+</script>
+</body>
+</html>

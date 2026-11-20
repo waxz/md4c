@@ -1,0 +1,87 @@
+/* Flash cards (cards.js): the manager, in a dialog or a page; the look-up card's IPA. */
+
+.cards {
+  --c-ink: var(--ink, #1f1f1f); --c-muted: var(--muted, #6b6b6b); --c-rule: var(--rule, var(--line, #e3e1dc));
+  --c-surface: var(--surface, #fff); --c-accent: var(--accent, #8b1e2d);
+  font-family: var(--font-sans, system-ui, sans-serif); color: var(--c-ink);
+}
+.cards-dialog {
+  width: min(44rem, calc(100vw - 16px)); max-height: min(90vh, 52rem); padding: 0; overflow: auto;
+  border: 1px solid var(--c-rule); border-radius: 14px; background: var(--c-surface); box-shadow: 0 20px 60px rgb(0 0 0 / .3);
+}
+.cards-dialog::backdrop { background: rgb(0 0 0 / .45); }
+.cards-dialog .cards-head, .cards-dialog .cards-body { padding-left: 1rem; padding-right: 1rem; }
+.cards-head { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .8rem; padding-top: .8rem; padding-bottom: .6rem; background: var(--c-surface); border-bottom: 1px solid var(--c-rule); }
+.cards-head h2 { margin: 0; font-size: 1.15rem; }
+.cards-count { font-size: .85rem; }
+.cards-spacer { flex: 1; }
+.cards-tabs { display: flex; gap: 2px; padding: 3px; border-radius: 8px; background: color-mix(in srgb, var(--c-muted) 12%, transparent); }
+.cards-tabs button { font: inherit; font-size: .88rem; padding: .3rem .9rem; border: 0; border-radius: 6px; background: none; color: var(--c-muted); cursor: pointer; }
+.cards-tabs button[aria-selected="true"] { background: var(--c-surface); color: var(--c-ink); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.cards-menu { position: relative; font-size: .85rem; }
+.cards-menu summary { cursor: pointer; list-style: none; padding: .3rem .6rem; border: 1px solid var(--c-rule); border-radius: 6px; }
+.cards-menu summary::-webkit-details-marker { display: none; }
+.cards-menu > div { position: absolute; right: 0; top: calc(100% + 4px); z-index: 2; display: grid; min-width: 13rem; padding: 4px; background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / .15); }
+.cards-menu button, .cards-import { font: inherit; text-align: left; padding: .45rem .6rem; border: 0; border-radius: 5px; background: none; color: var(--c-ink); cursor: pointer; }
+.cards-menu button:hover, .cards-import:hover { background: color-mix(in srgb, var(--c-muted) 12%, transparent); }
+.cards-close { font: inherit; font-size: 1.3rem; line-height: 1; width: 2.2rem; height: 2.2rem; border: 0; border-radius: 6px; background: none; color: var(--c-muted); cursor: pointer; }
+.cards-body { padding-top: 1rem; padding-bottom: 1.2rem; }
+
+.cards-btn { font: inherit; display: inline-flex; flex-direction: column; align-items: center; gap: .05rem; padding: .5rem 1rem; border: 1px solid var(--c-rule); border-radius: 8px; background: var(--c-surface); color: var(--c-ink); cursor: pointer; }
+.cards-btn:hover { border-color: color-mix(in srgb, var(--c-muted) 50%, var(--c-rule)); }
+.cards-primary { background: var(--c-accent); border-color: var(--c-accent); color: #fff; }
+.cards-btn small { font-size: .72rem; color: var(--c-muted); }
+.cards-primary small { color: inherit; }
+.cards kbd { font: .65rem/1 var(--font-mono, monospace); opacity: .55; }
+
+/* (Hidden means hidden, whatever the display of a button.) */
+.cards [hidden] { display: none !important; }
+
+/* Review */
+.flash { outline: none; text-align: center; }
+.flash-left { margin: 0 0 1rem; font-size: .8rem; }
+.flash-term { margin: .4rem 0 .6rem; font-size: 1.9rem; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.flash-term:lang(en) { font-family: var(--font-serif, Georgia, serif); }
+.flash-context { max-width: 36rem; margin: 0 auto 1rem; color: var(--c-muted); font-size: .95rem; line-height: 1.5; font-style: italic; }
+.flash-context mark { background: color-mix(in srgb, #facc15 45%, transparent); color: inherit; font-style: normal; padding: 0 .1em; border-radius: 2px; }
+.flash-answer { margin: 0 auto 1rem; max-width: 36rem; padding-top: .9rem; border-top: 1px dashed var(--c-rule); }
+.flash-meaning { margin: .6rem 0 .3rem; font-size: 1.02rem; line-height: 1.5; }
+.flash-translation { margin: .3rem 0; font-size: 1.1rem; }
+.flash-source { margin: .8rem 0 0; font-size: .78rem; }
+.flash-source a { color: inherit; }
+.flash-actions { margin-top: 1.2rem; }
+.flash-grades { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; max-width: 30rem; margin: 0 auto; }
+.grade-again span { color: #b91c1c; }
+.grade-easy span { color: #15803d; }
+.cards-done { text-align: center; padding: 1.5rem 0; }
+
+/* All */
+.cards-search { width: 100%; box-sizing: border-box; margin: 0 0 .8rem; padding: .5rem .7rem; font: inherit; color: var(--c-ink); background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: 8px; }
+.cards-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.cards-list li { padding: .6rem .75rem; border: 1px solid var(--c-rule); border-radius: 8px; }
+.card-row { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; }
+.card-term { font-weight: 600; font-size: 1.02rem; overflow-wrap: anywhere; }
+.card-due { font-size: .78rem; }
+.card-delete { font: inherit; font-size: 1.1rem; line-height: 1; width: 1.8rem; height: 1.8rem; border: 0; border-radius: 5px; background: none; color: var(--c-muted); cursor: pointer; }
+.card-delete:hover { color: #b91c1c; background: color-mix(in srgb, var(--c-muted) 12%, transparent); }
+.card-meaning, .card-translation { margin: .3rem 0 0; font-size: .9rem; line-height: 1.45; }
+.card-translation { color: var(--c-muted); }
+.cards-list .flash-source { margin-top: .35rem; text-align: left; }
+
+/* IPA and play buttons (also in the look-up card) */
+.ipas { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .2rem .7rem; }
+.ipa { display: inline-flex; align-items: center; gap: .25rem; font-family: "Charis SIL", "Doulos SIL", "Gentium Plus", "Lucida Sans Unicode", "Segoe UI", system-ui, sans-serif; color: var(--c-muted, var(--muted)); }
+.ipa-region { font: 600 .65rem/1.4 var(--font-sans, system-ui, sans-serif); text-transform: uppercase; padding: 0 .3rem; border-radius: 3px; background: color-mix(in srgb, var(--c-muted, var(--muted)) 15%, transparent); }
+.say { display: inline-grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; font-size: .7rem; border: 1px solid var(--c-rule, var(--rule)); border-radius: 50%; background: none; color: var(--c-accent, var(--accent)); cursor: pointer; }
+.say:hover { background: color-mix(in srgb, var(--c-accent, var(--accent)) 10%, transparent); }
+@media (pointer: coarse) {
+  .say { width: 2.3rem; height: 2.3rem; }
+  .cards-tabs button, .cards-menu summary { min-height: 2.5rem; }
+  .flash-grades .cards-btn { min-height: 3.2rem; }
+}
+@media (max-width: 600px) {
+  .cards-dialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; margin: 0; }
+  .flash-term { font-size: 1.6rem; }
+  .flash-grades { gap: .35rem; }
+  .flash-grades .cards-btn { padding: .45rem .3rem; }
+}
